@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Password required</title>
+</head>
+<body>
+  <h1>This link is password protected</h1>
+  {{if .Error}}<p style="color: red">{{.Error}}</p>{{end}}
+  <form method="POST" action="/r/{{.Slug}}">
+    <label>Password <input type="password" name="password" required autofocus /></label>
+    <button type="submit">Unlock</button>
+  </form>
+</body>
+</html>

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>spin-shortener</title>
+  <script src="app.js"></script>
+  <script>
+    api.get("/auth/me").then(({ ok }) => {
+      location.replace(ok ? "dashboard.html" : "login.html");
+    });
+  </script>
+</head>
+<body></body>
+</html>

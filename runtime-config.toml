@@ -1,0 +1,16 @@
+# Local development runtime config for the `links`, `users`, and `analytics`
+# KV stores declared in spin.toml. Spin does NOT auto-provision named (non-"default")
+# key-value stores; each one must be mapped to a backing provider explicitly.
+#
+# `type = "spin"` is Spin's built-in sqlite-backed local store, fine for dev.
+# A production/Akamai deployment will need an equivalent config mapping these
+# same store names to Akamai's KV provider instead (see TASKS.md Phase 4).
+
+[key_value_store.links]
+type = "spin"
+
+[key_value_store.users]
+type = "spin"
+
+[key_value_store.analytics]
+type = "spin"

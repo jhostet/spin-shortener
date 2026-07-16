@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>spin-shortener — Dashboard</title>
+</head>
+<body>
+  <header>
+    <h1>Your links</h1>
+    <span id="whoami"></span>
+    <button id="logout-btn">Log out</button>
+  </header>
+
+  <section>
+    <h2>Create a new link</h2>
+    <form id="create-form">
+      <label for="target-url">Destination URL</label>
+      <input id="target-url" name="target_url" type="url" placeholder="https://example.com/..." required />
+      <button type="submit">Shorten</button>
+    </form>
+    <p id="create-error" style="color: red"></p>
+  </section>
+
+  <section>
+    <table id="links-table">
+      <thead>
+        <tr>
+          <th>Short link</th>
+          <th>Destination</th>
+          <th>Created</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="links-body"></tbody>
+    </table>
+  </section>
+
+  <script src="app.js"></script>
+  <script>
+    async function loadMe() {
+      const { ok, data } = await api.get("/auth/me");
+      if (ok) {
+        document.getElementById("whoami").textContent = `${data.username} (${data.role})`;
+      }
+    }
+
+    async function loadLinks() {
+      const { ok, data } = await api.get("/links");
+      const body = document.getElementById("links-body");
+      body.innerHTML = "";
+      if (!ok) return;
+
+      for (const link of data.links) {
+        const shortUrl = `${location.origin}/r/${link.slug}`;
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><a href="${escapeHtml(shortUrl)}" target="_blank">${escapeHtml(shortUrl)}</a></td>
+          <td>${escapeHtml(link.target_url)}</td>
+          <td>${escapeHtml(link.created_at)}</td>
+          <td>${escapeHtml(link.status)}</td>
+          <td><button data-slug="${escapeHtml(link.slug)}" class="delete-btn">Delete</button></td>
+        `;
+        body.appendChild(row);
+      }
+
+      body.querySelectorAll(".delete-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          await api.delete(`/links/${btn.dataset.slug}`);
+          loadLinks();
+        });
+      });
+    }
+
+    document.getElementById("create-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const targetUrl = document.getElementById("target-url").value;
+      const errorEl = document.getElementById("create-error");
+      errorEl.textContent = "";
+
+      const { ok, data } = await api.post("/links", { target_url: targetUrl });
+      if (!ok) {
+        errorEl.textContent = (data && data.error) || "Could not create link";
+        return;
+      }
+      document.getElementById("target-url").value = "";
+      loadLinks();
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      await api.post("/auth/logout");
+      setCsrfToken(null);
+      location.href = "login.html";
+    });
+
+    loadMe();
+    loadLinks();
+  </script>
+</body>
+</html>

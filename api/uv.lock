@@ -8,13 +8,26 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "componentize-py" },
+    { name = "pypng" },
+    { name = "qrcode" },
     { name = "spin-sdk" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "componentize-py", specifier = "==0.23.0" },
+    { name = "pypng", specifier = ">=0.20220715.0" },
+    { name = "qrcode", specifier = ">=8.2" },
     { name = "spin-sdk", specifier = "==4.0.0" },
+]
+
+[[package]]
+name = "colorama"
+version = "0.4.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
 ]
 
 [[package]]
@@ -28,6 +41,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/df/b8161bcc0b4158a7cc75d558bd9b16b67bbd27ae7511ef2d06db4bea88c3/componentize_py-0.23.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:939acedff58eba1f4864ebe9327c742e5cf52bf6e08eddfb699e82761c5ede9f", size = 16237698, upload-time = "2026-04-15T17:25:29.46Z" },
     { url = "https://files.pythonhosted.org/packages/77/8d/426f07b84efed1b98076b4193f8d29e1a5e76a2f63fbc8770b2a6f3b589a/componentize_py-0.23.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:99eaa2cc8b5d737d2b23237618332a21838f892eec7f0359b44c464659a15ecc", size = 16808229, upload-time = "2026-04-15T17:25:37.562Z" },
     { url = "https://files.pythonhosted.org/packages/bc/9c/1c725d88d33fdc99c008fde287098b037f71c18197d54477e4ed0db101b2/componentize_py-0.23.0-cp39-abi3-win_amd64.whl", hash = "sha256:1d65d73c97ea751d2dc958fba085c501e68a7c68cf4611df910b99e18fb2057e", size = 14884887, upload-time = "2026-04-15T17:25:44.983Z" },
+]
+
+[[package]]
+name = "pypng"
+version = "0.20220715.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/cd/112f092ec27cca83e0516de0a3368dbd9128c187fb6b52aaaa7cde39c96d/pypng-0.20220715.0.tar.gz", hash = "sha256:739c433ba96f078315de54c0db975aee537cbc3e1d0ae4ed9aab0ca1e427e2c1", size = 128992, upload-time = "2022-07-15T14:11:05.301Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/b9/3766cc361d93edb2ce81e2e1f87dd98f314d7d513877a342d31b30741680/pypng-0.20220715.0-py3-none-any.whl", hash = "sha256:4a43e969b8f5aaafb2a415536c1a8ec7e341cd6a3f957fd5b5f32a4cfeed902c", size = 58057, upload-time = "2022-07-15T14:11:03.713Z" },
+]
+
+[[package]]
+name = "qrcode"
+version = "8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8f/b2/7fc2931bfae0af02d5f53b174e9cf701adbb35f39d69c2af63d4a39f81a9/qrcode-8.2.tar.gz", hash = "sha256:35c3f2a4172b33136ab9f6b3ef1c00260dd2f66f858f24d88418a015f446506c", size = 43317, upload-time = "2025-05-01T15:44:24.726Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/b8/d2d6d731733f51684bbf76bf34dab3b70a9148e8f2cef2bb544fccec681a/qrcode-8.2-py3-none-any.whl", hash = "sha256:16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f", size = 45986, upload-time = "2025-05-01T15:44:22.781Z" },
 ]
 
 [[package]]

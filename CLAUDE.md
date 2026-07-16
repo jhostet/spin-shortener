@@ -20,15 +20,26 @@ Each component is built independently and only in its own `workdir` (`redirect/`
 
 Both `redirect/main.wasm` and `api/app.wasm` are build artifacts and are gitignored — they must be rebuilt via `spin up --build` (or the per-component build commands in `spin.toml`) after any source change; they are not checked into the repo.
 
+## Task tracking
+- Maintain a `TASKS.md` file in the repo root as the single source of truth for multi-step work.
+- Each task uses the format: `- [ ] Task name — file(s): path/to/file — done when: <criteria>`
+- Before starting any task, re-read TASKS.md.
+- After finishing a task, immediately update its checkbox in TASKS.md before starting the next one — don't batch updates at the end.
+- If context is compacted or a new session starts, re-read TASKS.md before doing anything else.
+
 ## Commands
 
 Build and run the whole app (all three components) locally:
 
 ```bash
-spin up --build
+SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD=<some-password> spin up --build --runtime-config-file runtime-config.toml
 ```
 
 This invokes each component's `[component.<name>.build]` command from `spin.toml` and then serves all routes together. Requires the [Spin CLI](https://spinframework.dev) to be installed.
+
+`--runtime-config-file runtime-config.toml` is required locally: Spin does not auto-provision named (non-`default`) key-value stores, so the `links`/`users`/`analytics` stores declared in `spin.toml` must be mapped to a backing provider via `runtime-config.toml` (sqlite-backed `type = "spin"` for local dev). `admin_bootstrap_password` is a required secret variable (seeds the first admin user on a fresh KV store) and has no default, so it must be supplied via env var (or another Spin variable provider) on every run.
+
+When testing the `gui` in a real browser over plain `http://localhost`, also set `SPIN_VARIABLE_COOKIE_SECURE=false` — the session cookie's `Secure` flag otherwise stops the browser from storing/sending it over non-HTTPS, breaking login. Leave `cookie_secure` at its default `true` for any HTTPS deployment.
 
 Per-component builds (equivalent to what `spin up --build` runs), if you need to build just one component while iterating:
 

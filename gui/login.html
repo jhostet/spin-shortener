@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>spin-shortener — Log in</title>
+</head>
+<body>
+  <h1>Log in</h1>
+  <form id="login-form">
+    <div>
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" required autofocus />
+    </div>
+    <div>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required />
+    </div>
+    <button type="submit">Log in</button>
+  </form>
+  <p id="error" style="color: red"></p>
+
+  <script src="app.js"></script>
+  <script>
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      const errorEl = document.getElementById("error");
+      errorEl.textContent = "";
+
+      const { ok, data } = await api.post("/auth/login", { username, password });
+      if (!ok) {
+        errorEl.textContent = (data && data.error) || "Login failed";
+        return;
+      }
+      setCsrfToken(data.csrf_token);
+      location.href = "dashboard.html";
+    });
+  </script>
+</body>
+</html>
