@@ -2,12 +2,12 @@ import json
 from urllib.parse import parse_qs, urlparse
 
 from spin_sdk import key_value, variables
-from spin_sdk.http import Handler, Request, Response
+from spin_sdk.http import Handler
 
 import auth
 import links
 import qr
-from responses import json_response
+from responses import Request, Response, json_response
 
 
 async def _cookie_secure() -> bool:
@@ -32,7 +32,9 @@ class HttpHandler(Handler):
         method = request.method
 
         users_store = await key_value.open("users")
-        await auth.ensure_bootstrap_admin(users_store)
+        admin_username = await variables.get("admin_bootstrap_username")
+        admin_password = await variables.get("admin_bootstrap_password")
+        await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
         cookie_secure = await _cookie_secure()
 
         if path == "/api/auth/login" and method == "POST":
@@ -85,7 +87,7 @@ class HttpHandler(Handler):
             public_base_url = await variables.get("public_base_url")
             return await qr.handle_qr(links_store, result, slug, query, public_base_url)
 
-        if path.startswith("/api/links/") and method in ("GET", "DELETE"):
+        if path.startswith("/api/links/") and method in ("GET", "PATCH", "DELETE"):
             slug = path.removeprefix("/api/links/")
             if not slug or "/" in slug:
                 return json_response(404, {"error": "not_found"})
@@ -95,6 +97,8 @@ class HttpHandler(Handler):
             links_store = await key_value.open("links")
             if method == "GET":
                 return await links.handle_get(links_store, result, slug)
+            if method == "PATCH":
+                return await links.handle_update(links_store, result, slug, request)
             return await links.handle_delete(links_store, result, slug)
 
         return json_response(404, {"error": "not_found"})

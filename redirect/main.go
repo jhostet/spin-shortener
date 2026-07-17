@@ -1,23 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
+	"time"
 
 	spinhttp "github.com/spinframework/spin-go-sdk/v3/http"
 	"github.com/spinframework/spin-go-sdk/v3/kv"
-)
 
-type link struct {
-	Slug         string `json:"slug"`
-	TargetURL    string `json:"target_url"`
-	Owner        string `json:"owner"`
-	Custom       bool   `json:"custom"`
-	PasswordHash string `json:"password_hash"`
-	Status       string `json:"status"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-}
+	"github.com/redirect/linkgate"
+)
 
 func init() {
 	mux := http.NewServeMux()
@@ -39,7 +30,7 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l, ok := lookupLink(store, slug)
-	if !ok || l.Status != "active" {
+	if !ok || l.Status != "active" || !linkgate.IsWithinWindow(l.StartAt, l.EndAt, time.Now()) {
 		http.NotFound(w, r)
 		return
 	}
@@ -65,7 +56,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l, ok := lookupLink(store, slug)
-	if !ok || l.Status != "active" {
+	if !ok || l.Status != "active" || !linkgate.IsWithinWindow(l.StartAt, l.EndAt, time.Now()) {
 		http.NotFound(w, r)
 		return
 	}
@@ -80,7 +71,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !verifyLinkPassword(r.FormValue("password"), l.PasswordHash) {
+	if !linkgate.VerifyPassword(r.FormValue("password"), l.PasswordHash) {
 		renderPasswordPrompt(w, http.StatusUnauthorized, slug, "Incorrect password.")
 		return
 	}
@@ -90,20 +81,20 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 
 // lookupLink fetches and decodes the link record for slug, returning ok=false
 // if the key is absent or the stored value can't be parsed.
-func lookupLink(store *kv.Store, slug string) (link, bool) {
+func lookupLink(store *kv.Store, slug string) (linkgate.Link, bool) {
 	exists, err := store.Exists("slug:" + slug)
 	if err != nil || !exists {
-		return link{}, false
+		return linkgate.Link{}, false
 	}
 
 	raw, err := store.Get("slug:" + slug)
 	if err != nil {
-		return link{}, false
+		return linkgate.Link{}, false
 	}
 
-	var l link
-	if err := json.Unmarshal(raw, &l); err != nil {
-		return link{}, false
+	l, err := linkgate.ParseLink(raw)
+	if err != nil {
+		return linkgate.Link{}, false
 	}
 
 	return l, true

@@ -7,6 +7,7 @@ call so the session/permission model never needs to change to add them.
 """
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -15,10 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from spin_sdk import variables
-from spin_sdk.http import Request
-
-from responses import get_header, iso_now, parse_cookies
+from responses import Request, get_header, iso_now, parse_cookies
 
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -56,13 +54,13 @@ def hash_password(password: str, iterations: int = PBKDF2_ITERATIONS) -> str:
 def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, iterations_str, salt_b64, hash_b64 = stored.split("$")
-    except (ValueError, AttributeError):
+        if scheme != "pbkdf2_sha256":
+            return False
+        salt = base64.b64decode(salt_b64, validate=True)
+        expected = base64.b64decode(hash_b64, validate=True)
+        digest = _pbkdf2_hmac_sha256(password.encode("utf-8"), salt, int(iterations_str))
+    except (ValueError, AttributeError, binascii.Error):
         return False
-    if scheme != "pbkdf2_sha256":
-        return False
-    salt = base64.b64decode(salt_b64)
-    expected = base64.b64decode(hash_b64)
-    digest = _pbkdf2_hmac_sha256(password.encode("utf-8"), salt, int(iterations_str))
     return hmac.compare_digest(digest, expected)
 
 
@@ -114,12 +112,10 @@ class LocalAuthProvider:
         )
 
 
-async def ensure_bootstrap_admin(store) -> None:
+async def ensure_bootstrap_admin(store, username: str, password: str) -> None:
     if await store.exists(BOOTSTRAPPED_KEY):
         return
 
-    username = await variables.get("admin_bootstrap_username")
-    password = await variables.get("admin_bootstrap_password")
     user = {
         "username": username,
         "password_hash": hash_password(password),

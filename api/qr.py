@@ -17,8 +17,7 @@ import qrcode.image.svg as qr_svg
 
 from auth import Principal
 from links import get_link
-from responses import json_response
-from spin_sdk.http import Response
+from responses import Response, json_response
 
 BOX_SIZE_BY_PRESET = {"web": 6, "print": 20}
 

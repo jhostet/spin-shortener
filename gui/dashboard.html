@@ -16,6 +16,13 @@
     <form id="create-form">
       <label for="target-url">Destination URL</label>
       <input id="target-url" name="target_url" type="url" placeholder="https://example.com/..." required />
+
+      <label for="start-at">Starts (optional)</label>
+      <input id="start-at" name="start_at" type="datetime-local" />
+
+      <label for="end-at">Expires (optional)</label>
+      <input id="end-at" name="end_at" type="datetime-local" />
+
       <button type="submit">Shorten</button>
     </form>
     <p id="create-error" style="color: red"></p>
@@ -29,6 +36,8 @@
           <th>Destination</th>
           <th>Created</th>
           <th>Status</th>
+          <th>Starts</th>
+          <th>Expires</th>
           <th></th>
         </tr>
       </thead>
@@ -45,6 +54,24 @@
       }
     }
 
+    function formatWindowField(value) {
+      return value ? escapeHtml(value) : "—";
+    }
+
+    function editRowHtml(link) {
+      return `
+        <tr class="edit-row" data-slug="${escapeHtml(link.slug)}">
+          <td colspan="7">
+            <label>Starts <input type="datetime-local" class="edit-start-at" value="${isoToDatetimeLocal(link.start_at)}" /></label>
+            <label>Expires <input type="datetime-local" class="edit-end-at" value="${isoToDatetimeLocal(link.end_at)}" /></label>
+            <button class="save-edit-btn">Save</button>
+            <button class="cancel-edit-btn" type="button">Cancel</button>
+            <p class="edit-error" style="color: red"></p>
+          </td>
+        </tr>
+      `;
+    }
+
     async function loadLinks() {
       const { ok, data } = await api.get("/links");
       const body = document.getElementById("links-body");
@@ -54,14 +81,22 @@
       for (const link of data.links) {
         const shortUrl = `${location.origin}/r/${link.slug}`;
         const row = document.createElement("tr");
+        row.dataset.slug = link.slug;
         row.innerHTML = `
           <td><a href="${escapeHtml(shortUrl)}" target="_blank">${escapeHtml(shortUrl)}</a></td>
           <td>${escapeHtml(link.target_url)}</td>
           <td>${escapeHtml(link.created_at)}</td>
           <td>${escapeHtml(link.status)}</td>
-          <td><button data-slug="${escapeHtml(link.slug)}" class="delete-btn">Delete</button></td>
+          <td>${formatWindowField(link.start_at)}</td>
+          <td>${formatWindowField(link.end_at)}</td>
+          <td>
+            <button data-slug="${escapeHtml(link.slug)}" class="edit-btn">Edit</button>
+            <button data-slug="${escapeHtml(link.slug)}" class="delete-btn">Delete</button>
+          </td>
         `;
         body.appendChild(row);
+        row.insertAdjacentHTML("afterend", editRowHtml(link));
+        body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`).style.display = "none";
       }
 
       body.querySelectorAll(".delete-btn").forEach((btn) => {
@@ -70,20 +105,55 @@
           loadLinks();
         });
       });
+
+      body.querySelectorAll(".edit-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const editRow = body.querySelector(`tr.edit-row[data-slug="${CSS.escape(btn.dataset.slug)}"]`);
+          editRow.style.display = editRow.style.display === "none" ? "" : "none";
+        });
+      });
+
+      body.querySelectorAll(".cancel-edit-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          btn.closest("tr.edit-row").style.display = "none";
+        });
+      });
+
+      body.querySelectorAll(".save-edit-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const editRow = btn.closest("tr.edit-row");
+          const slug = editRow.dataset.slug;
+          const startAt = datetimeLocalToIso(editRow.querySelector(".edit-start-at").value);
+          const endAt = datetimeLocalToIso(editRow.querySelector(".edit-end-at").value);
+          const errorEl = editRow.querySelector(".edit-error");
+          errorEl.textContent = "";
+
+          const { ok, data } = await api.patch(`/links/${slug}`, { start_at: startAt, end_at: endAt });
+          if (!ok) {
+            errorEl.textContent = (data && data.error) || "Could not update link";
+            return;
+          }
+          loadLinks();
+        });
+      });
     }
 
     document.getElementById("create-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const targetUrl = document.getElementById("target-url").value;
+      const startAt = datetimeLocalToIso(document.getElementById("start-at").value);
+      const endAt = datetimeLocalToIso(document.getElementById("end-at").value);
       const errorEl = document.getElementById("create-error");
       errorEl.textContent = "";
 
-      const { ok, data } = await api.post("/links", { target_url: targetUrl });
+      const { ok, data } = await api.post("/links", { target_url: targetUrl, start_at: startAt, end_at: endAt });
       if (!ok) {
         errorEl.textContent = (data && data.error) || "Could not create link";
         return;
       }
       document.getElementById("target-url").value = "";
+      document.getElementById("start-at").value = "";
+      document.getElementById("end-at").value = "";
       loadLinks();
     });
 

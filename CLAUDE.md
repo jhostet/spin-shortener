@@ -53,4 +53,22 @@ uv run componentize-py -w spin:up/http-trigger@4.0.0 componentize app -o app.was
 
 Python component dependencies (`componentize-py`, `spin-sdk`) are managed by [`uv`](https://docs.astral.sh/uv/) and pinned in `api/pyproject.toml`/`api/uv.lock`. `uv run` syncs `api/.venv` from the lockfile automatically before running, so no manual install step is required — even on a fresh clone, `spin up --build` just works. (To set up the environment yourself, e.g. for editor/language server support, run `uv sync` from `api/`.)
 
-There are no tests, linters, or CI configured yet in this repository.
+## Tests
+
+Go and Python each have their own test suite; there is no CI wired up yet (local-only for now).
+
+```bash
+# redirect (Go) — from redirect/
+go test ./linkgate/...
+
+# api (Python) — from api/
+uv run pytest
+```
+
+**`go test ./...` (bare), `go build ./...`, and `go vet ./...` will FAIL** on `package main` with `wit_exports.go:934:6: missing function body` — `main.go`/`passwordgate.go` import `spin-go-sdk`, which only compiles via the special `go tool componentize-go build` toolchain, not plain `go`. This is expected, not a broken build. Only `redirect/linkgate/` (zero `spin-go-sdk` imports) is host-testable — new pure Go logic belongs there, not in `package main`.
+
+`app.py` is intentionally excluded from `pytest` — it's the real WASI entrypoint (routing dispatch + actual `spin_sdk.key_value`/`variables`/`http.Handler` I/O) and can't be imported under host Python (`spin_sdk`'s submodules fail at import time outside the actual componentize-py build/run pipeline). It's covered by manual `spin up --build --runtime-config-file runtime-config.toml` + curl/browser smoke testing instead. `auth.py`, `links.py`, `qr.py`, and `responses.py` have zero `spin_sdk` imports and are fully unit-tested under `uv run pytest` with an in-memory `FakeStore` (`api/tests/fakes.py`) standing in for the real KV store. New pure logic should follow this same pattern: take `store`/`request` as plain parameters, and use `responses.Request`/`responses.Response` (not `spin_sdk.http`'s) — these are local dataclasses that behave identically at runtime (the real `Handler.handle()` only ever does duck-typed attribute access, never an `isinstance` check) while keeping the module host-importable.
+
+## Time-windowed links
+
+A link record's `start_at`/`end_at` fields (ISO8601 UTC, e.g. `2026-01-01T00:00:00Z`) make it active only in `[start_at, end_at)` — inclusive start, exclusive end. Either or both may be `null` (unbounded on that side). A link outside its window returns a plain `404`, identical to a nonexistent slug — deliberately no distinct "not yet active"/"expired" messaging, so a probing visitor can't learn a link's existence or schedule. The window is re-checked from a fresh KV fetch on every `/r/{slug}` request (`redirect/linkgate.IsWithinWindow`), the same "never cache" principle the password gate already uses — so editing a link's window via `PATCH /api/links/{slug}` takes effect on the very next request.
