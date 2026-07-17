@@ -12,6 +12,7 @@
       <ul><li><strong>spin-shortener</strong></li></ul>
       <ul>
         <li id="whoami"></li>
+        <li id="manage-users-link" style="display: none"><a href="admin/users.html">Manage users</a></li>
         <li><button id="logout-btn" class="secondary outline">Log out</button></li>
       </ul>
     </nav>
@@ -67,6 +68,9 @@
       const { ok, data } = await api.get("/auth/me");
       if (ok) {
         document.getElementById("whoami").textContent = `${data.username} (${data.role})`;
+        if (data.role === "admin" || data.permissions.includes("users.manage")) {
+          document.getElementById("manage-users-link").style.display = "";
+        }
       }
     }
 

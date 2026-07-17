@@ -190,3 +190,25 @@ async def test_ensure_bootstrap_admin_seeds_once():
     assert await auth.get_user(store, "someoneelse") is None
     unchanged = await auth.get_user(store, "admin")
     assert auth.verify_password("changeme123", unchanged["password_hash"])
+
+
+async def test_ensure_bootstrap_admin_adds_to_username_index():
+    store = FakeStore()
+    await auth.ensure_bootstrap_admin(store, "admin", "changeme123")
+    assert await auth.list_usernames(store) == ["admin"]
+
+
+async def test_add_and_remove_username():
+    store = FakeStore()
+    await auth.add_username(store, "alice")
+    await auth.add_username(store, "bob")
+    assert await auth.list_usernames(store) == ["alice", "bob"]
+
+    await auth.add_username(store, "alice")  # idempotent, no duplicate
+    assert await auth.list_usernames(store) == ["alice", "bob"]
+
+    await auth.remove_username(store, "alice")
+    assert await auth.list_usernames(store) == ["bob"]
+
+    await auth.remove_username(store, "doesnotexist")  # no-op, no error
+    assert await auth.list_usernames(store) == ["bob"]

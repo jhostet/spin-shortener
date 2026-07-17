@@ -21,6 +21,12 @@ from responses import Request, get_header, iso_now, parse_cookies
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_SECONDS = 8 * 60 * 60
 BOOTSTRAPPED_KEY = "_meta:bootstrapped"
+USERNAMES_INDEX_KEY = "_meta:usernames"
+
+# The fixed permission vocabulary maintained in code, per the pluggable-auth
+# design — reject anything outside this set rather than silently accepting
+# typos that would never actually grant anything.
+KNOWN_PERMISSIONS = frozenset({"links.create_custom_slug", "links.view_all", "users.manage"})
 
 _SHA256_DIGEST_SIZE = 32
 
@@ -94,6 +100,25 @@ async def put_user(store, user: dict) -> None:
     await store.set(f"user:{user['username']}", json.dumps(user).encode("utf-8"))
 
 
+async def list_usernames(store) -> list[str]:
+    raw = await store.get(USERNAMES_INDEX_KEY)
+    return json.loads(raw) if raw else []
+
+
+async def add_username(store, username: str) -> None:
+    usernames = await list_usernames(store)
+    if username not in usernames:
+        usernames.append(username)
+        await store.set(USERNAMES_INDEX_KEY, json.dumps(usernames).encode("utf-8"))
+
+
+async def remove_username(store, username: str) -> None:
+    usernames = await list_usernames(store)
+    if username in usernames:
+        usernames.remove(username)
+        await store.set(USERNAMES_INDEX_KEY, json.dumps(usernames).encode("utf-8"))
+
+
 class LocalAuthProvider:
     provider_id = "local"
     login_type = "credentials"
@@ -126,6 +151,7 @@ async def ensure_bootstrap_admin(store, username: str, password: str) -> None:
         "created_at": iso_now(),
     }
     await put_user(store, user)
+    await add_username(store, username)
     await store.set(BOOTSTRAPPED_KEY, b"1")
 
 

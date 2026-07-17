@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spin-shortener — Manage users</title>
+  <link rel="stylesheet" href="../vendor/pico.min.css" />
+</head>
+<body>
+  <header class="container">
+    <nav>
+      <ul><li><a href="../dashboard.html">&larr; Back to dashboard</a></li></ul>
+      <ul><li><strong>Manage users</strong></li></ul>
+    </nav>
+  </header>
+
+  <main class="container">
+    <p id="forbidden-notice" style="display: none; color: var(--pico-del-color)">
+      You don't have permission to manage users.
+    </p>
+
+    <div id="admin-content">
+      <article>
+        <h2>Create a user</h2>
+        <form id="create-form">
+          <label for="new-username">Username
+            <input id="new-username" type="text" required />
+          </label>
+          <label for="new-password">Password
+            <input id="new-password" type="password" required minlength="8" />
+          </label>
+          <div class="grid">
+            <label for="new-role">Role
+              <select id="new-role">
+                <option value="user">user</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+            <fieldset>
+              <legend>Permissions (for role "user")</legend>
+              <label><input type="checkbox" class="new-permission" value="links.create_custom_slug" /> Create custom slugs</label>
+              <label><input type="checkbox" class="new-permission" value="links.view_all" /> View all links</label>
+              <label><input type="checkbox" class="new-permission" value="users.manage" /> Manage users</label>
+            </fieldset>
+          </div>
+          <button type="submit">Create user</button>
+        </form>
+        <p id="create-error" style="color: var(--pico-del-color)"></p>
+      </article>
+
+      <article>
+        <h2>Users</h2>
+        <figure>
+          <table id="users-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Permissions</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="users-body"></tbody>
+          </table>
+        </figure>
+      </article>
+    </div>
+  </main>
+
+  <script src="../app.js"></script>
+  <script>
+    const ALL_PERMISSIONS = ["links.create_custom_slug", "links.view_all", "users.manage"];
+
+    function editRowHtml(user) {
+      const checkboxes = ALL_PERMISSIONS.map((perm) => `
+        <label>
+          <input type="checkbox" class="edit-permission" value="${escapeHtml(perm)}" ${user.permissions.includes(perm) ? "checked" : ""} />
+          ${escapeHtml(perm)}
+        </label>
+      `).join("");
+
+      return `
+        <tr class="edit-row" data-username="${escapeHtml(user.username)}">
+          <td colspan="5">
+            <div class="grid">
+              <label>Role
+                <select class="edit-role">
+                  <option value="user" ${user.role === "user" ? "selected" : ""}>user</option>
+                  <option value="admin" ${user.role === "admin" ? "selected" : ""}>admin</option>
+                </select>
+              </label>
+              <label>New password (optional)
+                <input type="password" class="edit-password" minlength="8" placeholder="Leave blank to keep current" />
+              </label>
+            </div>
+            <fieldset>
+              <legend>Permissions</legend>
+              ${checkboxes}
+            </fieldset>
+            <label>
+              <input type="checkbox" class="edit-disabled" ${user.disabled ? "checked" : ""} /> Disabled
+            </label>
+            <button class="save-edit-btn">Save</button>
+            <button class="cancel-edit-btn secondary outline" type="button">Cancel</button>
+            <p class="edit-error" style="color: var(--pico-del-color)"></p>
+          </td>
+        </tr>
+      `;
+    }
+
+    async function loadUsers() {
+      const { ok, data } = await api.get("/users");
+      if (!ok) {
+        document.getElementById("forbidden-notice").style.display = "";
+        document.getElementById("admin-content").style.display = "none";
+        return;
+      }
+
+      const body = document.getElementById("users-body");
+      body.innerHTML = "";
+      for (const user of data.users) {
+        const row = document.createElement("tr");
+        row.dataset.username = user.username;
+        row.innerHTML = `
+          <td>${escapeHtml(user.username)}</td>
+          <td>${escapeHtml(user.role)}</td>
+          <td>${user.permissions.length ? escapeHtml(user.permissions.join(", ")) : "—"}</td>
+          <td>${user.disabled ? "disabled" : "active"}</td>
+          <td>
+            <button class="edit-btn outline" data-username="${escapeHtml(user.username)}">Edit</button>
+            <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}">Delete</button>
+          </td>
+        `;
+        body.appendChild(row);
+        row.insertAdjacentHTML("afterend", editRowHtml(user));
+        body.querySelector(`tr.edit-row[data-username="${CSS.escape(user.username)}"]`).style.display = "none";
+      }
+
+      body.querySelectorAll(".edit-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const editRow = body.querySelector(`tr.edit-row[data-username="${CSS.escape(btn.dataset.username)}"]`);
+          editRow.style.display = editRow.style.display === "none" ? "" : "none";
+        });
+      });
+
+      body.querySelectorAll(".cancel-edit-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          btn.closest("tr.edit-row").style.display = "none";
+        });
+      });
+
+      body.querySelectorAll(".delete-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm(`Delete user "${btn.dataset.username}"?`)) return;
+          const { ok, data } = await api.delete(`/users/${encodeURIComponent(btn.dataset.username)}`);
+          if (!ok) {
+            alert((data && data.error) || "Could not delete user");
+            return;
+          }
+          loadUsers();
+        });
+      });
+
+      body.querySelectorAll(".save-edit-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const editRow = btn.closest("tr.edit-row");
+          const username = editRow.dataset.username;
+          const errorEl = editRow.querySelector(".edit-error");
+          errorEl.textContent = "";
+
+          const payload = {
+            role: editRow.querySelector(".edit-role").value,
+            permissions: Array.from(editRow.querySelectorAll(".edit-permission:checked")).map((cb) => cb.value),
+            disabled: editRow.querySelector(".edit-disabled").checked,
+          };
+          const password = editRow.querySelector(".edit-password").value;
+          if (password) payload.password = password;
+
+          const { ok, data } = await api.patch(`/users/${encodeURIComponent(username)}`, payload);
+          if (!ok) {
+            errorEl.textContent = (data && data.error) || "Could not update user";
+            return;
+          }
+          loadUsers();
+        });
+      });
+    }
+
+    document.getElementById("create-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById("create-error");
+      errorEl.textContent = "";
+
+      const payload = {
+        username: document.getElementById("new-username").value,
+        password: document.getElementById("new-password").value,
+        role: document.getElementById("new-role").value,
+        permissions: Array.from(document.querySelectorAll(".new-permission:checked")).map((cb) => cb.value),
+      };
+
+      const { ok, data } = await api.post("/users", payload);
+      if (!ok) {
+        errorEl.textContent = (data && data.error) || "Could not create user";
+        return;
+      }
+      document.getElementById("create-form").reset();
+      loadUsers();
+    });
+
+    loadUsers();
+  </script>
+</body>
+</html>

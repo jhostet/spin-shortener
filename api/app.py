@@ -8,6 +8,7 @@ import analytics
 import auth
 import links
 import qr
+import users
 from responses import Request, Response, json_response
 
 
@@ -113,6 +114,27 @@ class HttpHandler(Handler):
             if method == "PATCH":
                 return await links.handle_update(links_store, result, slug, request)
             return await links.handle_delete(links_store, result, slug)
+
+        if path == "/api/users" and method in ("GET", "POST"):
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            if method == "GET":
+                return await users.handle_list(users_store, result)
+            return await users.handle_create(users_store, result, request)
+
+        if path.startswith("/api/users/") and method in ("GET", "PATCH", "DELETE"):
+            username = path.removeprefix("/api/users/")
+            if not username or "/" in username:
+                return json_response(404, {"error": "not_found"})
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            if method == "GET":
+                return await users.handle_get(users_store, result, username)
+            if method == "PATCH":
+                return await users.handle_update(users_store, result, username, request)
+            return await users.handle_delete(users_store, result, username)
 
         return json_response(404, {"error": "not_found"})
 

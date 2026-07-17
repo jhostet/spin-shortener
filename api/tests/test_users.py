@@ -1,0 +1,241 @@
+import json
+
+import auth
+import users
+from responses import Request
+from tests.fakes import FakeStore
+
+
+def _principal(username="admin", role="admin", permissions=None):
+    return auth.Principal(username=username, role=role, permissions=permissions or [], csrf_token="x")
+
+
+def _request(payload=None):
+    body = json.dumps(payload).encode("utf-8") if payload is not None else b""
+    return Request(method="POST", uri="/api/users", headers={}, body=body)
+
+
+async def _make_user(store, username="alice", **overrides):
+    payload = {"username": username, "password": "longenough"}
+    payload.update(overrides)
+    resp = await users.handle_create(store, _principal(), _request(payload))
+    return resp
+
+
+# --- Permission gating (users.manage required for every endpoint) ---
+
+
+async def test_list_requires_users_manage():
+    store = FakeStore()
+    resp = await users.handle_list(store, _principal(role="user", permissions=[]))
+    assert resp.status == 403
+    assert json.loads(resp.body)["required_permission"] == "users.manage"
+
+
+async def test_create_requires_users_manage():
+    store = FakeStore()
+    resp = await users.handle_create(store, _principal(role="user", permissions=[]), _request({"username": "x", "password": "longenough"}))
+    assert resp.status == 403
+
+
+async def test_get_requires_users_manage():
+    store = FakeStore()
+    resp = await users.handle_get(store, _principal(role="user", permissions=[]), "alice")
+    assert resp.status == 403
+
+
+async def test_update_requires_users_manage():
+    store = FakeStore()
+    resp = await users.handle_update(store, _principal(role="user", permissions=[]), "alice", _request({"disabled": True}))
+    assert resp.status == 403
+
+
+async def test_delete_requires_users_manage():
+    store = FakeStore()
+    resp = await users.handle_delete(store, _principal(role="user", permissions=[]), "alice")
+    assert resp.status == 403
+
+
+async def test_explicit_users_manage_permission_bypasses_admin_requirement():
+    store = FakeStore()
+    resp = await users.handle_list(store, _principal(username="ops", role="user", permissions=["users.manage"]))
+    assert resp.status == 200
+
+
+# --- Create ---
+
+
+async def test_create_valid_user():
+    store = FakeStore()
+    resp = await _make_user(store, username="alice")
+    assert resp.status == 201
+    body = json.loads(resp.body)
+    assert body["username"] == "alice"
+    assert body["role"] == "user"
+    assert "password_hash" not in body
+
+    stored = await auth.get_user(store, "alice")
+    assert auth.verify_password("longenough", stored["password_hash"])
+    assert await auth.list_usernames(store) == ["alice"]
+
+
+async def test_create_with_role_and_permissions():
+    store = FakeStore()
+    resp = await _make_user(store, role="admin", permissions=["links.create_custom_slug"])
+    assert resp.status == 201
+    body = json.loads(resp.body)
+    assert body["role"] == "admin"
+    assert body["permissions"] == ["links.create_custom_slug"]
+
+
+async def test_create_duplicate_username_conflict():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await _make_user(store, username="alice")
+    assert resp.status == 409
+    assert json.loads(resp.body)["error"] == "username_taken"
+
+
+async def test_create_invalid_username():
+    store = FakeStore()
+    resp = await users.handle_create(store, _principal(), _request({"username": "  ", "password": "longenough"}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_username"
+
+
+async def test_create_password_too_short():
+    store = FakeStore()
+    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "short"}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_password"
+
+
+async def test_create_invalid_role():
+    store = FakeStore()
+    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "longenough", "role": "superadmin"}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_role"
+
+
+async def test_create_unknown_permission_rejected():
+    store = FakeStore()
+    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "longenough", "permissions": ["not.a.real.permission"]}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_permissions"
+
+
+# --- List / Get ---
+
+
+async def test_list_returns_all_users_without_password_hash():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    await _make_user(store, username="bob")
+    resp = await users.handle_list(store, _principal())
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    usernames = {u["username"] for u in body["users"]}
+    assert usernames == {"alice", "bob"}
+    assert all("password_hash" not in u for u in body["users"])
+
+
+async def test_get_not_found():
+    store = FakeStore()
+    resp = await users.handle_get(store, _principal(), "doesnotexist")
+    assert resp.status == 404
+
+
+# --- Update ---
+
+
+async def test_update_empty_payload_rejected():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_update(store, _principal(), "alice", _request({}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "no_fields_to_update"
+
+
+async def test_update_not_found():
+    store = FakeStore()
+    resp = await users.handle_update(store, _principal(), "doesnotexist", _request({"disabled": True}))
+    assert resp.status == 404
+
+
+async def test_update_role_and_permissions():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_update(store, _principal(), "alice", _request({"role": "admin", "permissions": ["links.view_all"]}))
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["role"] == "admin"
+    assert body["permissions"] == ["links.view_all"]
+
+
+async def test_update_invalid_role_rejected():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_update(store, _principal(), "alice", _request({"role": "superadmin"}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_role"
+
+
+async def test_update_disable_another_user():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_update(store, _principal(username="admin"), "alice", _request({"disabled": True}))
+    assert resp.status == 200
+    assert json.loads(resp.body)["disabled"] is True
+
+
+async def test_update_cannot_disable_self():
+    store = FakeStore()
+    await _make_user(store, username="admin", password="longenough2")
+    resp = await users.handle_update(store, _principal(username="admin"), "admin", _request({"disabled": True}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "cannot_disable_self"
+
+
+async def test_update_password():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_update(store, _principal(), "alice", _request({"password": "newlongpassword"}))
+    assert resp.status == 200
+    stored = await auth.get_user(store, "alice")
+    assert auth.verify_password("newlongpassword", stored["password_hash"])
+    assert not auth.verify_password("longenough", stored["password_hash"])
+
+
+async def test_update_partial_leaves_other_fields_untouched():
+    store = FakeStore()
+    await _make_user(store, username="alice", permissions=["links.view_all"])
+    resp = await users.handle_update(store, _principal(), "alice", _request({"disabled": True}))
+    body = json.loads(resp.body)
+    assert body["disabled"] is True
+    assert body["permissions"] == ["links.view_all"]  # untouched
+
+
+# --- Delete ---
+
+
+async def test_delete_another_user():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_delete(store, _principal(username="admin"), "alice")
+    assert resp.status == 200
+    assert await auth.get_user(store, "alice") is None
+    assert "alice" not in await auth.list_usernames(store)
+
+
+async def test_delete_not_found():
+    store = FakeStore()
+    resp = await users.handle_delete(store, _principal(), "doesnotexist")
+    assert resp.status == 404
+
+
+async def test_delete_cannot_delete_self():
+    store = FakeStore()
+    await _make_user(store, username="admin", password="longenough2")
+    resp = await users.handle_delete(store, _principal(username="admin"), "admin")
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "cannot_delete_self"
