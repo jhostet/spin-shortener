@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spin-shortener — Link details</title>
+  <link rel="stylesheet" href="../vendor/pico.min.css" />
+</head>
+<body>
+  <header class="container">
+    <nav>
+      <ul><li><a href="../dashboard.html">&larr; Back to dashboard</a></li></ul>
+    </nav>
+    <h1 id="short-link-heading">Link details</h1>
+  </header>
+
+  <main class="container">
+    <div class="grid">
+      <article id="link-info">
+        <h2>Details</h2>
+        <p><strong>Destination:</strong> <span id="target-url"></span></p>
+        <p><strong>Status:</strong> <span id="status"></span></p>
+        <p><strong>Starts:</strong> <span id="start-at"></span> &nbsp; <strong>Expires:</strong> <span id="end-at"></span></p>
+      </article>
+
+      <article id="qr-section">
+        <h2>QR code</h2>
+        <img id="qr-preview" alt="QR code for this link" width="200" height="200" />
+        <p>
+          <a id="qr-svg-download" role="button" class="outline" download>Download SVG</a>
+          <a id="qr-png-download" role="button" class="outline" download>Download PNG</a>
+        </p>
+      </article>
+    </div>
+
+    <article id="analytics-section">
+      <h2>Analytics</h2>
+      <p><strong>Total clicks:</strong> <span id="total-clicks">0</span></p>
+
+      <div class="grid">
+        <div>
+          <h3>Clicks per day</h3>
+          <figure>
+            <table id="days-table">
+              <thead><tr><th>Day</th><th>Clicks</th></tr></thead>
+              <tbody id="days-body"></tbody>
+            </table>
+          </figure>
+        </div>
+
+        <div>
+          <h3>Recent events</h3>
+          <figure>
+            <table id="events-table">
+              <thead><tr><th>When</th><th>Referrer</th><th>Device</th></tr></thead>
+              <tbody id="events-body"></tbody>
+            </table>
+          </figure>
+        </div>
+      </div>
+    </article>
+  </main>
+
+  <script src="../app.js"></script>
+  <script>
+    const slug = new URLSearchParams(location.search).get("slug");
+
+    async function loadLinkInfo() {
+      const { ok, data } = await api.get(`/links/${slug}`);
+      if (!ok) return;
+
+      const shortUrl = `${location.origin}/r/${slug}`;
+      document.getElementById("short-link-heading").textContent = shortUrl;
+      document.getElementById("target-url").textContent = data.target_url;
+      document.getElementById("status").textContent = data.status;
+      document.getElementById("start-at").textContent = data.start_at || "—";
+      document.getElementById("end-at").textContent = data.end_at || "—";
+
+      document.getElementById("qr-preview").src = `/api/links/${slug}/qr?format=png&size=web`;
+      document.getElementById("qr-svg-download").href = `/api/links/${slug}/qr?format=svg&size=print&download=1`;
+      document.getElementById("qr-png-download").href = `/api/links/${slug}/qr?format=png&size=print&download=1`;
+    }
+
+    async function loadAnalytics() {
+      const { ok, data } = await api.get(`/links/${slug}/analytics`);
+      if (!ok) return;
+
+      document.getElementById("total-clicks").textContent = data.total;
+
+      const daysBody = document.getElementById("days-body");
+      daysBody.innerHTML = "";
+      const sortedDays = Object.entries(data.days).sort((a, b) => b[0].localeCompare(a[0]));
+      for (const [day, count] of sortedDays) {
+        const row = document.createElement("tr");
+        row.innerHTML = `<td>${escapeHtml(day)}</td><td>${escapeHtml(String(count))}</td>`;
+        daysBody.appendChild(row);
+      }
+
+      const eventsBody = document.getElementById("events-body");
+      eventsBody.innerHTML = "";
+      for (const event of data.recent_events) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${escapeHtml(event.timestamp)}</td>
+          <td>${escapeHtml(event.referrer || "(direct)")}</td>
+          <td>${escapeHtml(event.device_class)}</td>
+        `;
+        eventsBody.appendChild(row);
+      }
+    }
+
+    if (!slug) {
+      document.body.textContent = "No link specified.";
+    } else {
+      loadLinkInfo();
+      loadAnalytics();
+    }
+  </script>
+</body>
+</html>

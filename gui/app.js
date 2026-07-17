@@ -32,7 +32,7 @@ async function apiFetch(path, options = {}) {
 
   if (response.status === 401 && !path.startsWith("/auth/login") && !location.pathname.endsWith("login.html")) {
     setCsrfToken(null);
-    location.href = "login.html";
+    location.href = "/login.html";
   }
 
   return response;

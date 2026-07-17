@@ -1,0 +1,4 @@
+Pico CSS v2.1.1 (https://picocss.com)
+Copyright 2019-2025 Pico CSS contributors — Licensed under MIT
+Fetched from https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css
+and vendored here so the gui component doesn't depend on a CDN at runtime.

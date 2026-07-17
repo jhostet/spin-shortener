@@ -2,22 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>spin-shortener — Log in</title>
+  <link rel="stylesheet" href="vendor/pico.min.css" />
 </head>
 <body>
-  <h1>Log in</h1>
-  <form id="login-form">
-    <div>
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" required autofocus />
-    </div>
-    <div>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" required />
-    </div>
-    <button type="submit">Log in</button>
-  </form>
-  <p id="error" style="color: red"></p>
+  <main class="container" style="max-width: 26rem; margin-top: 8vh;">
+    <article>
+      <hgroup>
+        <h1>spin-shortener</h1>
+        <p>Log in to manage your links</p>
+      </hgroup>
+      <form id="login-form">
+        <label for="username">
+          Username
+          <input id="username" name="username" type="text" required autofocus />
+        </label>
+        <label for="password">
+          Password
+          <input id="password" name="password" type="password" required />
+        </label>
+        <button type="submit">Log in</button>
+      </form>
+      <p id="error" style="color: var(--pico-del-color)"></p>
+    </article>
+  </main>
 
   <script src="app.js"></script>
   <script>

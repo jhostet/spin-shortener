@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 from spin_sdk import key_value, variables
 from spin_sdk.http import Handler
 
+import analytics
 import auth
 import links
 import qr
@@ -75,6 +76,18 @@ class HttpHandler(Handler):
                 return result
             links_store = await key_value.open("links")
             return await links.handle_set_password(links_store, result, slug, request)
+
+        if path.startswith("/api/links/") and path.endswith("/analytics") and method == "GET":
+            slug = path.removeprefix("/api/links/").removesuffix("/analytics")
+            if not slug or "/" in slug:
+                return json_response(404, {"error": "not_found"})
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            analytics_store = await key_value.open("analytics")
+            num_event_slots = int(await variables.get("analytics_event_slots"))
+            return await analytics.handle_analytics(links_store, analytics_store, result, slug, num_event_slots)
 
         if path.startswith("/api/links/") and path.endswith("/qr") and method == "GET":
             slug = path.removeprefix("/api/links/").removesuffix("/qr")

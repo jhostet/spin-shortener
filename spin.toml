@@ -11,6 +11,8 @@ admin_bootstrap_username = { default = "admin" }
 admin_bootstrap_password = { required = true, secret = true }
 cookie_secure = { default = "true" }
 public_base_url = { default = "http://localhost:3000" }
+analytics_event_slots = { default = "30" }
+analytics_day_retention_days = { default = "90" }
 
 [[trigger.http]]
 route = "/r/..."
@@ -20,6 +22,9 @@ component = "redirect"
 source = "redirect/main.wasm"
 allowed_outbound_hosts = []
 key_value_stores = ["links", "analytics"]
+[component.redirect.variables]
+analytics_event_slots = "{{ analytics_event_slots }}"
+analytics_day_retention_days = "{{ analytics_day_retention_days }}"
 [component.redirect.build]
 command = "go tool componentize-go build"
 workdir = "redirect"
@@ -37,6 +42,7 @@ admin_bootstrap_username = "{{ admin_bootstrap_username }}"
 admin_bootstrap_password = "{{ admin_bootstrap_password }}"
 cookie_secure = "{{ cookie_secure }}"
 public_base_url = "{{ public_base_url }}"
+analytics_event_slots = "{{ analytics_event_slots }}"
 [component.api.build]
 command = "uv run componentize-py -w spin:up/http-trigger@4.0.0 componentize app -o app.wasm"
 workdir = "api"
