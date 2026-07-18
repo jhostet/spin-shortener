@@ -39,7 +39,7 @@
 
       const { ok, data } = await api.post("/auth/login", { username, password });
       if (!ok) {
-        errorEl.textContent = (data && data.error) || "Login failed";
+        errorEl.textContent = friendlyError(data, "Login failed. Please try again.");
         return;
       }
       setCsrfToken(data.csrf_token);

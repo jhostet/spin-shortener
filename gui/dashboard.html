@@ -8,6 +8,16 @@
   <style>
     #links-table th.sortable { cursor: pointer; user-select: none; }
     #links-table th.sortable:hover { color: var(--pico-primary); }
+    #links-figure { overflow-x: auto; }
+    #links-table td:last-child { white-space: nowrap; }
+    #links-table [role=group] {
+      width: auto;
+    }
+    #links-table [role=group] > * {
+      --pico-form-element-spacing-horizontal: 0.5rem;
+      --pico-form-element-spacing-vertical: 0.3rem;
+      font-size: 0.8rem;
+    }
   </style>
 </head>
 <body>
@@ -43,17 +53,17 @@
     <article>
       <h2 id="links-heading">Your links</h2>
       <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
-      <figure>
+      <figure id="links-figure">
         <table id="links-table">
           <thead>
             <tr>
               <th class="sortable" data-sort-key="slug">Short link<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="owner">Owner<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="target_url">Destination<span class="sort-indicator"></span></th>
-              <th>Created</th>
+              <th class="sortable" data-sort-key="created_at">Created<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="status">Status<span class="sort-indicator"></span></th>
-              <th>Starts</th>
-              <th>Expires</th>
+              <th class="sortable" data-sort-key="start_at">Starts<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="end_at">Expires<span class="sort-indicator"></span></th>
               <th></th>
             </tr>
           </thead>
@@ -101,7 +111,10 @@
           );
 
       if (sortKey) {
-        visible = [...visible].sort((a, b) => sortDir * String(a[sortKey]).localeCompare(String(b[sortKey])));
+        // start_at/end_at may be null (unbounded window) — sort those first regardless of direction.
+        visible = [...visible].sort(
+          (a, b) => sortDir * String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? ""))
+        );
       }
       return visible;
     }

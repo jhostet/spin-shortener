@@ -46,6 +46,7 @@
 
       <article>
         <h2>Users</h2>
+        <p id="users-error" style="color: var(--pico-del-color)"></p>
         <figure>
           <table id="users-table">
             <thead>
@@ -130,6 +131,8 @@
         return;
       }
 
+      document.getElementById("users-error").textContent = "";
+
       const body = document.getElementById("users-body");
       body.innerHTML = "";
       for (const user of data.users) {
@@ -177,7 +180,7 @@
           if (!confirm(`Delete user "${btn.dataset.username}"?`)) return;
           const { ok, data } = await api.delete(`/users/${encodeURIComponent(btn.dataset.username)}`);
           if (!ok) {
-            alert((data && data.error) || "Could not delete user");
+            document.getElementById("users-error").textContent = friendlyError(data, "Could not delete user.");
             return;
           }
           loadUsers();
@@ -201,7 +204,7 @@
 
           const { ok, data } = await api.patch(`/users/${encodeURIComponent(username)}`, payload);
           if (!ok) {
-            errorEl.textContent = (data && data.error) || "Could not update user";
+            errorEl.textContent = friendlyError(data, "Could not update user.");
             return;
           }
           loadUsers();

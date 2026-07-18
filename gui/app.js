@@ -80,6 +80,20 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
+// Maps API error codes (the JSON body's `error` field) to human-readable
+// text. Codes not listed here fall back to the caller-supplied default
+// rather than ever surfacing the raw machine code to a user.
+const ERROR_MESSAGES = {
+  invalid_credentials: "Incorrect username or password.",
+  cannot_delete_self: "You can't delete your own account while logged in as it.",
+  cannot_disable_self: "You can't disable your own account while logged in as it.",
+};
+
+function friendlyError(data, fallback) {
+  const code = data && data.error;
+  return (code && ERROR_MESSAGES[code]) || fallback;
+}
+
 // Renders the shared nav (brand or back-link, whoami, conditional "Manage
 // users" link, logout button) into a page's `<header id="app-header">`, and
 // wires the logout handler — so logout is reachable from every authenticated
