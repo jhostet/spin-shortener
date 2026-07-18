@@ -5,18 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>spin-shortener — Dashboard</title>
   <link rel="stylesheet" href="vendor/pico.min.css" />
+  <style>
+    #links-table th.sortable { cursor: pointer; user-select: none; }
+    #links-table th.sortable:hover { color: var(--pico-primary); }
+  </style>
 </head>
 <body>
-  <header class="container">
-    <nav>
-      <ul><li><strong>spin-shortener</strong></li></ul>
-      <ul>
-        <li id="whoami"></li>
-        <li id="manage-users-link" style="display: none"><a href="admin/users.html">Manage users</a></li>
-        <li><button id="logout-btn" class="secondary outline">Log out</button></li>
-      </ul>
-    </nav>
-  </header>
+  <header id="app-header" class="container"></header>
 
   <main class="container">
     <article>
@@ -25,14 +20,11 @@
         <label for="target-url">Destination URL</label>
         <input id="target-url" name="target_url" type="url" placeholder="https://example.com/..." required />
 
-        <div id="custom-slug-field" style="display: none">
-          <label for="custom-slug">
+        <div class="grid">
+          <label id="custom-slug-field" for="custom-slug" style="display: none">
             Custom short link (optional)
             <input id="custom-slug" name="custom_slug" type="text" pattern="[A-Za-z0-9_\-]{3,32}" minlength="3" maxlength="32" placeholder="my-link" />
           </label>
-        </div>
-
-        <div class="grid">
           <label for="start-at">
             Starts (optional)
             <input id="start-at" name="start_at" type="datetime-local" />
@@ -50,15 +42,16 @@
 
     <article>
       <h2 id="links-heading">Your links</h2>
+      <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
       <figure>
         <table id="links-table">
           <thead>
             <tr>
-              <th>Short link</th>
-              <th>Owner</th>
-              <th>Destination</th>
+              <th class="sortable" data-sort-key="slug">Short link<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="owner">Owner<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="target_url">Destination<span class="sort-indicator"></span></th>
               <th>Created</th>
-              <th>Status</th>
+              <th class="sortable" data-sort-key="status">Status<span class="sort-indicator"></span></th>
               <th>Starts</th>
               <th>Expires</th>
               <th></th>
@@ -73,12 +66,8 @@
   <script src="app.js"></script>
   <script>
     async function loadMe() {
-      const { ok, data } = await api.get("/auth/me");
+      const { ok, data } = await initHeader();
       if (ok) {
-        document.getElementById("whoami").textContent = `${data.username} (${data.role})`;
-        if (data.role === "admin" || data.permissions.includes("users.manage")) {
-          document.getElementById("manage-users-link").style.display = "";
-        }
         if (data.role === "admin" || data.permissions.includes("links.create_custom_slug")) {
           document.getElementById("custom-slug-field").style.display = "";
         }
@@ -90,6 +79,31 @@
 
     function formatWindowField(value) {
       return value ? escapeHtml(value) : "—";
+    }
+
+    let allLinks = [];
+    let sortKey = null;
+    let sortDir = 1;
+
+    function updateSortIndicators() {
+      document.querySelectorAll("#links-table th.sortable").forEach((th) => {
+        const indicator = th.querySelector(".sort-indicator");
+        indicator.textContent = th.dataset.sortKey === sortKey ? (sortDir === 1 ? " ▲" : " ▼") : "";
+      });
+    }
+
+    function getVisibleLinks() {
+      const term = document.getElementById("links-filter").value.trim().toLowerCase();
+      let visible = !term
+        ? allLinks
+        : allLinks.filter(
+            (link) => link.slug.toLowerCase().includes(term) || link.target_url.toLowerCase().includes(term)
+          );
+
+      if (sortKey) {
+        visible = [...visible].sort((a, b) => sortDir * String(a[sortKey]).localeCompare(String(b[sortKey])));
+      }
+      return visible;
     }
 
     function editRowHtml(link) {
@@ -110,11 +124,17 @@
 
     async function loadLinks() {
       const { ok, data } = await api.get("/links");
+      if (!ok) return;
+      allLinks = data.links;
+      renderLinksTable();
+    }
+
+    function renderLinksTable() {
       const body = document.getElementById("links-body");
       body.innerHTML = "";
-      if (!ok) return;
+      updateSortIndicators();
 
-      for (const link of data.links) {
+      for (const link of getVisibleLinks()) {
         const shortUrl = `${location.origin}/r/${link.slug}`;
         const row = document.createElement("tr");
         row.dataset.slug = link.slug;
@@ -127,9 +147,11 @@
           <td>${formatWindowField(link.start_at)}</td>
           <td>${formatWindowField(link.end_at)}</td>
           <td>
-            <a href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a> &nbsp;
-            <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline">Edit</button>
-            <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline">Delete</button>
+            <div role="group">
+              <a role="button" class="outline" href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a>
+              <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline">Edit</button>
+              <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline">Delete</button>
+            </div>
           </td>
         `;
         body.appendChild(row);
@@ -202,10 +224,15 @@
       loadLinks();
     });
 
-    document.getElementById("logout-btn").addEventListener("click", async () => {
-      await api.post("/auth/logout");
-      setCsrfToken(null);
-      location.href = "/login.html";
+    document.getElementById("links-filter").addEventListener("input", renderLinksTable);
+
+    document.querySelectorAll("#links-table th.sortable").forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.sortKey;
+        sortDir = sortKey === key ? -sortDir : 1;
+        sortKey = key;
+        renderLinksTable();
+      });
     });
 
     loadMe();

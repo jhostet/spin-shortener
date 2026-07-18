@@ -79,3 +79,43 @@ function escapeHtml(value) {
   div.textContent = value;
   return div.innerHTML;
 }
+
+// Renders the shared nav (brand or back-link, whoami, conditional "Manage
+// users" link, logout button) into a page's `<header id="app-header">`, and
+// wires the logout handler — so logout is reachable from every authenticated
+// page, not just the dashboard. `backHref`/`manageUsersHref` let each page
+// supply paths relative to its own depth. Returns the `/auth/me` result so
+// callers can layer page-specific logic (e.g. showing/hiding other fields)
+// on top of the same principal data.
+async function initHeader({ backHref, manageUsersHref = "admin/users.html" } = {}) {
+  const header = document.getElementById("app-header");
+  header.innerHTML = `
+    <nav>
+      <ul>
+        ${backHref
+          ? `<li><a href="${backHref}">&larr; Back to dashboard</a></li>`
+          : `<li><strong>spin-shortener</strong></li>`}
+      </ul>
+      <ul>
+        <li id="whoami"></li>
+        <li id="manage-users-link" style="display: none"><a href="${manageUsersHref}">Manage users</a></li>
+        <li><button id="logout-btn" class="secondary outline">Log out</button></li>
+      </ul>
+    </nav>
+  `;
+
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await api.post("/auth/logout");
+    setCsrfToken(null);
+    location.href = "/login.html";
+  });
+
+  const result = await api.get("/auth/me");
+  if (result.ok) {
+    document.getElementById("whoami").textContent = `${result.data.username} (${result.data.role})`;
+    if (result.data.role === "admin" || result.data.permissions.includes("users.manage")) {
+      document.getElementById("manage-users-link").style.display = "";
+    }
+  }
+  return result;
+}

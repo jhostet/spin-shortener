@@ -7,14 +7,10 @@
   <link rel="stylesheet" href="../vendor/pico.min.css" />
 </head>
 <body>
-  <header class="container">
-    <nav>
-      <ul><li><a href="../dashboard.html">&larr; Back to dashboard</a></li></ul>
-      <ul><li><strong>Manage users</strong></li></ul>
-    </nav>
-  </header>
+  <header id="app-header" class="container"></header>
 
   <main class="container">
+    <h1>Manage users</h1>
     <p id="forbidden-notice" style="display: none; color: var(--pico-del-color)">
       You don't have permission to manage users.
     </p>
@@ -36,8 +32,8 @@
                 <option value="admin">admin</option>
               </select>
             </label>
-            <fieldset>
-              <legend>Permissions (for role "user")</legend>
+            <fieldset id="new-permissions-fieldset">
+              <legend id="new-permissions-legend">Permissions (for role "user")</legend>
               <label><input type="checkbox" class="new-permission" value="links.create_custom_slug" /> Create custom slugs</label>
               <label><input type="checkbox" class="new-permission" value="links.view_all" /> View all links</label>
               <label><input type="checkbox" class="new-permission" value="users.manage" /> Manage users</label>
@@ -71,12 +67,29 @@
   <script src="../app.js"></script>
   <script>
     const ALL_PERMISSIONS = ["links.create_custom_slug", "links.view_all", "users.manage"];
+    const PERMISSION_LABELS = {
+      "links.create_custom_slug": "Create custom slugs",
+      "links.view_all": "View all links",
+      "users.manage": "Manage users",
+    };
+
+    function permissionsLegendText(role) {
+      return role === "admin" ? "Permissions (ignored — admins have full access)" : 'Permissions (for role "user")';
+    }
+
+    // Admins bypass every permission check (see auth.Principal.has_permission),
+    // so the checkbox values are inert for them; disabling the fieldset makes
+    // that visible instead of implying the checked boxes still matter.
+    function updatePermissionsFieldset(fieldset, legend, role) {
+      fieldset.disabled = role === "admin";
+      legend.textContent = permissionsLegendText(role);
+    }
 
     function editRowHtml(user) {
       const checkboxes = ALL_PERMISSIONS.map((perm) => `
         <label>
           <input type="checkbox" class="edit-permission" value="${escapeHtml(perm)}" ${user.permissions.includes(perm) ? "checked" : ""} />
-          ${escapeHtml(perm)}
+          ${escapeHtml(PERMISSION_LABELS[perm] || perm)}
         </label>
       `).join("");
 
@@ -94,8 +107,8 @@
                 <input type="password" class="edit-password" minlength="8" placeholder="Leave blank to keep current" />
               </label>
             </div>
-            <fieldset>
-              <legend>Permissions</legend>
+            <fieldset class="edit-permissions-fieldset" ${user.role === "admin" ? "disabled" : ""}>
+              <legend class="edit-permissions-legend">${escapeHtml(permissionsLegendText(user.role))}</legend>
               ${checkboxes}
             </fieldset>
             <label>
@@ -125,7 +138,7 @@
         row.innerHTML = `
           <td>${escapeHtml(user.username)}</td>
           <td>${escapeHtml(user.role)}</td>
-          <td>${user.permissions.length ? escapeHtml(user.permissions.join(", ")) : "—"}</td>
+          <td>${user.permissions.length ? escapeHtml(user.permissions.map((p) => PERMISSION_LABELS[p] || p).join(", ")) : "—"}</td>
           <td>${user.disabled ? "disabled" : "active"}</td>
           <td>
             <button class="edit-btn outline" data-username="${escapeHtml(user.username)}">Edit</button>
@@ -141,6 +154,15 @@
         btn.addEventListener("click", () => {
           const editRow = body.querySelector(`tr.edit-row[data-username="${CSS.escape(btn.dataset.username)}"]`);
           editRow.style.display = editRow.style.display === "none" ? "" : "none";
+        });
+      });
+
+      body.querySelectorAll(".edit-role").forEach((select) => {
+        const editRow = select.closest("tr.edit-row");
+        const fieldset = editRow.querySelector(".edit-permissions-fieldset");
+        const legend = editRow.querySelector(".edit-permissions-legend");
+        select.addEventListener("change", () => {
+          updatePermissionsFieldset(fieldset, legend, select.value);
         });
       });
 
@@ -205,9 +227,18 @@
         return;
       }
       document.getElementById("create-form").reset();
+      updatePermissionsFieldset(newPermissionsFieldset, newPermissionsLegend, newRoleSelect.value);
       loadUsers();
     });
 
+    const newRoleSelect = document.getElementById("new-role");
+    const newPermissionsFieldset = document.getElementById("new-permissions-fieldset");
+    const newPermissionsLegend = document.getElementById("new-permissions-legend");
+    newRoleSelect.addEventListener("change", () => {
+      updatePermissionsFieldset(newPermissionsFieldset, newPermissionsLegend, newRoleSelect.value);
+    });
+
+    initHeader({ backHref: "../dashboard.html", manageUsersHref: "users.html" });
     loadUsers();
   </script>
 </body>
