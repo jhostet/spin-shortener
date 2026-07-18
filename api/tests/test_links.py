@@ -166,6 +166,40 @@ async def test_get_not_found():
     assert resp.status == 404
 
 
+async def test_list_only_shows_own_links_by_default():
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+
+    resp = await links.handle_list(store, _principal(username="alice"))
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert [link["target_url"] for link in body["links"]] == ["https://example.com/alice"]
+
+
+async def test_list_admin_sees_all_links():
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+
+    resp = await links.handle_list(store, _principal(username="admin", role="admin"))
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
+
+
+async def test_list_view_all_permission_sees_all_links():
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await links.handle_list(store, viewer)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
+
+
 async def test_delete_owner_succeeds_and_removes_index():
     store = FakeStore()
     owner = _principal(username="alice")
@@ -176,6 +210,7 @@ async def test_delete_owner_succeeds_and_removes_index():
     assert resp.status == 200
     assert await store.exists(f"slug:{slug}") is False
     assert slug not in await links._owned_slugs(store, "alice")
+    assert slug not in await links._all_slugs(store)
 
 
 async def test_delete_non_owner_forbidden():

@@ -49,12 +49,13 @@
     </article>
 
     <article>
-      <h2>Your links</h2>
+      <h2 id="links-heading">Your links</h2>
       <figure>
         <table id="links-table">
           <thead>
             <tr>
               <th>Short link</th>
+              <th>Owner</th>
               <th>Destination</th>
               <th>Created</th>
               <th>Status</th>
@@ -81,6 +82,9 @@
         if (data.role === "admin" || data.permissions.includes("links.create_custom_slug")) {
           document.getElementById("custom-slug-field").style.display = "";
         }
+        if (data.role === "admin" || data.permissions.includes("links.view_all")) {
+          document.getElementById("links-heading").textContent = "All links";
+        }
       }
     }
 
@@ -91,7 +95,7 @@
     function editRowHtml(link) {
       return `
         <tr class="edit-row" data-slug="${escapeHtml(link.slug)}">
-          <td colspan="7">
+          <td colspan="8">
             <div class="grid">
               <label>Starts <input type="datetime-local" class="edit-start-at" value="${isoToDatetimeLocal(link.start_at)}" /></label>
               <label>Expires <input type="datetime-local" class="edit-end-at" value="${isoToDatetimeLocal(link.end_at)}" /></label>
@@ -116,6 +120,7 @@
         row.dataset.slug = link.slug;
         row.innerHTML = `
           <td><a href="${escapeHtml(shortUrl)}" target="_blank">${escapeHtml(shortUrl)}</a></td>
+          <td>${escapeHtml(link.owner)}</td>
           <td>${escapeHtml(link.target_url)}</td>
           <td>${escapeHtml(link.created_at)}</td>
           <td>${escapeHtml(link.status)}</td>

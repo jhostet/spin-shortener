@@ -51,6 +51,28 @@ async def _remove_owned_slug(store, username: str, slug: str) -> None:
     await store.set(f"owner_links:{username}", json.dumps(slugs).encode("utf-8"))
 
 
+ALL_SLUGS_INDEX_KEY = "all_links"
+
+
+async def _all_slugs(store) -> list[str]:
+    raw = await store.get(ALL_SLUGS_INDEX_KEY)
+    return json.loads(raw) if raw else []
+
+
+async def _add_all_slug(store, slug: str) -> None:
+    slugs = await _all_slugs(store)
+    if slug not in slugs:
+        slugs.append(slug)
+    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs).encode("utf-8"))
+
+
+async def _remove_all_slug(store, slug: str) -> None:
+    slugs = await _all_slugs(store)
+    if slug in slugs:
+        slugs.remove(slug)
+    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs).encode("utf-8"))
+
+
 async def get_link(store, slug: str) -> dict | None:
     raw = await store.get(f"slug:{slug}")
     return json.loads(raw) if raw else None
@@ -141,11 +163,15 @@ async def handle_create(store, principal: Principal, request):
     }
     await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
     await _add_owned_slug(store, principal.username, slug)
+    await _add_all_slug(store, slug)
     return json_response(201, _public_link(record))
 
 
 async def handle_list(store, principal: Principal):
-    slugs = await _owned_slugs(store, principal.username)
+    if principal.role == "admin" or principal.has_permission("links.view_all"):
+        slugs = await _all_slugs(store)
+    else:
+        slugs = await _owned_slugs(store, principal.username)
     records = []
     for slug in slugs:
         record = await get_link(store, slug)
@@ -228,6 +254,7 @@ async def handle_delete(store, principal: Principal, slug: str):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
     await store.delete(f"slug:{slug}")
     await _remove_owned_slug(store, record["owner"], slug)
+    await _remove_all_slug(store, slug)
     return json_response(200, {"ok": True})
 
 
