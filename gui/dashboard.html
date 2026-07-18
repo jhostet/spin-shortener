@@ -25,6 +25,13 @@
         <label for="target-url">Destination URL</label>
         <input id="target-url" name="target_url" type="url" placeholder="https://example.com/..." required />
 
+        <div id="custom-slug-field" style="display: none">
+          <label for="custom-slug">
+            Custom short link (optional)
+            <input id="custom-slug" name="custom_slug" type="text" pattern="[A-Za-z0-9_\-]{3,32}" minlength="3" maxlength="32" placeholder="my-link" />
+          </label>
+        </div>
+
         <div class="grid">
           <label for="start-at">
             Starts (optional)
@@ -70,6 +77,9 @@
         document.getElementById("whoami").textContent = `${data.username} (${data.role})`;
         if (data.role === "admin" || data.permissions.includes("users.manage")) {
           document.getElementById("manage-users-link").style.display = "";
+        }
+        if (data.role === "admin" || data.permissions.includes("links.create_custom_slug")) {
+          document.getElementById("custom-slug-field").style.display = "";
         }
       }
     }
@@ -164,17 +174,24 @@
     document.getElementById("create-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const targetUrl = document.getElementById("target-url").value;
+      const customSlug = document.getElementById("custom-slug").value.trim() || null;
       const startAt = datetimeLocalToIso(document.getElementById("start-at").value);
       const endAt = datetimeLocalToIso(document.getElementById("end-at").value);
       const errorEl = document.getElementById("create-error");
       errorEl.textContent = "";
 
-      const { ok, data } = await api.post("/links", { target_url: targetUrl, start_at: startAt, end_at: endAt });
+      const { ok, data } = await api.post("/links", {
+        target_url: targetUrl,
+        custom_slug: customSlug,
+        start_at: startAt,
+        end_at: endAt,
+      });
       if (!ok) {
         errorEl.textContent = (data && data.error) || "Could not create link";
         return;
       }
       document.getElementById("target-url").value = "";
+      document.getElementById("custom-slug").value = "";
       document.getElementById("start-at").value = "";
       document.getElementById("end-at").value = "";
       loadLinks();
