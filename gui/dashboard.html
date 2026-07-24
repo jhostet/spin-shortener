@@ -16,7 +16,7 @@
     #links-table [role=group] > * {
       --pico-form-element-spacing-horizontal: 0.5rem;
       --pico-form-element-spacing-vertical: 0.3rem;
-      font-size: 0.8rem;
+      font-size: 0.75rem;
     }
   </style>
 </head>
@@ -47,23 +47,25 @@
 
         <button type="submit">Shorten</button>
       </form>
-      <p id="create-error" class="form-error"></p>
+      <p id="create-error" class="form-error" role="alert"></p>
+      <p id="create-success" class="form-success" aria-live="polite" style="display: none"></p>
     </article>
 
     <article>
       <h2 id="links-heading">Your links</h2>
       <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
+      <p id="links-error" class="form-error" role="alert"></p>
       <figure id="links-figure">
         <table id="links-table">
           <thead>
             <tr>
-              <th class="sortable" data-sort-key="slug">Short link<span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort-key="owner">Owner<span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort-key="target_url">Destination<span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort-key="created_at">Created<span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort-key="status">Status<span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort-key="start_at">Starts<span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort-key="end_at">Expires<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="slug" tabindex="0" aria-sort="none">Short link<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="owner" tabindex="0" aria-sort="none">Owner<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="target_url" tabindex="0" aria-sort="none">Destination<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="created_at" tabindex="0" aria-sort="none">Created<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="status" tabindex="0" aria-sort="none">Status<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="start_at" tabindex="0" aria-sort="none">Starts<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="end_at" tabindex="0" aria-sort="none">Expires<span class="sort-indicator"></span></th>
               <th></th>
             </tr>
           </thead>
@@ -87,8 +89,26 @@
       }
     }
 
-    function formatWindowField(value) {
-      return value ? escapeHtml(value) : "—";
+    function formatDateTime(iso) {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+    }
+
+    function formatWindowField(value, { warnIfSoon = false, noteIfFuture = false } = {}) {
+      if (!value) return "—";
+      const text = escapeHtml(formatDateTime(value));
+      const hoursUntil = (new Date(value) - Date.now()) / 3600000;
+      if (noteIfFuture && hoursUntil > 0) {
+        return `<span class="not-yet-live">${text} (not yet live)</span>`;
+      }
+      if (warnIfSoon) {
+        if (hoursUntil <= 0) {
+          return `<span class="expired">${text} (expired)</span>`;
+        }
+        if (hoursUntil <= 24) {
+          return `<span class="expiring-soon">${text} (expiring soon)</span>`;
+        }
+      }
+      return text;
     }
 
     let allLinks = [];
@@ -98,7 +118,9 @@
     function updateSortIndicators() {
       document.querySelectorAll("#links-table th.sortable").forEach((th) => {
         const indicator = th.querySelector(".sort-indicator");
-        indicator.textContent = th.dataset.sortKey === sortKey ? (sortDir === 1 ? " ▲" : " ▼") : "";
+        const isActive = th.dataset.sortKey === sortKey;
+        indicator.textContent = isActive ? (sortDir === 1 ? " ▲" : " ▼") : "";
+        th.setAttribute("aria-sort", isActive ? (sortDir === 1 ? "ascending" : "descending") : "none");
       });
     }
 
@@ -123,13 +145,20 @@
       return `
         <tr class="edit-row" data-slug="${escapeHtml(link.slug)}">
           <td colspan="8">
+            <label>Destination URL <input type="url" class="edit-target-url" value="${escapeHtml(link.target_url)}" /></label>
             <div class="grid">
               <label>Starts <input type="datetime-local" class="edit-start-at" value="${isoToDatetimeLocal(link.start_at)}" /></label>
               <label>Expires <input type="datetime-local" class="edit-end-at" value="${isoToDatetimeLocal(link.end_at)}" /></label>
             </div>
+            <div class="grid">
+              <label>New link password <small>(currently ${link.password_protected ? "password-protected" : "no password"} — leave blank to keep as-is)</small>
+                <input type="password" class="edit-password" minlength="4" placeholder="New password" />
+              </label>
+              <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
+            </div>
             <button class="save-edit-btn">Save</button>
             <button class="cancel-edit-btn secondary outline" type="button">Cancel</button>
-            <p class="edit-error form-error"></p>
+            <p class="edit-error form-error" role="alert"></p>
           </td>
         </tr>
       `;
@@ -159,16 +188,21 @@
         const row = document.createElement("tr");
         row.dataset.slug = link.slug;
         row.innerHTML = `
-          <td><a class="slug-chip" href="${escapeHtml(shortUrl)}" target="_blank">${escapeHtml(shortUrl)}</a></td>
+          <td>
+            <span class="slug-chip">${escapeHtml(shortUrl)}</span>
+            ${link.custom ? '<span class="slug-kind-badge">Custom</span>' : ""}
+            ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
+          </td>
           <td>${escapeHtml(link.owner)}</td>
           <td>${escapeHtml(link.target_url)}</td>
-          <td>${escapeHtml(link.created_at)}</td>
+          <td>${formatDateTime(link.created_at)}</td>
           <td><span class="status-badge status-${escapeHtml(link.status)}">${escapeHtml(link.status)}</span></td>
-          <td>${formatWindowField(link.start_at)}</td>
-          <td>${formatWindowField(link.end_at)}</td>
+          <td>${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>
+          <td>${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
           <td>
             <div role="group">
               <a role="button" class="outline" href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a>
+              <button data-slug="${escapeHtml(link.slug)}" class="copy-btn outline">Copy</button>
               <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline">Edit</button>
               <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline">Delete</button>
             </div>
@@ -179,9 +213,23 @@
         body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`).style.display = "none";
       }
 
+      body.querySelectorAll(".copy-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const shortUrl = `${location.origin}/r/${btn.dataset.slug}`;
+          copyToClipboard(shortUrl, btn);
+        });
+      });
+
       body.querySelectorAll(".delete-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          await api.delete(`/links/${btn.dataset.slug}`);
+          if (!confirm(`Delete the link "${btn.dataset.slug}"? This can't be undone.`)) return;
+          const errorEl = document.getElementById("links-error");
+          errorEl.textContent = "";
+          const { ok, data } = await api.delete(`/links/${btn.dataset.slug}`);
+          if (!ok) {
+            errorEl.textContent = friendlyError(data, "Could not delete link.");
+            return;
+          }
           loadLinks();
         });
       });
@@ -203,19 +251,72 @@
         btn.addEventListener("click", async () => {
           const editRow = btn.closest("tr.edit-row");
           const slug = editRow.dataset.slug;
+          const targetUrl = editRow.querySelector(".edit-target-url").value.trim();
           const startAt = datetimeLocalToIso(editRow.querySelector(".edit-start-at").value);
           const endAt = datetimeLocalToIso(editRow.querySelector(".edit-end-at").value);
+          const newPassword = editRow.querySelector(".edit-password").value;
+          const removePassword = editRow.querySelector(".edit-remove-password").checked;
           const errorEl = editRow.querySelector(".edit-error");
           errorEl.textContent = "";
 
-          const { ok, data } = await api.patch(`/links/${slug}`, { start_at: startAt, end_at: endAt });
-          if (!ok) {
-            errorEl.textContent = (data && data.error) || "Could not update link";
+          if (!targetUrl) {
+            errorEl.textContent = "Enter a destination URL.";
             return;
           }
+
+          const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt });
+          if (!ok) {
+            errorEl.textContent = friendlyError(data, "Could not update link.");
+            return;
+          }
+
+          // Reflect the saved destination/schedule in the visible row immediately —
+          // not just in the "saved" message — in case the password step below fails
+          // and this function returns before reaching the full loadLinks() refresh.
+          const linkRecord = allLinks.find((l) => l.slug === slug);
+          if (linkRecord) {
+            linkRecord.target_url = targetUrl;
+            linkRecord.start_at = startAt;
+            linkRecord.end_at = endAt;
+          }
+          const displayRow = editRow.previousElementSibling;
+          if (displayRow) {
+            displayRow.children[2].textContent = targetUrl;
+            displayRow.children[5].innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
+            displayRow.children[6].innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
+          }
+
+          if (removePassword || newPassword) {
+            const passwordResult = await api.post(`/links/${slug}/password`, {
+              password: removePassword ? null : newPassword,
+            });
+            if (!passwordResult.ok) {
+              // The destination/schedule PATCH above already succeeded — say so,
+              // so a failed password change never reads as "nothing happened."
+              errorEl.textContent =
+                "Destination and schedule saved. " +
+                friendlyError(passwordResult.data, "Could not update link password.", {
+                  invalid_password: "Link passwords must be at least 4 characters.",
+                });
+              return;
+            }
+          }
+
           loadLinks();
         });
       });
+    }
+
+    async function copyToClipboard(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      } catch {
+        // Clipboard API unavailable or permission denied — the link is
+        // still right there in the chip for the user to select manually.
+      }
     }
 
     document.getElementById("create-form").addEventListener("submit", async (e) => {
@@ -225,7 +326,9 @@
       const startAt = datetimeLocalToIso(document.getElementById("start-at").value);
       const endAt = datetimeLocalToIso(document.getElementById("end-at").value);
       const errorEl = document.getElementById("create-error");
+      const successEl = document.getElementById("create-success");
       errorEl.textContent = "";
+      successEl.style.display = "none";
 
       const { ok, data } = await api.post("/links", {
         target_url: targetUrl,
@@ -234,24 +337,37 @@
         end_at: endAt,
       });
       if (!ok) {
-        errorEl.textContent = (data && data.error) || "Could not create link";
+        errorEl.textContent = friendlyError(data, "Could not create link.");
         return;
       }
       document.getElementById("target-url").value = "";
       document.getElementById("custom-slug").value = "";
       document.getElementById("start-at").value = "";
       document.getElementById("end-at").value = "";
+
+      const shortUrl = `${location.origin}/r/${data.slug}`;
+      successEl.innerHTML = `Link created: <span class="slug-chip">${escapeHtml(shortUrl)}</span> <button type="button" class="outline">Copy</button>`;
+      successEl.style.display = "";
+      successEl.querySelector("button").addEventListener("click", (evt) => copyToClipboard(shortUrl, evt.currentTarget));
+
       loadLinks();
     });
 
     document.getElementById("links-filter").addEventListener("input", renderLinksTable);
 
     document.querySelectorAll("#links-table th.sortable").forEach((th) => {
-      th.addEventListener("click", () => {
+      const activate = () => {
         const key = th.dataset.sortKey;
         sortDir = sortKey === key ? -sortDir : 1;
         sortKey = key;
         renderLinksTable();
+      };
+      th.addEventListener("click", activate);
+      th.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activate();
+        }
       });
     });
 

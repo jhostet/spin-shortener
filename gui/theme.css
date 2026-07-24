@@ -15,15 +15,20 @@
   --pico-form-element-spacing-vertical: 0.5rem;
   --pico-form-element-spacing-horizontal: 0.75rem;
 
-  --pico-primary: #2b7fd1;
-  --pico-primary-background: #2b7fd1;
+  /* #2b7fd1 measured ~4.15:1 against white — below the 4.5:1 AA minimum
+   * for normal text, on both button fills (white-on-blue) and plain
+   * link text (blue-on-white/bg-mist), since contrast is symmetric.
+   * #276fb8 clears 5.18:1 at the same hue; the existing hover shade
+   * already passed on its own, so only the resting value moves. */
+  --pico-primary: #276fb8;
+  --pico-primary-background: #276fb8;
   --pico-primary-hover: #1e6bb8;
   --pico-primary-hover-background: #1e6bb8;
-  --pico-primary-border: #2b7fd1;
+  --pico-primary-border: #276fb8;
   --pico-primary-hover-border: #1e6bb8;
-  --pico-primary-underline: rgba(43, 127, 209, 0.5);
-  --pico-primary-hover-underline: rgba(43, 127, 209, 0.75);
-  --pico-primary-focus: rgba(43, 127, 209, 0.375);
+  --pico-primary-underline: rgba(39, 111, 184, 0.5);
+  --pico-primary-hover-underline: rgba(39, 111, 184, 0.75);
+  --pico-primary-focus: rgba(39, 111, 184, 0.375);
   --pico-primary-inverse: #fff;
 
   --pico-background-color: #eef1f6;
@@ -40,7 +45,7 @@
   --ss-navy-950: #0a1628;
   --ss-navy-800: #14243d;
   --ss-slate-500: #5b6b85;
-  --ss-signal-500: #2b7fd1;
+  --ss-signal-500: #276fb8;
   --ss-ok-500: #1a7f5a;
   --ss-danger-500: #b3261e;
   --ss-mono-font: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -90,7 +95,11 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   text-decoration: none;
   line-height: 1.6;
 }
-.slug-chip:hover {
+/* Only an actual link earns the interactive hover state — the table
+ * and success-banner chips are plain display text now (see dashboard.html;
+ * clicking a slug-chip used to fire a real redirect and inflate that
+ * link's own click count). */
+a.slug-chip:hover {
   background: var(--ss-navy-800);
   color: var(--ss-signal-500);
 }
@@ -106,6 +115,43 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 #events-table td:first-child {
   font-family: var(--ss-mono-font);
   font-size: 0.85em;
+}
+
+/* Slug-kind / lock badges — small text labels next to a slug chip,
+ * not data, so they explicitly opt back out of the mono rule their
+ * parent cell applies. */
+.slug-kind-badge,
+.lock-badge {
+  display: inline-block;
+  margin-left: 0.35em;
+  font-family: var(--pico-font-family-sans-serif, sans-serif);
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+/* Neutral, not Signal Blue: DESIGN.md reserves that accent for hover
+ * states on nav/buttons/links — a resting-fill use on a static status
+ * label was a rule violation (and fell short of AA text contrast). */
+.slug-kind-badge,
+.lock-badge {
+  color: var(--ss-slate-500);
+}
+
+/* Expiry warning/fact — text-suffixed, not color-only, so the signal
+ * still reads for anyone who can't perceive the color difference.
+ * Same color for both: the suffix ("expiring soon" vs "expired")
+ * carries the distinction, not a second hue. */
+.expiring-soon,
+.expired {
+  color: var(--ss-danger-500);
+  font-weight: 600;
+}
+
+/* "Not yet live" is informational, not a warning — neutral slate,
+ * not danger-red, so scheduled-but-healthy links don't read as alarms. */
+.not-yet-live {
+  color: var(--ss-slate-500);
+  font-weight: 600;
 }
 
 /* Status badge — small functional color coding, not decoration. */
@@ -130,6 +176,19 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 }
 .form-error:empty {
   display: none;
+}
+
+/* Success feedback — mirrors .form-error's weight/spacing but in the
+ * system's ok-green, holding the created slug chip + a copy affordance
+ * so the moment a link is made actually has a payoff. */
+.form-success {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--ss-ok-500);
+  font-weight: 600;
+  margin-top: 0.5rem;
 }
 
 /* Any table wrapped in a <figure> scrolls instead of overflowing the

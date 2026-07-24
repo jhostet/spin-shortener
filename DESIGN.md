@@ -2,7 +2,7 @@
 name: spin-shortener
 description: A dark-navy, data-dense admin console for a self-hosted URL shortener
 colors:
-  signal-blue: "#2b7fd1"
+  signal-blue: "#276fb8"
   signal-blue-hover: "#1e6bb8"
   navy-950: "#0a1628"
   navy-800: "#14243d"
@@ -39,6 +39,11 @@ typography:
     fontSize: "0.85em"
     fontWeight: 400
     lineHeight: 1.6
+  caption:
+    fontFamily: "system-ui, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif"
+    fontSize: "0.75rem"
+    fontWeight: 600
+    lineHeight: 1.4
 rounded:
   sm: "0.25rem"
   pill: "999px"
@@ -93,7 +98,7 @@ A quiet, dark-navy control room where every accent-blue "signal" marks a link ac
 A restrained palette: one accent, one dark neutral used two ways (chrome + text), one light neutral family for surfaces, and two functional status colors.
 
 ### Primary
-- **Signal Blue** (`#2b7fd1`): the one accent. Links, primary buttons, the persistent nav's hover state, sortable-column hover. Used sparingly — outside the nav and buttons it appears only as a hover accent, never a resting fill.
+- **Signal Blue** (`#276fb8`): the one accent. Links, primary buttons, the persistent nav's hover state, sortable-column hover. Used sparingly — outside the nav and buttons it appears only as a hover accent, never a resting fill. (Originally `#2b7fd1`; darkened to clear 4.5:1 AA text contrast — the original measured ~4.15:1 against white on both button fills and plain link text.)
 - **Signal Blue, Hover** (`#1e6bb8`): darkens on `:hover`/`:active` for every primary-accent element.
 
 ### Neutral
@@ -120,6 +125,7 @@ A restrained palette: one accent, one dark neutral used two ways (chrome + text)
 - **Title** (700, 1.1rem, 1.4): `h3` — sub-section headings (e.g. "Clicks per day" / "Recent events" side by side).
 - **Body** (400, 1rem, 1.4): all prose, labels, and table cells that aren't data columns.
 - **Label** (400, 0.85em, 1.6, monospace): the slug chip and every data-like table column (slug, destination, timestamps) — set apart from the sans-serif prose around it.
+- **Caption** (600, 0.75rem, 1.4, sans-serif): compact functional text that isn't data and isn't prose — the links table's tightened action-button group, and the slug-kind/lock badges next to a slug chip. Added to reconcile two ad-hoc small sizes (`0.8rem`, `0.7rem`) that had drifted outside any documented step.
 
 ### Named Rules
 **The Data-Is-Mono Rule.** Monospace is used for exactly one purpose: columns and chips that carry a slug, URL, or timestamp. It never appears as a "technical-looking" costume elsewhere.
@@ -171,6 +177,7 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 ### Inputs / Fields
 - **Style:** Pico defaults, unmodified — bordered, `border-mist`-toned, `0.25rem` radius.
 - **Error:** a shared `.form-error` class (bold, `margin-top: 0.5rem`, colored with Pico's inherited `--pico-del-color`) — used consistently for every form/page-level error message across all four pages.
+- **Success:** `.form-success` mirrors `.form-error`'s weight/spacing but in `ok-green`, laid out as a flex row so it can hold a slug chip plus a small "Copy" affordance inline. Introduced for the link-creation flow so the moment a link is made has a visible payoff instead of the form silently clearing.
 
 ### Navigation
 - Deep Navy fill, white text/links, hover reveals Signal Blue. Persistent across every authenticated page; conditionally shows a "Manage users" link only for admins/permitted roles. The one non-nav page (auth) has no chrome at all.
@@ -185,6 +192,7 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 - **Do** reserve the `999px` pill radius for the slug chip only.
 - **Do** reserve the monospace font for slug/URL/timestamp data, never as a "technical" decorative costume.
 - **Do** route every form/page error through `.form-error` rather than a one-off inline style.
+- **Do** give a real completed action visible payoff (see `.form-success`) instead of a silent form-clear.
 
 ### Don't:
 - **Don't** add a `box-shadow` anywhere — the system is flat by construction, not by oversight.

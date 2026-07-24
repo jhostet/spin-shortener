@@ -87,11 +87,28 @@ const ERROR_MESSAGES = {
   invalid_credentials: "Incorrect username or password.",
   cannot_delete_self: "You can't delete your own account while logged in as it.",
   cannot_disable_self: "You can't disable your own account while logged in as it.",
+  invalid_target_url: "Enter a valid destination URL (including https://).",
+  invalid_custom_slug: "Custom short links can only use letters, numbers, hyphens, and underscores (3–32 characters).",
+  slug_taken: "That short link is already in use — try a different one.",
+  invalid_start_at: "The start date/time isn't valid.",
+  invalid_end_at: "The expiration date/time isn't valid.",
+  invalid_window_range: "A link can't expire before it starts.",
+  not_found: "This link no longer exists — try refreshing the page.",
+  forbidden: "You don't have permission to do that.",
+  invalid_username: "Enter a username.",
+  invalid_password: "Password must be at least 8 characters.",
+  username_taken: "That username is already taken.",
+  invalid_role: "Choose a valid role.",
+  invalid_permissions: "One or more selected permissions aren't valid.",
 };
 
-function friendlyError(data, fallback) {
+// `overrides` lets one call site's copy win over the shared map for a code
+// whose meaning isn't fixed globally — e.g. "invalid_password" means an
+// 8-char minimum for user accounts but a 4-char minimum for link passwords.
+function friendlyError(data, fallback, overrides) {
   const code = data && data.error;
-  return (code && ERROR_MESSAGES[code]) || fallback;
+  if (!code) return fallback;
+  return (overrides && overrides[code]) || ERROR_MESSAGES[code] || fallback;
 }
 
 // Renders the shared nav (brand or back-link, whoami, conditional "Manage

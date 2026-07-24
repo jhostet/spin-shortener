@@ -11,7 +11,7 @@
   <header id="app-header" class="container"></header>
   <div class="container">
     <h1 id="short-link-heading" class="slug-chip">Link details</h1>
-    <p id="page-error" class="form-error"></p>
+    <p id="page-error" class="form-error" role="alert"></p>
   </div>
 
   <main class="container">
@@ -20,6 +20,8 @@
         <h2>Details</h2>
         <p><strong>Destination:</strong> <span id="target-url"></span></p>
         <p><strong>Status:</strong> <span id="status" class="status-badge"></span></p>
+        <p><strong>Custom short link:</strong> <span id="custom-slug-status"></span></p>
+        <p><strong>Password:</strong> <span id="password-status"></span></p>
         <p><strong>Starts:</strong> <span id="start-at"></span></p>
         <p><strong>Expires:</strong> <span id="end-at"></span></p>
       </article>
@@ -66,6 +68,10 @@
   <script>
     const slug = new URLSearchParams(location.search).get("slug");
 
+    function formatDateTime(iso) {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+    }
+
     async function loadLinkInfo() {
       const { ok, data } = await api.get(`/links/${slug}`);
       if (!ok) {
@@ -79,8 +85,10 @@
       const statusEl = document.getElementById("status");
       statusEl.textContent = data.status;
       statusEl.classList.add(`status-${data.status}`);
-      document.getElementById("start-at").textContent = data.start_at || "—";
-      document.getElementById("end-at").textContent = data.end_at || "—";
+      document.getElementById("custom-slug-status").textContent = data.custom ? "Yes" : "No";
+      document.getElementById("password-status").textContent = data.password_protected ? "Password-protected" : "None";
+      document.getElementById("start-at").textContent = data.start_at ? formatDateTime(data.start_at) : "—";
+      document.getElementById("end-at").textContent = data.end_at ? formatDateTime(data.end_at) : "—";
 
       document.getElementById("qr-preview").src = `/api/links/${slug}/qr?format=png&size=web`;
       document.getElementById("qr-svg-download").href = `/api/links/${slug}/qr?format=svg&size=print&download=1`;
