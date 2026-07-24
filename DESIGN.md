@@ -189,6 +189,7 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 ### Confirmation Dialogs
 - A shared `confirmDialog(message)` helper (`app.js`) replaces the browser's native `confirm()` for both destructive actions in the app (link delete, user delete) with Pico's own `<dialog>`/`<article>` component instead of an unthemed OS popup. Built dynamically (no markup duplicated per page); resolves a promise, dismissible via its own Cancel button, the Esc key, or a backdrop click.
 - **Button styling inverts the row-level convention on purpose:** Cancel renders as Pico's plain default (primary) button, while the destructive action stays `outline secondary` — the same de-emphasis the row-level Delete button already uses (see Buttons above). The visually prominent button in the dialog is the *safe* one, not the destructive one.
+- **Narrowed and centered, not Pico's wide form-style default:** Pico's own `dialog>article` defaults to a wide box with a left-aligned message and a right-aligned footer (`text-align: right`) — fine for a form-like dialog, but for a short one-line Yes/No message it read as lopsided, with the text hugging one edge and the buttons the other. The `.confirm-dialog` class caps the article at `26rem` and centers both the message and the button row, giving the compact, symmetrical shape this content calls for.
 
 ## Do's and Don'ts
 

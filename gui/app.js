@@ -104,6 +104,7 @@ async function copyToClipboard(text, btn) {
 function confirmDialog(message, { confirmLabel = "Delete", cancelLabel = "Cancel" } = {}) {
   return new Promise((resolve) => {
     const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
     dialog.innerHTML = `
       <article>
         <p>${escapeHtml(message)}</p>

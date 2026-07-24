@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-24T18:56:00Z",
+  "generatedAt": "2026-07-24T20:52:00Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -105,9 +105,9 @@
       "name": "Confirmation Dialog",
       "kind": "custom",
       "refersTo": "confirm-dialog",
-      "description": "Replaces the native confirm() for destructive actions (link delete, user delete) with Pico's own dialog/article component, built dynamically by a shared confirmDialog(message) helper rather than duplicated markup per page. Dismissible via Cancel, Esc, or a backdrop click. Button styling deliberately inverts the row-level convention: Cancel is Pico's plain default (primary) button, Confirm/Delete stays outline+secondary — the same de-emphasis the row Delete button already uses — so the visually prominent button is the safe one, not the destructive one.",
-      "html": "<dialog open><article><p>Delete the link \"promo-2026\"? This can't be undone.</p><footer><button type=\"button\">Cancel</button><button type=\"button\" class=\"ds-btn-outline ds-btn-secondary\">Delete</button></footer></article></dialog>",
-      "css": ".ds-btn-outline.ds-btn-secondary { color: var(--ss-slate-500, #5b6b85); border-color: var(--ss-slate-500, #5b6b85); background: transparent; }"
+      "description": "Replaces the native confirm() for destructive actions (link delete, user delete) with Pico's own dialog/article component, built dynamically by a shared confirmDialog(message) helper rather than duplicated markup per page. Dismissible via Cancel, Esc, or a backdrop click. Button styling deliberately inverts the row-level convention: Cancel is Pico's plain default (primary) button, Confirm/Delete stays outline+secondary — the same de-emphasis the row Delete button already uses — so the visually prominent button is the safe one, not the destructive one. Narrowed to 26rem and centered (message + footer both), overriding Pico's own wide, left-message/right-footer dialog default, which read as lopsided for a short one-line message.",
+      "html": "<dialog open class=\"ds-confirm-dialog\"><article><p>Delete the link \"promo-2026\"? This can't be undone.</p><footer><button type=\"button\">Cancel</button><button type=\"button\" class=\"ds-btn-outline ds-btn-secondary\">Delete</button></footer></article></dialog>",
+      "css": ".ds-confirm-dialog > article { max-width: 26rem; text-align: center; } .ds-confirm-dialog > article > footer { text-align: center; } .ds-btn-outline.ds-btn-secondary { color: var(--ss-slate-500, #5b6b85); border-color: var(--ss-slate-500, #5b6b85); background: transparent; }"
     }
   ],
   "narrative": {

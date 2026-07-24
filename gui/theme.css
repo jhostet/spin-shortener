@@ -238,6 +238,21 @@ main figure::-webkit-scrollbar-thumb {
   border-radius: 999px;
 }
 
+/* Pico's own dialog defaults left-align the message but right-align the
+ * footer (dialog>article>footer{text-align:right}) — fine for a long
+ * form, but for a short one-line Yes/No message in Pico's wide default
+ * article it read as lopsided: text hugging the left edge, buttons
+ * hugging the right, with a large empty gutter on both sides. Narrowing
+ * the box and centering both rows gives the compact, symmetrical
+ * confirm-dialog shape this content actually calls for. */
+.confirm-dialog > article {
+  max-width: 26rem;
+  text-align: center;
+}
+.confirm-dialog > article > footer {
+  text-align: center;
+}
+
 /* Visually hidden but screen-reader-accessible — for labels whose
  * purpose is already visually obvious from context (e.g. a lone
  * search box under a heading) but still needs a real, persistent
