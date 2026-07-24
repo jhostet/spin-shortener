@@ -138,6 +138,7 @@ Built on Pico's responsive `.container`, but with its default viewport-scaling f
 - **Grid:** Pico's built-in equal-width `.grid` for logically-paired fields (custom slug + start/end dates on link creation; role + password on user edit).
 - **Persistent app shell:** every authenticated page renders the same `#app-header nav` — Deep Navy fill, white text, contained to the page's `.container` width, `margin-top: 1rem` separating it from the viewport edge.
 - **Data tables:** every table lives inside a `<figure>` with `overflow-x: auto`, so wide tables scroll horizontally on narrow viewports instead of breaking layout — applied uniformly across the links, users, and both analytics tables. The scrollbar itself is styled (thin, Signal Blue thumb on a `border-mist` track) rather than left to the browser default, since a default OS scrollbar (especially macOS's auto-hiding overlay style) gives no persistent hint that a table scrolls — deliberately not a shadow/gradient edge-fade, which would violate the No-Shadow Rule below.
+- **Sticky action column:** the row-action column (View/Copy/Edit/Delete on the links table; Edit/Delete on the users table) is `position: sticky; right: 0` within its scrolling `<figure>`, with a `border-mist` left border and a solid `surface-white` background so scrolled content doesn't show through. Every other column (Destination, Permissions, etc.) can grow without limit and push the table wider than the viewport, but the row's actions stay reachable at the visible right edge regardless of scroll position — confirmed at both realistic desktop widths and narrow mobile viewports. Scoped to non-edit rows (`tbody > tr:not(.edit-row) td:last-child`) since the edit-row's own `<td>` is a `colspan` cell and is also `:last-child` of its `<tr>`.
 - **Auth page:** the one page that breaks from the app-shell pattern — a single narrow (`26rem`) card, vertically centered via a flex body (`body.auth-page`) rather than sharing the persistent nav.
 
 ## Elevation & Depth
@@ -178,7 +179,8 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 ### Inputs / Fields
 - **Style:** Pico defaults, unmodified — bordered, `border-mist`-toned, `0.25rem` radius.
 - **Error:** a shared `.form-error` class (bold, `margin-top: 0.5rem`, colored with `danger-red`) — used consistently for every form/page-level error message across all four pages. Previously read Pico's inherited `--pico-del-color` instead, a visually-close but distinct red; unified onto `danger-red` so status badges and form errors share exactly one error color.
-- **Success:** `.form-success` mirrors `.form-error`'s weight/spacing but in `ok-green`, laid out as a flex row so it can hold a slug chip plus a small "Copy" affordance inline. Introduced for the link-creation flow so the moment a link is made has a visible payoff instead of the form silently clearing.
+- **Success:** `.form-success` mirrors `.form-error`'s weight/spacing but in `ok-green`, laid out as a flex row so it can hold a slug chip plus a small "Copy" affordance inline. Introduced for the link-creation flow so the moment a link is made has a visible payoff instead of the form silently clearing; the user-creation flow (`admin/users.html`) reuses the same class for the same reason.
+- **Progressive disclosure:** occasional-use fields for a primary "paste and submit" action collapse behind a native `<details>`/`<summary>` (Pico's own styled accordion — chevron marker, no bespoke JS toggle needed), open state not persisted across submissions. The link-creation form is the one example today: Destination URL renders unconditionally, while custom slug, schedule (Starts/Expires), and password protection collapse behind a "More options" disclosure that resets to closed after each successful create.
 
 ### Navigation
 - Deep Navy fill, white text/links, hover reveals Signal Blue. Persistent across every authenticated page; conditionally shows a "Manage users" link only for admins/permitted roles. The one non-nav page (auth) has no chrome at all.
@@ -198,7 +200,9 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 - **Do** reserve the `999px` pill radius for the slug chip only.
 - **Do** reserve the monospace font for slug/URL/timestamp data, never as a "technical" decorative costume.
 - **Do** route every form/page error through `.form-error` rather than a one-off inline style.
-- **Do** give a real completed action visible payoff (see `.form-success`) instead of a silent form-clear.
+- **Do** give a real completed action visible payoff (see `.form-success`) instead of a silent form-clear — apply this to every flow that completes an action, not just the one that first motivated the rule.
+- **Do** keep a table's row-action column reachable via a sticky column (`position: sticky; right: 0`, solid background, hairline border), not by capping other columns' content or leaving actions to scroll out of reach.
+- **Do** collapse occasional-use fields behind a native `<details>` disclosure when a form's primary action is a single common field (e.g. paste-URL-and-submit) — matches the platform's own accordion idiom instead of a bespoke show/hide toggle.
 
 ### Don't:
 - **Don't** add a `box-shadow` anywhere — the system is flat by construction, not by oversight.

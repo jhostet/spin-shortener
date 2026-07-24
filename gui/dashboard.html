@@ -14,6 +14,22 @@
      * unscoped rule here forces `nowrap` through to the Starts/Expires
      * date-picker labels one level up, overlapping them (see below). */
     #links-table tbody > tr:not(.edit-row) td:last-child { white-space: nowrap; }
+    /* The action column (View/Copy/Edit/Delete) is the one thing every row
+     * needs reachable regardless of how far the table has scrolled — Destination
+     * has no natural length cap and Owner/Created/Starts/Expires push the
+     * total width well past the viewport at ordinary desktop sizes, let alone
+     * mobile. Pinning it via position:sticky (not a shadow — see DESIGN.md's
+     * No-Shadow Rule) keeps it visible without capping any other column's
+     * content. Scoped to non-edit rows: the edit-row's own <td> is a
+     * colspan="8" cell (also :last-child of its <tr>), and sticky-pinning
+     * the whole edit form would be wrong. */
+    #links-table thead th:last-child,
+    #links-table tbody > tr:not(.edit-row) td:last-child {
+      position: sticky;
+      right: 0;
+      background: var(--pico-card-background-color);
+      border-left: 1px solid var(--pico-muted-border-color);
+    }
     #links-table [role=group] {
       width: auto;
     }
@@ -45,25 +61,33 @@
         <label for="target-url">Destination URL</label>
         <input id="target-url" name="target_url" type="url" placeholder="https://example.com/..." required />
 
-        <div class="grid">
-          <label id="custom-slug-field" for="custom-slug" style="display: none">
-            Custom short link (optional)
-            <input id="custom-slug" name="custom_slug" type="text" pattern="[A-Za-z0-9_\-]{3,32}" minlength="3" maxlength="32" placeholder="my-link" />
-          </label>
-          <label for="start-at">
-            Starts (optional)
-            <input id="start-at" name="start_at" type="datetime-local" />
-          </label>
-          <label for="end-at">
-            Expires (optional)
-            <input id="end-at" name="end_at" type="datetime-local" />
-          </label>
-        </div>
+        <!-- Custom link/schedule/password are all occasional-use for the
+             primary paste-URL-and-submit action, so they collapse behind a
+             disclosure toggle instead of rendering unconditionally — same
+             collapse pattern as each row's edit-form elsewhere in the app,
+             using the platform's own <details> instead of a bespoke toggle. -->
+        <details id="advanced-options">
+          <summary>More options</summary>
+          <div class="grid">
+            <label id="custom-slug-field" for="custom-slug" style="display: none">
+              Custom short link (optional)
+              <input id="custom-slug" name="custom_slug" type="text" pattern="[A-Za-z0-9_\-]{3,32}" minlength="3" maxlength="32" placeholder="my-link" />
+            </label>
+            <label for="start-at">
+              Starts (optional)
+              <input id="start-at" name="start_at" type="datetime-local" />
+            </label>
+            <label for="end-at">
+              Expires (optional)
+              <input id="end-at" name="end_at" type="datetime-local" />
+            </label>
+          </div>
 
-        <label for="link-password">
-          Password protection (optional)
-          <input id="link-password" name="password" type="password" minlength="4" placeholder="Leave blank for no password" />
-        </label>
+          <label for="link-password">
+            Password protection (optional)
+            <input id="link-password" name="password" type="password" minlength="4" placeholder="Leave blank for no password" />
+          </label>
+        </details>
 
         <button type="submit">Shorten</button>
       </form>
@@ -409,6 +433,7 @@
       document.getElementById("start-at").value = "";
       document.getElementById("end-at").value = "";
       document.getElementById("link-password").value = "";
+      document.getElementById("advanced-options").open = false;
 
       const shortUrl = `${location.origin}/r/${data.slug}`;
       successEl.innerHTML = `Link created: <span class="slug-chip">${escapeHtml(shortUrl)}</span> <button type="button" class="outline">Copy</button>`;

@@ -16,6 +16,18 @@
     #users-table .edit-row [role=group] {
       width: auto;
     }
+    /* Same sticky action-column treatment as dashboard.html's #links-table:
+     * Permissions can hold up to 4 comma-joined labels, overflowing the
+     * table on narrower viewports and pushing Edit/Delete out of reach.
+     * Scoped to non-edit rows for the same reason — the edit-row's own
+     * <td> is a colspan="5" cell and is also :last-child of its <tr>. */
+    #users-table thead th:last-child,
+    #users-table tbody > tr:not(.edit-row) td:last-child {
+      position: sticky;
+      right: 0;
+      background: var(--pico-card-background-color);
+      border-left: 1px solid var(--pico-muted-border-color);
+    }
     #users-table .edit-row [role=group] > * {
       --pico-form-element-spacing-horizontal: 0.5rem;
       --pico-form-element-spacing-vertical: 0.4rem;
@@ -60,6 +72,7 @@
           <button type="submit">Create user</button>
         </form>
         <p id="create-error" class="form-error" role="alert"></p>
+        <p id="create-success" class="form-success" aria-live="polite" style="display: none"></p>
       </article>
 
       <article>
@@ -258,10 +271,13 @@
     document.getElementById("create-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const errorEl = document.getElementById("create-error");
+      const successEl = document.getElementById("create-success");
       errorEl.textContent = "";
+      successEl.style.display = "none";
 
+      const username = document.getElementById("new-username").value;
       const payload = {
-        username: document.getElementById("new-username").value,
+        username,
         password: document.getElementById("new-password").value,
         role: document.getElementById("new-role").value,
         permissions: Array.from(document.querySelectorAll(".new-permission:checked")).map((cb) => cb.value),
@@ -274,6 +290,11 @@
       }
       document.getElementById("create-form").reset();
       updatePermissionsFieldset(newPermissionsFieldset, newPermissionsLegend, newRoleSelect.value);
+      // Mirrors dashboard.html's link-creation payoff (see DESIGN.md's
+      // "give a visible payoff" rule) — a silent form-clear + table reload
+      // left no confirmation the user was actually created.
+      successEl.textContent = `User "${username}" created.`;
+      successEl.style.display = "";
       loadUsers();
     });
 
