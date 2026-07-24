@@ -260,11 +260,11 @@
           <td>${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
           <td>
             <div role="group">
-              <a role="button" class="outline" href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a>
-              <button data-slug="${escapeHtml(link.slug)}" class="copy-btn outline">Copy</button>
+              <a role="button" class="outline" aria-label="View link ${escapeHtml(link.slug)}" href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a>
+              <button data-slug="${escapeHtml(link.slug)}" class="copy-btn outline" aria-label="Copy link ${escapeHtml(link.slug)}">Copy</button>
               ${canEditLink(link) ? `
-                <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline">Edit</button>
-                <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline">Delete</button>
+                <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline" aria-label="Edit link ${escapeHtml(link.slug)}">Edit</button>
+                <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline" aria-label="Delete link ${escapeHtml(link.slug)}">Delete</button>
               ` : ""}
             </div>
           </td>

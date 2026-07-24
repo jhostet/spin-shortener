@@ -171,8 +171,8 @@
           <td>${user.permissions.length ? escapeHtml(user.permissions.map((p) => PERMISSION_LABELS[p] || p).join(", ")) : "—"}</td>
           <td><span class="status-badge status-${user.disabled ? "disabled" : "active"}">${user.disabled ? "disabled" : "active"}</span></td>
           <td>
-            <button class="edit-btn outline" data-username="${escapeHtml(user.username)}">Edit</button>
-            <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}">Delete</button>
+            <button class="edit-btn outline" data-username="${escapeHtml(user.username)}" aria-label="Edit user ${escapeHtml(user.username)}">Edit</button>
+            <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}" aria-label="Delete user ${escapeHtml(user.username)}">Delete</button>
           </td>
         `;
         body.appendChild(row);

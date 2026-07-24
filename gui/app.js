@@ -101,13 +101,20 @@ async function copyToClipboard(text, btn) {
 // destructive action reads through de-emphasis, not a bold "danger"
 // button (see DESIGN.md's row-action Delete styling) — so the visually
 // prominent button in the dialog is the safe one, not the destructive one.
+let confirmDialogCount = 0;
+
 function confirmDialog(message, { confirmLabel = "Delete", cancelLabel = "Cancel" } = {}) {
   return new Promise((resolve) => {
+    const messageId = `confirm-dialog-message-${++confirmDialogCount}`;
     const dialog = document.createElement("dialog");
     dialog.className = "confirm-dialog";
+    // aria-labelledby, not aria-label: native <dialog> gets no accessible
+    // name from its content by default, so without this a screen reader
+    // announces only "dialog" on open rather than what it's asking about.
+    dialog.setAttribute("aria-labelledby", messageId);
     dialog.innerHTML = `
       <article>
-        <p>${escapeHtml(message)}</p>
+        <p id="${messageId}">${escapeHtml(message)}</p>
         <footer>
           <button type="button" data-action="cancel">${escapeHtml(cancelLabel)}</button>
           <button type="button" class="outline secondary" data-action="confirm">${escapeHtml(confirmLabel)}</button>
