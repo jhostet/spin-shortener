@@ -80,6 +80,20 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
+// Shared by every page with a "Copy" affordance next to a short link
+// (dashboard row, the create-flow success banner, the link-detail page).
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const original = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  } catch {
+    // Clipboard API unavailable or permission denied — the link is
+    // still right there in the chip for the user to select manually.
+  }
+}
+
 // Maps API error codes (the JSON body's `error` field) to human-readable
 // text. Codes not listed here fall back to the caller-supplied default
 // rather than ever surfacing the raw machine code to a user.

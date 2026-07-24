@@ -60,6 +60,11 @@
           </label>
         </div>
 
+        <label for="link-password">
+          Password protection (optional)
+          <input id="link-password" name="password" type="password" minlength="4" placeholder="Leave blank for no password" />
+        </label>
+
         <button type="submit">Shorten</button>
       </form>
       <p id="create-error" class="form-error" role="alert"></p>
@@ -324,43 +329,38 @@
       });
     }
 
-    async function copyToClipboard(text, btn) {
-      try {
-        await navigator.clipboard.writeText(text);
-        const original = btn.textContent;
-        btn.textContent = "Copied!";
-        setTimeout(() => { btn.textContent = original; }, 1500);
-      } catch {
-        // Clipboard API unavailable or permission denied — the link is
-        // still right there in the chip for the user to select manually.
-      }
-    }
-
     document.getElementById("create-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const targetUrl = document.getElementById("target-url").value;
       const customSlug = document.getElementById("custom-slug").value.trim() || null;
       const startAt = datetimeLocalToIso(document.getElementById("start-at").value);
       const endAt = datetimeLocalToIso(document.getElementById("end-at").value);
+      const password = document.getElementById("link-password").value || null;
       const errorEl = document.getElementById("create-error");
       const successEl = document.getElementById("create-success");
       errorEl.textContent = "";
       successEl.style.display = "none";
 
-      const { ok, data } = await api.post("/links", {
+      const payload = {
         target_url: targetUrl,
         custom_slug: customSlug,
         start_at: startAt,
         end_at: endAt,
-      });
+      };
+      if (password) payload.password = password;
+
+      const { ok, data } = await api.post("/links", payload);
       if (!ok) {
-        errorEl.textContent = friendlyError(data, "Could not create link.");
+        errorEl.textContent = friendlyError(data, "Could not create link.", {
+          invalid_password: "Link passwords must be at least 4 characters.",
+        });
         return;
       }
       document.getElementById("target-url").value = "";
       document.getElementById("custom-slug").value = "";
       document.getElementById("start-at").value = "";
       document.getElementById("end-at").value = "";
+      document.getElementById("link-password").value = "";
 
       const shortUrl = `${location.origin}/r/${data.slug}`;
       successEl.innerHTML = `Link created: <span class="slug-chip">${escapeHtml(shortUrl)}</span> <button type="button" class="outline">Copy</button>`;
@@ -392,8 +392,20 @@
       });
     });
 
+    // Lets links/detail.html's "Edit" button deep-link straight into this
+    // row's edit form instead of just landing on the dashboard and making
+    // the user re-locate the link themselves.
+    function openDeepLinkedEditRow() {
+      const editSlug = new URLSearchParams(location.search).get("edit");
+      if (!editSlug) return;
+      const btn = document.querySelector(`#links-body .edit-btn[data-slug="${CSS.escape(editSlug)}"]`);
+      if (!btn) return;
+      btn.click();
+      btn.closest("tr").scrollIntoView({ block: "center" });
+    }
+
     loadMe();
-    loadLinks();
+    loadLinks().then(openDeepLinkedEditRow);
   </script>
 </body>
 </html>

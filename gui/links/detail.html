@@ -6,11 +6,33 @@
   <title>spin-shortener — Link details</title>
   <link rel="stylesheet" href="../vendor/pico.min.css" />
   <link rel="stylesheet" href="../theme.css" />
+  <style>
+    .detail-heading {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    /* Pico's [role=group] defaults to width:100% with flex:1 1 auto
+     * children, so an unscoped group next to the heading would stretch
+     * Copy/Edit across the full container width instead of sizing to
+     * their own content — the same bug already found and fixed on the
+     * dashboard/admin edit-row Save/Cancel groups. */
+    .detail-heading [role=group] {
+      width: auto;
+    }
+  </style>
 </head>
 <body>
   <header id="app-header" class="container"></header>
   <div class="container">
-    <h1 id="short-link-heading" class="slug-chip">Link details</h1>
+    <div class="detail-heading">
+      <h1 id="short-link-heading" class="slug-chip">Link details</h1>
+      <div role="group">
+        <button id="detail-copy-btn" type="button" class="outline">Copy</button>
+        <a id="detail-edit-link" role="button" class="outline">Edit</a>
+      </div>
+    </div>
     <p id="page-error" class="form-error" role="alert"></p>
   </div>
 
@@ -81,6 +103,7 @@
 
       const shortUrl = `${location.origin}/r/${slug}`;
       document.getElementById("short-link-heading").textContent = shortUrl;
+      document.getElementById("detail-copy-btn").addEventListener("click", (evt) => copyToClipboard(shortUrl, evt.currentTarget));
       document.getElementById("target-url").textContent = data.target_url;
       const statusEl = document.getElementById("status");
       statusEl.textContent = data.status;
@@ -137,6 +160,7 @@
     if (!slug) {
       document.body.textContent = "No link specified.";
     } else {
+      document.getElementById("detail-edit-link").href = `../dashboard.html?edit=${encodeURIComponent(slug)}`;
       loadLinkInfo();
       loadAnalytics();
     }
