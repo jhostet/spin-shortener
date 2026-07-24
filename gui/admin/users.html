@@ -116,7 +116,7 @@
       return `
         <tr class="edit-row" data-username="${escapeHtml(user.username)}">
           <td colspan="5">
-            <form class="edit-form">
+            <form class="edit-form" data-original-role="${escapeHtml(user.role)}">
               <div class="grid">
                 <label>Role
                   <select class="edit-role">
@@ -146,6 +146,8 @@
       `;
     }
 
+    let currentPrincipal = null;
+
     async function loadUsers() {
       const { ok, data } = await api.get("/users");
       if (!ok) {
@@ -172,7 +174,9 @@
           <td><span class="status-badge status-${user.disabled ? "disabled" : "active"}">${user.disabled ? "disabled" : "active"}</span></td>
           <td>
             <button class="edit-btn outline" data-username="${escapeHtml(user.username)}" aria-label="Edit user ${escapeHtml(user.username)}">Edit</button>
-            <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}" aria-label="Delete user ${escapeHtml(user.username)}">Delete</button>
+            ${currentPrincipal && user.username === currentPrincipal.username ? "" : `
+              <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}" aria-label="Delete user ${escapeHtml(user.username)}">Delete</button>
+            `}
           </td>
         `;
         body.appendChild(row);
@@ -222,8 +226,19 @@
           const errorEl = form.querySelector(".edit-error");
           errorEl.textContent = "";
 
+          const newRole = form.querySelector(".edit-role").value;
+          // Promoting to admin grants full, unconditional access (admins
+          // bypass every permission check) — the single most consequential
+          // action on this page, so it gets its own confirmation instead of
+          // riding through on a plain Save like every other field here.
+          if (newRole === "admin" && form.dataset.originalRole !== "admin") {
+            if (!await confirmDialog(`Make "${username}" an admin? Admins bypass every permission check.`, { confirmLabel: "Make admin" })) {
+              return;
+            }
+          }
+
           const payload = {
-            role: form.querySelector(".edit-role").value,
+            role: newRole,
             permissions: Array.from(form.querySelectorAll(".edit-permission:checked")).map((cb) => cb.value),
             disabled: form.querySelector(".edit-disabled").checked,
           };
@@ -269,8 +284,15 @@
       updatePermissionsFieldset(newPermissionsFieldset, newPermissionsLegend, newRoleSelect.value);
     });
 
-    initHeader({ backHref: "../dashboard.html", manageUsersHref: "users.html" });
-    loadUsers();
+    // initHeader() must resolve before loadUsers()'s first render — the
+    // Users table reads currentPrincipal (set below) to hide Delete on the
+    // viewer's own row, since the server always rejects that with
+    // cannot_delete_self and showing the full "are you sure, permanent"
+    // ritual for a guaranteed-doomed action is exactly backwards.
+    initHeader({ backHref: "../dashboard.html", manageUsersHref: "users.html" }).then((result) => {
+      if (result.ok) currentPrincipal = result.data;
+      loadUsers();
+    });
   </script>
 </body>
 </html>
