@@ -1,2 +1,3 @@
 main.wasm
 .spin/
+.impeccable/hook.cache.json

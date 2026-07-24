@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-23T00:00:00Z",
+  "title": "Design System: spin-shortener",
+  "extensions": {
+    "colorMeta": {
+      "signal-blue": { "role": "primary", "displayName": "Signal Blue", "canonical": "#2b7fd1", "tonalRamp": ["#0d273f", "#184876", "#2367a9", "#2c81d3", "#5e9fde", "#95c0e9", "#c8def4", "#eaf2fb"] },
+      "navy-950": { "role": "neutral", "displayName": "Deep Navy", "canonical": "#0a1628", "tonalRamp": ["#0f223d", "#1d3f72", "#295aa3", "#3370cc", "#6492d8", "#99b8e6", "#cadaf2", "#ebf1fa"] },
+      "slate-muted": { "role": "neutral", "displayName": "Slate Muted", "canonical": "#5b6b85", "tonalRamp": ["#1f252d", "#3a4455", "#536179", "#687a97", "#8c9ab0", "#b3bccb", "#d8dce4", "#f0f2f5"] },
+      "ok-green": { "role": "success", "displayName": "OK Green", "canonical": "#1a7f5a", "tonalRamp": ["#0d402d", "#187754", "#23a978", "#2bd496", "#5edeaf", "#95e9cb", "#c8f4e4", "#eafbf4"] },
+      "danger-red": { "role": "danger", "displayName": "Danger Red", "canonical": "#b3261e", "tonalRamp": ["#420e0b", "#7a1a14", "#af251d", "#da2e25", "#e36059", "#ed9792", "#f5c9c6", "#fbeae9"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page-level h1; used sparingly, several pages omit it in favor of the persistent nav's brand name." },
+      "headline": { "displayName": "Headline", "purpose": "In-page section headings (h2)." },
+      "title": { "displayName": "Title", "purpose": "Sub-section headings (h3), e.g. paired analytics tables." },
+      "body": { "displayName": "Body", "purpose": "Prose, labels, and non-data table cells." },
+      "label": { "displayName": "Label / Mono", "purpose": "Slug chips and every data-like table column (slug, destination, timestamps)." }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      { "name": "sm", "value": "576px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" },
+      { "name": "xxl", "value": "1536px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Default submit/action button — Signal Blue fill, darkens on hover.",
+      "html": "<button class=\"ds-btn-primary\">Shorten</button>",
+      "css": ".ds-btn-primary { background: var(--ss-signal-500, #2b7fd1); color: #fff; padding: 0.5rem 0.75rem; border: 0.0625rem solid var(--ss-signal-500, #2b7fd1); border-radius: 0.25rem; font-weight: 400; transition: background 0.2s ease-in-out; } .ds-btn-primary:hover { background: #1e6bb8; border-color: #1e6bb8; } .ds-btn-primary:focus-visible { outline: 0.125rem solid rgba(43, 127, 209, 0.375); outline-offset: 1px; }"
+    },
+    {
+      "name": "Outline / Secondary Row Actions",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Row-level actions (View/Edit outline; Delete additionally secondary) — de-emphasized rather than warning-colored.",
+      "html": "<div class=\"ds-row-actions\"><button class=\"ds-btn-outline\">Edit</button><button class=\"ds-btn-outline ds-btn-secondary\">Delete</button></div>",
+      "css": ".ds-row-actions { display: flex; gap: 0.5rem; } .ds-btn-outline { background: transparent; color: var(--ss-signal-500, #2b7fd1); padding: 0.3rem 0.5rem; border: 0.0625rem solid var(--ss-signal-500, #2b7fd1); border-radius: 0.25rem; font-size: 0.8rem; } .ds-btn-outline.ds-btn-secondary { color: var(--ss-slate-500, #5b6b85); border-color: var(--ss-slate-500, #5b6b85); } .ds-btn-outline:hover { background: rgba(43, 127, 209, 0.08); } .ds-btn-outline.ds-btn-secondary:hover { background: rgba(91, 107, 133, 0.08); }"
+    },
+    {
+      "name": "Slug Chip",
+      "kind": "chip",
+      "refersTo": "chip-slug",
+      "description": "Signature component: monospace pill marking a shortened link — used in the links table and as the link-detail page's h1.",
+      "html": "<a class=\"ds-chip-slug\" href=\"#\">yourhost/r/promo-2026</a>",
+      "css": ".ds-chip-slug { display: inline-block; font-family: \"SFMono-Regular\", \"JetBrains Mono\", Menlo, Consolas, monospace; font-size: 0.85em; background: var(--ss-navy-950, #0a1628); color: #fff; padding: 0.15em 0.6em; border-radius: 999px; text-decoration: none; line-height: 1.6; } .ds-chip-slug:hover { background: var(--ss-navy-800, #14243d); color: var(--ss-signal-500, #2b7fd1); }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "custom",
+      "refersTo": "badge-status-active",
+      "description": "Plain colored text (no pill/background) marking a link or user as active/disabled — color is redundant with the text label, never the sole signal.",
+      "html": "<span class=\"ds-status-badge ds-status-active\">Active</span>",
+      "css": ".ds-status-badge { font-weight: 600; text-transform: capitalize; } .ds-status-active { color: var(--ss-ok-500, #1a7f5a); } .ds-status-disabled { color: var(--ss-danger-500, #b3261e); }"
+    },
+    {
+      "name": "Persistent Nav Shell",
+      "kind": "nav",
+      "refersTo": "nav-shell",
+      "description": "The app-shell chrome rendered on every authenticated page: brand/back-link, whoami, conditional admin link, logout.",
+      "html": "<nav class=\"ds-nav-shell\"><ul><li><strong>spin-shortener</strong></li></ul><ul><li>jdoe (admin)</li><li><a href=\"#\">Manage users</a></li><li><button class=\"ds-btn-outline ds-btn-secondary\">Log out</button></li></ul></nav>",
+      "css": ".ds-nav-shell { display: flex; justify-content: space-between; align-items: center; background: var(--ss-navy-950, #0a1628); color: #fff; padding: 0.75rem 1rem; border-radius: 0.25rem; margin-top: 1rem; } .ds-nav-shell ul { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; align-items: center; } .ds-nav-shell a { color: #fff; text-decoration: underline; } .ds-nav-shell a:hover { color: var(--ss-signal-500, #2b7fd1); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Signal Room",
+    "overview": "A quiet, dark-navy control room where every accent-blue \"signal\" marks a link actively routing traffic. The system already names its own accent `signal-500` in code — the metaphor isn't imposed, it's read off what's there. This is an internal operations console for a marketing team creating and tracking campaign links, not a marketing surface itself: density and scanability outrank expression, and the one confirmed brand instruction so far is \"dark theme preferred\" over any specific identity. Nothing here is officially locked — treat the palette and component choices below as the incumbent system to preserve during refinement, not an untouchable brand.",
+    "keyCharacteristics": [
+      "Dark-navy chrome (persistent nav, slug chips) against a light, cool-gray content surface — dark accents on a light working canvas, not a fully dark UI",
+      "Flat and bordered, never shadowed — depth comes from a border-mist hairline and background contrast, not elevation",
+      "Monospace reserved strictly for data (slugs, URLs, timestamps), never as decoration",
+      "A pinned, non-scaling type/spacing scale — deliberately rejects Pico's default prose-scaling behavior in favor of admin density"
+    ],
+    "rules": [
+      { "name": "The Chrome-Equals-Heading Rule", "body": "Deep Navy (#0a1628) is the single dark value used for both the nav bar's fill and every heading's text. There is no separate \"chrome color\" — the darkest neutral just gets reused for both jobs.", "section": "colors" },
+      { "name": "The Data-Is-Mono Rule", "body": "Monospace is used for exactly one purpose: columns and chips that carry a slug, URL, or timestamp. It never appears as a \"technical-looking\" costume elsewhere.", "section": "typography" },
+      { "name": "The No-Shadow Rule", "body": "Nothing in this system casts a shadow. Separation between surfaces is border + background-contrast only.", "section": "elevation" },
+      { "name": "The Pill-Is-For-Links Rule", "body": "Full pill rounding (999px) is reserved for the slug chip — the product's signature \"this is a shortened link\" marker. No other component uses it.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do keep --pico-font-size pinned at 100% — this app rejects Pico's default viewport-scaling type, deliberately, because it's a dense admin tool.",
+      "Do reserve the 999px pill radius for the slug chip only.",
+      "Do reserve the monospace font for slug/URL/timestamp data, never as a \"technical\" decorative costume.",
+      "Do route every form/page error through .form-error rather than a one-off inline style."
+    ],
+    "donts": [
+      "Don't add a box-shadow anywhere — the system is flat by construction, not by oversight.",
+      "Don't introduce a third status/error color without reconciling the two that already exist: danger-red (#b3261e, status badges) and Pico's inherited --pico-del-color (rgb(136, 56.5, 53), form errors) are visually close but not the same value.",
+      "Don't let a page-level heading imply every page needs one — several pages intentionally rely on the persistent nav's brand name instead of a redundant h1."
+    ]
+  }
+}
