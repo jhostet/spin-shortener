@@ -29,8 +29,8 @@
     <div class="detail-heading">
       <h1 id="short-link-heading" class="slug-chip">Link details</h1>
       <div role="group">
-        <button id="detail-copy-btn" type="button" class="outline">Copy</button>
-        <a id="detail-edit-link" role="button" class="outline">Edit</a>
+        <button id="detail-copy-btn" type="button" class="outline" style="display: none">Copy</button>
+        <a id="detail-edit-link" role="button" class="outline" style="display: none">Edit</a>
       </div>
     </div>
     <p id="page-error" class="form-error" role="alert"></p>
@@ -89,6 +89,7 @@
   <script src="../app.js"></script>
   <script>
     const slug = new URLSearchParams(location.search).get("slug");
+    let currentPrincipal = null;
 
     function formatDateTime(iso) {
       return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
@@ -103,7 +104,9 @@
 
       const shortUrl = `${location.origin}/r/${slug}`;
       document.getElementById("short-link-heading").textContent = shortUrl;
-      document.getElementById("detail-copy-btn").addEventListener("click", (evt) => copyToClipboard(shortUrl, evt.currentTarget));
+      const copyBtn = document.getElementById("detail-copy-btn");
+      copyBtn.style.display = "";
+      copyBtn.addEventListener("click", (evt) => copyToClipboard(shortUrl, evt.currentTarget));
       document.getElementById("target-url").textContent = data.target_url;
       const statusEl = document.getElementById("status");
       statusEl.textContent = data.status;
@@ -112,6 +115,15 @@
       document.getElementById("password-status").textContent = data.password_protected ? "Password-protected" : "None";
       document.getElementById("start-at").textContent = data.start_at ? formatDateTime(data.start_at) : "—";
       document.getElementById("end-at").textContent = data.end_at ? formatDateTime(data.end_at) : "—";
+
+      // Mirrors the server's own links._can_edit — only show Edit when the
+      // viewer is this link's owner, an admin, or has links.edit_all.
+      const canEdit = currentPrincipal && (
+        currentPrincipal.role === "admin" ||
+        currentPrincipal.permissions.includes("links.edit_all") ||
+        data.owner === currentPrincipal.username
+      );
+      document.getElementById("detail-edit-link").style.display = canEdit ? "" : "none";
 
       document.getElementById("qr-preview").src = `/api/links/${slug}/qr?format=png&size=web`;
       document.getElementById("qr-svg-download").href = `/api/links/${slug}/qr?format=svg&size=print&download=1`;
@@ -155,15 +167,19 @@
       }
     }
 
-    initHeader({ backHref: "../dashboard.html", manageUsersHref: "../admin/users.html" });
+    // initHeader() must resolve before loadLinkInfo() runs — loadLinkInfo()
+    // reads currentPrincipal (set below) to decide whether to show Edit.
+    initHeader({ backHref: "../dashboard.html", manageUsersHref: "../admin/users.html" }).then((result) => {
+      if (result.ok) currentPrincipal = result.data;
 
-    if (!slug) {
-      document.body.textContent = "No link specified.";
-    } else {
-      document.getElementById("detail-edit-link").href = `../dashboard.html?edit=${encodeURIComponent(slug)}`;
-      loadLinkInfo();
-      loadAnalytics();
-    }
+      if (!slug) {
+        document.body.textContent = "No link specified.";
+      } else {
+        document.getElementById("detail-edit-link").href = `../dashboard.html?edit=${encodeURIComponent(slug)}`;
+        loadLinkInfo();
+        loadAnalytics();
+      }
+    });
   </script>
 </body>
 </html>

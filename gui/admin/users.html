@@ -53,6 +53,7 @@
               <legend id="new-permissions-legend">Permissions (for role "user")</legend>
               <label><input type="checkbox" class="new-permission" value="links.create_custom_slug" /> Create custom slugs</label>
               <label><input type="checkbox" class="new-permission" value="links.view_all" /> View all links</label>
+              <label><input type="checkbox" class="new-permission" value="links.edit_all" /> Edit all links</label>
               <label><input type="checkbox" class="new-permission" value="users.manage" /> Manage users</label>
             </fieldset>
           </div>
@@ -84,10 +85,11 @@
 
   <script src="../app.js"></script>
   <script>
-    const ALL_PERMISSIONS = ["links.create_custom_slug", "links.view_all", "users.manage"];
+    const ALL_PERMISSIONS = ["links.create_custom_slug", "links.view_all", "links.edit_all", "users.manage"];
     const PERMISSION_LABELS = {
       "links.create_custom_slug": "Create custom slugs",
       "links.view_all": "View all links",
+      "links.edit_all": "Edit all links",
       "users.manage": "Manage users",
     };
 

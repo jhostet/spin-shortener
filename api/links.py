@@ -108,6 +108,22 @@ def _public_link(record: dict) -> dict:
     return public
 
 
+def can_view(principal: Principal, record: dict) -> bool:
+    """`links.edit_all` implies view access — a user who can edit any link
+    shouldn't also need `links.view_all` separately to open one. Shared
+    (not module-private) since analytics.py and qr.py gate on the same
+    view semantics for a link's analytics/QR endpoints."""
+    return (
+        record["owner"] == principal.username
+        or principal.has_permission("links.view_all")
+        or principal.has_permission("links.edit_all")
+    )
+
+
+def _can_edit(principal: Principal, record: dict) -> bool:
+    return record["owner"] == principal.username or principal.has_permission("links.edit_all")
+
+
 async def handle_create(store, principal: Principal, request):
     try:
         payload = json.loads(request.body or b"{}")
@@ -168,7 +184,7 @@ async def handle_create(store, principal: Principal, request):
 
 
 async def handle_list(store, principal: Principal):
-    if principal.role == "admin" or principal.has_permission("links.view_all"):
+    if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
         slugs = await _all_slugs(store)
     else:
         slugs = await _owned_slugs(store, principal.username)
@@ -184,7 +200,7 @@ async def handle_get(store, principal: Principal, slug: str):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if record["owner"] != principal.username and principal.role != "admin":
+    if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
     return json_response(200, _public_link(record))
 
@@ -196,8 +212,8 @@ async def handle_update(store, principal: Principal, slug: str, request):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if record["owner"] != principal.username and principal.role != "admin":
-        return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
+    if not _can_edit(principal, record):
+        return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
 
     try:
         payload = json.loads(request.body or b"{}")
@@ -250,8 +266,8 @@ async def handle_delete(store, principal: Principal, slug: str):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if record["owner"] != principal.username and principal.role != "admin":
-        return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
+    if not _can_edit(principal, record):
+        return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
     await store.delete(f"slug:{slug}")
     await _remove_owned_slug(store, record["owner"], slug)
     await _remove_all_slug(store, slug)
@@ -262,8 +278,8 @@ async def handle_set_password(store, principal: Principal, slug: str, request):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if record["owner"] != principal.username and principal.role != "admin":
-        return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
+    if not _can_edit(principal, record):
+        return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
 
     try:
         payload = json.loads(request.body or b"{}")

@@ -98,16 +98,32 @@
 
   <script src="app.js"></script>
   <script>
+    let currentPrincipal = null;
+
     async function loadMe() {
       const { ok, data } = await initHeader();
       if (ok) {
+        currentPrincipal = data;
         if (data.role === "admin" || data.permissions.includes("links.create_custom_slug")) {
           document.getElementById("custom-slug-field").style.display = "";
         }
-        if (data.role === "admin" || data.permissions.includes("links.view_all")) {
+        if (data.role === "admin" || data.permissions.includes("links.view_all") || data.permissions.includes("links.edit_all")) {
           document.getElementById("links-heading").textContent = "All links";
         }
       }
+    }
+
+    // Mirrors the server's own links._can_edit — a link's Edit/Delete
+    // controls are only rendered for its owner, an admin, or a user with
+    // links.edit_all, so the row-action buttons never promise access the
+    // API would then 403 on.
+    function canEditLink(link) {
+      if (!currentPrincipal) return false;
+      return (
+        currentPrincipal.role === "admin" ||
+        currentPrincipal.permissions.includes("links.edit_all") ||
+        link.owner === currentPrincipal.username
+      );
     }
 
     function formatDateTime(iso) {
@@ -229,14 +245,18 @@
             <div role="group">
               <a role="button" class="outline" href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a>
               <button data-slug="${escapeHtml(link.slug)}" class="copy-btn outline">Copy</button>
-              <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline">Edit</button>
-              <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline">Delete</button>
+              ${canEditLink(link) ? `
+                <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline">Edit</button>
+                <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline">Delete</button>
+              ` : ""}
             </div>
           </td>
         `;
         body.appendChild(row);
-        row.insertAdjacentHTML("afterend", editRowHtml(link));
-        body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`).style.display = "none";
+        if (canEditLink(link)) {
+          row.insertAdjacentHTML("afterend", editRowHtml(link));
+          body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`).style.display = "none";
+        }
       }
 
       body.querySelectorAll(".copy-btn").forEach((btn) => {
@@ -404,8 +424,11 @@
       btn.closest("tr").scrollIntoView({ block: "center" });
     }
 
-    loadMe();
-    loadLinks().then(openDeepLinkedEditRow);
+    // loadMe() must resolve before loadLinks()'s first render — renderLinksTable()
+    // reads currentPrincipal (set by loadMe()) to decide whether to show each
+    // row's Edit/Delete controls, and running them concurrently could render
+    // the first paint with every row's Edit/Delete hidden, even the viewer's own.
+    loadMe().then(() => loadLinks().then(openDeepLinkedEditRow));
   </script>
 </body>
 </html>

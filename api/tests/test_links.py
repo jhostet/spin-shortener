@@ -160,6 +160,33 @@ async def test_get_admin_can_view_others_links():
     assert resp.status == 200
 
 
+async def test_get_view_all_permission_can_view_others_links():
+    # Regression test: handle_get previously only checked owner-or-admin and
+    # ignored links.view_all entirely, even though handle_list already uses
+    # that same permission to decide whether the link appears in the list at
+    # all — a links.view_all user could see a link in their dashboard but get
+    # a 403 clicking into it.
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await links.handle_get(store, viewer, slug)
+    assert resp.status == 200
+
+
+async def test_get_edit_all_permission_can_view_others_links():
+    # links.edit_all implies view access on its own; a user shouldn't need
+    # links.view_all granted separately just to open a link they can edit.
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await links.handle_get(store, editor, slug)
+    assert resp.status == 200
+
+
 async def test_get_not_found():
     store = FakeStore()
     resp = await links.handle_get(store, _principal(), "doesnotexist")
@@ -200,6 +227,18 @@ async def test_list_view_all_permission_sees_all_links():
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
 
 
+async def test_list_edit_all_permission_sees_all_links():
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await links.handle_list(store, editor)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
+
+
 async def test_delete_owner_succeeds_and_removes_index():
     store = FakeStore()
     owner = _principal(username="alice")
@@ -220,6 +259,29 @@ async def test_delete_non_owner_forbidden():
 
     resp = await links.handle_delete(store, _principal(username="bob"), slug)
     assert resp.status == 403
+
+
+async def test_delete_edit_all_permission_can_delete_others_links():
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await links.handle_delete(store, editor, slug)
+    assert resp.status == 200
+    assert await store.exists(f"slug:{slug}") is False
+    assert slug not in await links._owned_slugs(store, "alice")
+
+
+async def test_delete_view_all_permission_alone_still_forbidden():
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await links.handle_delete(store, viewer, slug)
+    assert resp.status == 403
+    assert json.loads(resp.body)["required_permission"] == "links.edit_all"
 
 
 async def test_set_password_set_change_clear():
@@ -246,6 +308,29 @@ async def test_set_password_set_change_clear():
     assert json.loads(clear_resp.body)["password_protected"] is False
     record = json.loads(await store.get(f"slug:{slug}"))
     assert record["password_hash"] is None
+
+
+async def test_set_password_edit_all_permission_can_set_others_links():
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await links.handle_set_password(store, editor, slug, _request({"password": "newpass"}))
+    assert resp.status == 200
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert auth.verify_password("newpass", record["password_hash"])
+
+
+async def test_set_password_view_all_permission_alone_still_forbidden():
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await links.handle_set_password(store, viewer, slug, _request({"password": "newpass"}))
+    assert resp.status == 403
+    assert json.loads(resp.body)["required_permission"] == "links.edit_all"
 
 
 # --- Time-window validation on create ---
@@ -381,6 +466,25 @@ async def test_update_admin_can_update_others_links():
     slug = await _make_link(store, owner="alice")
     resp = await links.handle_update(store, _principal(username="admin", role="admin"), slug, _request({"status": "disabled"}))
     assert resp.status == 200
+
+
+async def test_update_edit_all_permission_can_update_others_links():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await links.handle_update(store, editor, slug, _request({"status": "disabled"}))
+    assert resp.status == 200
+
+
+async def test_update_view_all_permission_alone_still_forbidden():
+    # links.view_all grants read access (see test_get_view_all_permission_*)
+    # but not write access — only links.edit_all (or ownership/admin) does.
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await links.handle_update(store, viewer, slug, _request({"status": "disabled"}))
+    assert resp.status == 403
+    assert json.loads(resp.body)["required_permission"] == "links.edit_all"
 
 
 async def test_update_empty_payload_rejected():

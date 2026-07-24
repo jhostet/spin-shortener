@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 
 from auth import Principal
-from links import get_link
+from links import can_view, get_link
 from responses import json_response, to_iso8601_utc
 
 
@@ -26,7 +26,7 @@ async def handle_analytics(links_store, analytics_store, principal: Principal, s
     record = await get_link(links_store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if record["owner"] != principal.username and principal.role != "admin":
+    if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
 
     count_raw = await analytics_store.get(f"count:{slug}")

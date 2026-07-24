@@ -10,8 +10,8 @@ from tests.fakes import FakeStore
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def _principal(username="alice", role="user"):
-    return auth.Principal(username=username, role=role, permissions=[], csrf_token="x")
+def _principal(username="alice", role="user", permissions=None):
+    return auth.Principal(username=username, role=role, permissions=permissions or [], csrf_token="x")
 
 
 def _create_request(payload):
@@ -40,6 +40,25 @@ async def test_qr_admin_can_access_others_links():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
     resp = await qr.handle_qr(store, _principal(username="admin", role="admin"), slug, {}, "http://localhost:3000")
+    assert resp.status == 200
+
+
+async def test_qr_view_all_permission_can_access_others_links():
+    # Regression test: handle_qr previously only checked owner-or-admin and
+    # ignored links.view_all/links.edit_all entirely, the same bug fixed in
+    # links.handle_get.
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await qr.handle_qr(store, viewer, slug, {}, "http://localhost:3000")
+    assert resp.status == 200
+
+
+async def test_qr_edit_all_permission_can_access_others_links():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await qr.handle_qr(store, editor, slug, {}, "http://localhost:3000")
     assert resp.status == 200
 
 

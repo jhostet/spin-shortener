@@ -7,8 +7,8 @@ from responses import Request
 from tests.fakes import FakeStore
 
 
-def _principal(username="alice", role="user"):
-    return auth.Principal(username=username, role=role, permissions=[], csrf_token="x")
+def _principal(username="alice", role="user", permissions=None):
+    return auth.Principal(username=username, role=role, permissions=permissions or [], csrf_token="x")
 
 
 def _create_request(payload):
@@ -40,6 +40,27 @@ async def test_analytics_admin_can_view_others_links():
     analytics_store = FakeStore()
     slug = await _make_link(links_store, owner="alice")
     resp = await analytics.handle_analytics(links_store, analytics_store, _principal(username="admin", role="admin"), slug, 30)
+    assert resp.status == 200
+
+
+async def test_analytics_view_all_permission_can_view_others_links():
+    # Regression test: handle_analytics previously only checked owner-or-admin
+    # and ignored links.view_all/links.edit_all entirely, the same bug fixed
+    # in links.handle_get.
+    links_store = FakeStore()
+    analytics_store = FakeStore()
+    slug = await _make_link(links_store, owner="alice")
+    viewer = _principal(username="carol", permissions=["links.view_all"])
+    resp = await analytics.handle_analytics(links_store, analytics_store, viewer, slug, 30)
+    assert resp.status == 200
+
+
+async def test_analytics_edit_all_permission_can_view_others_links():
+    links_store = FakeStore()
+    analytics_store = FakeStore()
+    slug = await _make_link(links_store, owner="alice")
+    editor = _principal(username="dave", permissions=["links.edit_all"])
+    resp = await analytics.handle_analytics(links_store, analytics_store, editor, slug, 30)
     assert resp.status == 200
 
 

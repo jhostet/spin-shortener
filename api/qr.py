@@ -16,7 +16,7 @@ import qrcode.image.pure as qr_pure
 import qrcode.image.svg as qr_svg
 
 from auth import Principal
-from links import get_link
+from links import can_view, get_link
 from responses import Response, json_response
 
 BOX_SIZE_BY_PRESET = {"web": 6, "print": 20}
@@ -45,7 +45,7 @@ async def handle_qr(store, principal: Principal, slug: str, query: dict, public_
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if record["owner"] != principal.username and principal.role != "admin":
+    if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
 
     fmt = _query_value(query, "format", "svg")
