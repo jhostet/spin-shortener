@@ -98,27 +98,29 @@
       return `
         <tr class="edit-row" data-username="${escapeHtml(user.username)}">
           <td colspan="5">
-            <div class="grid">
-              <label>Role
-                <select class="edit-role">
-                  <option value="user" ${user.role === "user" ? "selected" : ""}>user</option>
-                  <option value="admin" ${user.role === "admin" ? "selected" : ""}>admin</option>
-                </select>
+            <form class="edit-form">
+              <div class="grid">
+                <label>Role
+                  <select class="edit-role">
+                    <option value="user" ${user.role === "user" ? "selected" : ""}>user</option>
+                    <option value="admin" ${user.role === "admin" ? "selected" : ""}>admin</option>
+                  </select>
+                </label>
+                <label>New password (optional)
+                  <input type="password" class="edit-password" minlength="8" placeholder="Leave blank to keep current" />
+                </label>
+              </div>
+              <fieldset class="edit-permissions-fieldset" ${user.role === "admin" ? "disabled" : ""}>
+                <legend class="edit-permissions-legend">${escapeHtml(permissionsLegendText(user.role))}</legend>
+                ${checkboxes}
+              </fieldset>
+              <label>
+                <input type="checkbox" class="edit-disabled" ${user.disabled ? "checked" : ""} /> Disabled
               </label>
-              <label>New password (optional)
-                <input type="password" class="edit-password" minlength="8" placeholder="Leave blank to keep current" />
-              </label>
-            </div>
-            <fieldset class="edit-permissions-fieldset" ${user.role === "admin" ? "disabled" : ""}>
-              <legend class="edit-permissions-legend">${escapeHtml(permissionsLegendText(user.role))}</legend>
-              ${checkboxes}
-            </fieldset>
-            <label>
-              <input type="checkbox" class="edit-disabled" ${user.disabled ? "checked" : ""} /> Disabled
-            </label>
-            <button class="save-edit-btn">Save</button>
-            <button class="cancel-edit-btn secondary outline" type="button">Cancel</button>
-            <p class="edit-error form-error" role="alert"></p>
+              <button type="submit" class="save-edit-btn">Save</button>
+              <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
+              <p class="edit-error form-error" role="alert"></p>
+            </form>
           </td>
         </tr>
       `;
@@ -192,19 +194,20 @@
         });
       });
 
-      body.querySelectorAll(".save-edit-btn").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const editRow = btn.closest("tr.edit-row");
+      body.querySelectorAll(".edit-form").forEach((form) => {
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const editRow = form.closest("tr.edit-row");
           const username = editRow.dataset.username;
-          const errorEl = editRow.querySelector(".edit-error");
+          const errorEl = form.querySelector(".edit-error");
           errorEl.textContent = "";
 
           const payload = {
-            role: editRow.querySelector(".edit-role").value,
-            permissions: Array.from(editRow.querySelectorAll(".edit-permission:checked")).map((cb) => cb.value),
-            disabled: editRow.querySelector(".edit-disabled").checked,
+            role: form.querySelector(".edit-role").value,
+            permissions: Array.from(form.querySelectorAll(".edit-permission:checked")).map((cb) => cb.value),
+            disabled: form.querySelector(".edit-disabled").checked,
           };
-          const password = editRow.querySelector(".edit-password").value;
+          const password = form.querySelector(".edit-password").value;
           if (password) payload.password = password;
 
           const { ok, data } = await api.patch(`/users/${encodeURIComponent(username)}`, payload);

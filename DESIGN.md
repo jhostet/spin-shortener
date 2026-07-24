@@ -120,7 +120,7 @@ A restrained palette: one accent, one dark neutral used two ways (chrome + text)
 **Character:** Plain system UI type at a pinned, non-scaling size — the point is legibility and density for a task-completion tool, not a typographic identity.
 
 ### Hierarchy
-- **Display** (700, 1.5rem, 1.4): page-level `h1` — used sparingly; several pages (dashboard, users) skip a page-level h1 entirely and let the persistent nav's brand name stand in for it.
+- **Display** (700, 1.5rem, 1.4): page-level `h1` — used sparingly; `dashboard.html` is the one page that skips it entirely, relying on the persistent nav's brand name instead (`login.html`, `admin/users.html`, and `links/detail.html` all have a real `h1`).
 - **Headline** (700, 1.25rem, 1.4): `h2` — section headings within a page ("Create a new link", "Your links").
 - **Title** (700, 1.1rem, 1.4): `h3` — sub-section headings (e.g. "Clicks per day" / "Recent events" side by side).
 - **Body** (400, 1rem, 1.4): all prose, labels, and table cells that aren't data columns.
@@ -159,7 +159,8 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 ### Buttons
 - **Shape:** `0.25rem` radius (Pico default), unchanged by the theme.
 - **Primary:** Signal Blue fill, white text, darkens to Signal-Blue-Hover on hover/active.
-- **Secondary / Outline:** row-level actions (View/Edit) use the `outline` variant; the one destructive action (Delete) additionally gets `.secondary` so it visually recedes rather than draws the eye — de-emphasis, not warning color, is how "destructive" reads here.
+- **Secondary / Outline:** row-level actions (View/Copy/Edit) use the `outline` variant; the one destructive action (Delete) additionally gets `.secondary` so it visually recedes rather than draws the eye — de-emphasis, not warning color, is how "destructive" reads here.
+- **Accepted convention:** the "View" row action is a real `<a href>` styled as a button via Pico's `[role=button]` selector (Pico's own idiom for making an anchor look like a button — it's load-bearing for the visual treatment, not just a label). This is a known, minor ARIA-semantics tradeoff (a "link" gets a "button" role) rather than a bug; removing `role="button"` without replicating Pico's full styling surface for that selector would be a larger, riskier change than the tradeoff justifies.
 
 ### Chips
 - **Slug chip** (signature component): monospace pill, Deep Navy background, white text; hover shifts background to Slate Navy and text to Signal Blue. Appears everywhere a short link is shown — the dashboard table, and as the `h1` on the link-detail page.

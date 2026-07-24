@@ -15,7 +15,7 @@
     }
     #links-table [role=group] > * {
       --pico-form-element-spacing-horizontal: 0.5rem;
-      --pico-form-element-spacing-vertical: 0.3rem;
+      --pico-form-element-spacing-vertical: 0.4rem;
       font-size: 0.75rem;
     }
   </style>
@@ -53,6 +53,7 @@
 
     <article>
       <h2 id="links-heading">Your links</h2>
+      <label for="links-filter" class="visually-hidden">Filter links</label>
       <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
       <p id="links-error" class="form-error" role="alert"></p>
       <figure id="links-figure">
@@ -145,20 +146,22 @@
       return `
         <tr class="edit-row" data-slug="${escapeHtml(link.slug)}">
           <td colspan="8">
-            <label>Destination URL <input type="url" class="edit-target-url" value="${escapeHtml(link.target_url)}" /></label>
-            <div class="grid">
-              <label>Starts <input type="datetime-local" class="edit-start-at" value="${isoToDatetimeLocal(link.start_at)}" /></label>
-              <label>Expires <input type="datetime-local" class="edit-end-at" value="${isoToDatetimeLocal(link.end_at)}" /></label>
-            </div>
-            <div class="grid">
-              <label>New link password <small>(currently ${link.password_protected ? "password-protected" : "no password"} — leave blank to keep as-is)</small>
-                <input type="password" class="edit-password" minlength="4" placeholder="New password" />
-              </label>
-              <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
-            </div>
-            <button class="save-edit-btn">Save</button>
-            <button class="cancel-edit-btn secondary outline" type="button">Cancel</button>
-            <p class="edit-error form-error" role="alert"></p>
+            <form class="edit-form">
+              <label>Destination URL <input type="url" class="edit-target-url" value="${escapeHtml(link.target_url)}" required /></label>
+              <div class="grid">
+                <label>Starts <input type="datetime-local" class="edit-start-at" value="${isoToDatetimeLocal(link.start_at)}" /></label>
+                <label>Expires <input type="datetime-local" class="edit-end-at" value="${isoToDatetimeLocal(link.end_at)}" /></label>
+              </div>
+              <div class="grid">
+                <label>New link password <small>(currently ${link.password_protected ? "password-protected" : "no password"} — leave blank to keep as-is)</small>
+                  <input type="password" class="edit-password" minlength="4" placeholder="New password" />
+                </label>
+                <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
+              </div>
+              <button type="submit" class="save-edit-btn">Save</button>
+              <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
+              <p class="edit-error form-error" role="alert"></p>
+            </form>
           </td>
         </tr>
       `;
@@ -247,22 +250,18 @@
         });
       });
 
-      body.querySelectorAll(".save-edit-btn").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const editRow = btn.closest("tr.edit-row");
+      body.querySelectorAll(".edit-form").forEach((form) => {
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const editRow = form.closest("tr.edit-row");
           const slug = editRow.dataset.slug;
-          const targetUrl = editRow.querySelector(".edit-target-url").value.trim();
-          const startAt = datetimeLocalToIso(editRow.querySelector(".edit-start-at").value);
-          const endAt = datetimeLocalToIso(editRow.querySelector(".edit-end-at").value);
-          const newPassword = editRow.querySelector(".edit-password").value;
-          const removePassword = editRow.querySelector(".edit-remove-password").checked;
-          const errorEl = editRow.querySelector(".edit-error");
+          const targetUrl = form.querySelector(".edit-target-url").value.trim();
+          const startAt = datetimeLocalToIso(form.querySelector(".edit-start-at").value);
+          const endAt = datetimeLocalToIso(form.querySelector(".edit-end-at").value);
+          const newPassword = form.querySelector(".edit-password").value;
+          const removePassword = form.querySelector(".edit-remove-password").checked;
+          const errorEl = form.querySelector(".edit-error");
           errorEl.textContent = "";
-
-          if (!targetUrl) {
-            errorEl.textContent = "Enter a destination URL.";
-            return;
-          }
 
           const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt });
           if (!ok) {
@@ -353,7 +352,11 @@
       loadLinks();
     });
 
-    document.getElementById("links-filter").addEventListener("input", renderLinksTable);
+    let filterDebounceTimer = null;
+    document.getElementById("links-filter").addEventListener("input", () => {
+      clearTimeout(filterDebounceTimer);
+      filterDebounceTimer = setTimeout(renderLinksTable, 200);
+    });
 
     document.querySelectorAll("#links-table th.sortable").forEach((th) => {
       const activate = () => {
