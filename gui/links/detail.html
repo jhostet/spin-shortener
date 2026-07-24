@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>spin-shortener — Link details</title>
   <link rel="stylesheet" href="../vendor/pico.min.css" />
+  <link rel="stylesheet" href="../theme.css" />
 </head>
 <body>
   <header id="app-header" class="container"></header>
   <div class="container">
-    <h1 id="short-link-heading">Link details</h1>
+    <h1 id="short-link-heading" class="slug-chip">Link details</h1>
   </div>
 
   <main class="container">
@@ -17,7 +18,7 @@
       <article id="link-info">
         <h2>Details</h2>
         <p><strong>Destination:</strong> <span id="target-url"></span></p>
-        <p><strong>Status:</strong> <span id="status"></span></p>
+        <p><strong>Status:</strong> <span id="status" class="status-badge"></span></p>
         <p><strong>Starts:</strong> <span id="start-at"></span></p>
         <p><strong>Expires:</strong> <span id="end-at"></span></p>
       </article>
@@ -71,7 +72,9 @@
       const shortUrl = `${location.origin}/r/${slug}`;
       document.getElementById("short-link-heading").textContent = shortUrl;
       document.getElementById("target-url").textContent = data.target_url;
-      document.getElementById("status").textContent = data.status;
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = data.status;
+      statusEl.classList.add(`status-${data.status}`);
       document.getElementById("start-at").textContent = data.start_at || "—";
       document.getElementById("end-at").textContent = data.end_at || "—";
 

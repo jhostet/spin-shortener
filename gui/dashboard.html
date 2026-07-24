@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>spin-shortener — Dashboard</title>
   <link rel="stylesheet" href="vendor/pico.min.css" />
+  <link rel="stylesheet" href="theme.css" />
   <style>
     #links-table th.sortable { cursor: pointer; user-select: none; }
     #links-table th.sortable:hover { color: var(--pico-primary); }
@@ -152,11 +153,11 @@
         const row = document.createElement("tr");
         row.dataset.slug = link.slug;
         row.innerHTML = `
-          <td><a href="${escapeHtml(shortUrl)}" target="_blank">${escapeHtml(shortUrl)}</a></td>
+          <td><a class="slug-chip" href="${escapeHtml(shortUrl)}" target="_blank">${escapeHtml(shortUrl)}</a></td>
           <td>${escapeHtml(link.owner)}</td>
           <td>${escapeHtml(link.target_url)}</td>
           <td>${escapeHtml(link.created_at)}</td>
-          <td>${escapeHtml(link.status)}</td>
+          <td><span class="status-badge status-${escapeHtml(link.status)}">${escapeHtml(link.status)}</span></td>
           <td>${formatWindowField(link.start_at)}</td>
           <td>${formatWindowField(link.end_at)}</td>
           <td>
