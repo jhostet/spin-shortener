@@ -4,7 +4,17 @@
  * signature components (slug chip, status badge) shared across pages.
  */
 
-:root {
+/* Must match Pico's own :root:not([data-theme="dark"]) selector exactly,
+ * not plain :root — Pico defines --pico-primary-background,
+ * --pico-background-color, --pico-color, --pico-h1/h2/h3-color,
+ * --pico-muted-color/-border-color, and --pico-card-*-color at that
+ * higher-specificity selector, so a plain :root here silently loses the
+ * cascade for all of them regardless of load order (confirmed via a live
+ * audit: getComputedStyle resolved Pico's stock #0172ad/#fff/#373c44
+ * instead of this file's intended values). Matching the selector makes
+ * this an equal-specificity tie, which load order (this file loads after
+ * pico.min.css) then correctly breaks in this file's favor. */
+:root:not([data-theme="dark"]) {
   /* Pico scales --pico-font-size up with viewport width by default (up to
    * 131.25% at >=1536px), which is tuned for prose/marketing content. This
    * is a dense admin app (tables + forms), so pin it flat and tighten the
