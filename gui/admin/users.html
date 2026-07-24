@@ -12,7 +12,7 @@
 
   <main class="container">
     <h1>Manage users</h1>
-    <p id="forbidden-notice" style="display: none; color: var(--pico-del-color)">
+    <p id="forbidden-notice" class="form-error" style="display: none">
       You don't have permission to manage users.
     </p>
 
@@ -42,12 +42,12 @@
           </div>
           <button type="submit">Create user</button>
         </form>
-        <p id="create-error" style="color: var(--pico-del-color)"></p>
+        <p id="create-error" class="form-error"></p>
       </article>
 
       <article>
         <h2>Users</h2>
-        <p id="users-error" style="color: var(--pico-del-color)"></p>
+        <p id="users-error" class="form-error"></p>
         <figure>
           <table id="users-table">
             <thead>
@@ -118,7 +118,7 @@
             </label>
             <button class="save-edit-btn">Save</button>
             <button class="cancel-edit-btn secondary outline" type="button">Cancel</button>
-            <p class="edit-error" style="color: var(--pico-del-color)"></p>
+            <p class="edit-error form-error"></p>
           </td>
         </tr>
       `;
@@ -136,6 +136,10 @@
 
       const body = document.getElementById("users-body");
       body.innerHTML = "";
+      if (!data.users.length) {
+        body.innerHTML = `<tr><td colspan="5" class="empty-state">No users yet.</td></tr>`;
+        return;
+      }
       for (const user of data.users) {
         const row = document.createElement("tr");
         row.dataset.username = user.username;

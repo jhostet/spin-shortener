@@ -9,7 +9,6 @@
   <style>
     #links-table th.sortable { cursor: pointer; user-select: none; }
     #links-table th.sortable:hover { color: var(--pico-primary); }
-    #links-figure { overflow-x: auto; }
     #links-table td:last-child { white-space: nowrap; }
     #links-table [role=group] {
       width: auto;
@@ -48,7 +47,7 @@
 
         <button type="submit">Shorten</button>
       </form>
-      <p id="create-error" style="color: var(--pico-del-color)"></p>
+      <p id="create-error" class="form-error"></p>
     </article>
 
     <article>
@@ -130,7 +129,7 @@
             </div>
             <button class="save-edit-btn">Save</button>
             <button class="cancel-edit-btn secondary outline" type="button">Cancel</button>
-            <p class="edit-error" style="color: var(--pico-del-color)"></p>
+            <p class="edit-error form-error"></p>
           </td>
         </tr>
       `;
@@ -148,7 +147,14 @@
       body.innerHTML = "";
       updateSortIndicators();
 
-      for (const link of getVisibleLinks()) {
+      const visibleLinks = getVisibleLinks();
+      if (!visibleLinks.length) {
+        const message = allLinks.length ? "No links match your filter." : "No links yet — create one above.";
+        body.innerHTML = `<tr><td colspan="8" class="empty-state">${escapeHtml(message)}</td></tr>`;
+        return;
+      }
+
+      for (const link of visibleLinks) {
         const shortUrl = `${location.origin}/r/${link.slug}`;
         const row = document.createElement("tr");
         row.dataset.slug = link.slug;

@@ -119,3 +119,39 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 .status-badge.status-disabled {
   color: var(--ss-danger-500);
 }
+
+/* Form/page error text — a shared class instead of a repeated inline
+ * style, so error state reads as deliberate (spaced, weighted) rather
+ * than a leftover inline color override. */
+.form-error {
+  color: var(--pico-del-color);
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+.form-error:empty {
+  display: none;
+}
+
+/* Any table wrapped in a <figure> scrolls instead of overflowing the
+ * viewport on narrow screens — applies to every data table, not just
+ * the one page that happened to declare it locally. */
+main figure {
+  overflow-x: auto;
+}
+
+/* Empty-state row inside a data table body. */
+.empty-state {
+  text-align: center;
+  color: var(--pico-muted-color);
+}
+
+/* Login/auth card: vertically centered regardless of viewport height,
+ * instead of a fixed magic-number top margin. */
+body.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+}
+.auth-shell {
+  max-width: 26rem;
+}
