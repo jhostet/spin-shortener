@@ -9,7 +9,11 @@
   <style>
     #links-table th.sortable { cursor: pointer; user-select: none; }
     #links-table th.sortable:hover { color: var(--pico-primary); }
-    #links-table td:last-child { white-space: nowrap; }
+    /* Scoped to non-edit rows only: the edit-row's own <td> is a
+     * colspan="8" cell, so it's *also* `:last-child` of its <tr> — an
+     * unscoped rule here forces `nowrap` through to the Starts/Expires
+     * date-picker labels one level up, overlapping them (see below). */
+    #links-table tbody > tr:not(.edit-row) td:last-child { white-space: nowrap; }
     #links-table [role=group] {
       width: auto;
     }
@@ -164,8 +168,9 @@
                 <label>Expires <input type="datetime-local" class="edit-end-at" value="${isoToDatetimeLocal(link.end_at)}" /></label>
               </div>
               <div class="grid">
-                <label>New link password <small>(currently ${link.password_protected ? "password-protected" : "no password"} — leave blank to keep as-is)</small>
+                <label>New link password
                   <input type="password" class="edit-password" minlength="4" placeholder="New password" />
+                  <small>(currently ${link.password_protected ? "password-protected" : "no password"} — leave blank to keep as-is)</small>
                 </label>
                 <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
               </div>

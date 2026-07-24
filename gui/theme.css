@@ -179,9 +179,12 @@ a.slug-chip:hover {
 
 /* Form/page error text — a shared class instead of a repeated inline
  * style, so error state reads as deliberate (spaced, weighted) rather
- * than a leftover inline color override. */
+ * than a leftover inline color override. Uses the same --ss-danger-500
+ * as status badges — previously this read Pico's inherited
+ * --pico-del-color instead, a visually-close but distinct red the
+ * system had flagged as worth reconciling (see DESIGN.md). */
 .form-error {
-  color: var(--pico-del-color);
+  color: var(--ss-danger-500);
   font-weight: 600;
   margin-top: 0.5rem;
 }
@@ -207,6 +210,27 @@ a.slug-chip:hover {
  * the one page that happened to declare it locally. */
 main figure {
   overflow-x: auto;
+}
+/* Default OS/browser scrollbars (esp. macOS's auto-hiding overlay style)
+ * give a scrollable table zero persistent hint that content continues
+ * off-screen — row actions can sit unreachable with no visible cue. A
+ * shadow-style edge fade would violate this system's own No-Shadow rule
+ * (see DESIGN.md), so the fix is a real, always-rendered, on-brand
+ * scrollbar instead of synthetic depth. */
+main figure {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ss-signal-500) var(--pico-muted-border-color);
+}
+main figure::-webkit-scrollbar {
+  height: 8px;
+}
+main figure::-webkit-scrollbar-track {
+  background: var(--pico-muted-border-color);
+  border-radius: 999px;
+}
+main figure::-webkit-scrollbar-thumb {
+  background-color: var(--ss-signal-500);
+  border-radius: 999px;
 }
 
 /* Visually hidden but screen-reader-accessible — for labels whose

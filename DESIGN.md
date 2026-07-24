@@ -137,7 +137,7 @@ Built on Pico's responsive `.container`, but with its default viewport-scaling f
 - **Spacing scale:** base spacing `0.75rem` (Pico default is `1rem`, tightened); form fields use `0.5rem`/`0.75rem` vertical/horizontal padding.
 - **Grid:** Pico's built-in equal-width `.grid` for logically-paired fields (custom slug + start/end dates on link creation; role + password on user edit).
 - **Persistent app shell:** every authenticated page renders the same `#app-header nav` — Deep Navy fill, white text, contained to the page's `.container` width, `margin-top: 1rem` separating it from the viewport edge.
-- **Data tables:** every table lives inside a `<figure>` with `overflow-x: auto`, so wide tables scroll horizontally on narrow viewports instead of breaking layout — applied uniformly across the links, users, and both analytics tables.
+- **Data tables:** every table lives inside a `<figure>` with `overflow-x: auto`, so wide tables scroll horizontally on narrow viewports instead of breaking layout — applied uniformly across the links, users, and both analytics tables. The scrollbar itself is styled (thin, Signal Blue thumb on a `border-mist` track) rather than left to the browser default, since a default OS scrollbar (especially macOS's auto-hiding overlay style) gives no persistent hint that a table scrolls — deliberately not a shadow/gradient edge-fade, which would violate the No-Shadow Rule below.
 - **Auth page:** the one page that breaks from the app-shell pattern — a single narrow (`26rem`) card, vertically centered via a flex body (`body.auth-page`) rather than sharing the persistent nav.
 
 ## Elevation & Depth
@@ -177,7 +177,7 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 
 ### Inputs / Fields
 - **Style:** Pico defaults, unmodified — bordered, `border-mist`-toned, `0.25rem` radius.
-- **Error:** a shared `.form-error` class (bold, `margin-top: 0.5rem`, colored with Pico's inherited `--pico-del-color`) — used consistently for every form/page-level error message across all four pages.
+- **Error:** a shared `.form-error` class (bold, `margin-top: 0.5rem`, colored with `danger-red`) — used consistently for every form/page-level error message across all four pages. Previously read Pico's inherited `--pico-del-color` instead, a visually-close but distinct red; unified onto `danger-red` so status badges and form errors share exactly one error color.
 - **Success:** `.form-success` mirrors `.form-error`'s weight/spacing but in `ok-green`, laid out as a flex row so it can hold a slug chip plus a small "Copy" affordance inline. Introduced for the link-creation flow so the moment a link is made has a visible payoff instead of the form silently clearing.
 
 ### Navigation
@@ -197,5 +197,5 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 
 ### Don't:
 - **Don't** add a `box-shadow` anywhere — the system is flat by construction, not by oversight.
-- **Don't** introduce a third status/error color without reconciling the two that already exist: `danger-red` (`#b3261e`, status badges) and Pico's inherited `--pico-del-color` (`rgb(136, 56.5, 53)`, form errors) are visually close but not the same value — a real, minor inconsistency worth unifying in a future pass, not papering over with a third red.
+- **Don't** introduce a second error/status red — `danger-red` (`#b3261e`) is now the one value used by both status badges and form errors (previously form errors read Pico's inherited `--pico-del-color` instead, a visually-close but distinct value; unified so there's exactly one).
 - **Don't** let a page-level heading imply every page needs one — several pages intentionally rely on the persistent nav's brand name instead of a redundant `h1`.

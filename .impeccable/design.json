@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-24T00:00:00Z",
+  "generatedAt": "2026-07-24T15:24:15Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -89,9 +89,17 @@
       "name": "Persistent Nav Shell",
       "kind": "nav",
       "refersTo": "nav-shell",
-      "description": "The app-shell chrome rendered on every authenticated page: brand/back-link, whoami, conditional admin link, logout.",
+      "description": "The app-shell chrome rendered on every authenticated page: brand/back-link, whoami, conditional admin link, logout. Keyboard focus gets a full-opacity Signal Blue outline rather than Pico's default low-opacity ring, which read as nearly imperceptible against the dark-navy fill.",
       "html": "<nav class=\"ds-nav-shell\"><ul><li><strong>spin-shortener</strong></li></ul><ul><li>jdoe (admin)</li><li><a href=\"#\">Manage users</a></li><li><button class=\"ds-btn-outline ds-btn-secondary\">Log out</button></li></ul></nav>",
-      "css": ".ds-nav-shell { display: flex; justify-content: space-between; align-items: center; background: var(--ss-navy-950, #0a1628); color: #fff; padding: 0.75rem 1rem; border-radius: 0.25rem; margin-top: 1rem; } .ds-nav-shell ul { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; align-items: center; } .ds-nav-shell a { color: #fff; text-decoration: underline; } .ds-nav-shell a:hover { color: var(--ss-signal-500, #276fb8); }"
+      "css": ".ds-nav-shell { display: flex; justify-content: space-between; align-items: center; background: var(--ss-navy-950, #0a1628); color: #fff; padding: 0.75rem 1rem; border-radius: 0.25rem; margin-top: 1rem; } .ds-nav-shell ul { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; align-items: center; } .ds-nav-shell a { color: #fff; text-decoration: underline; } .ds-nav-shell a:hover { color: var(--ss-signal-500, #276fb8); } .ds-nav-shell a:focus-visible, .ds-nav-shell button:focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; border-radius: 0.25rem; }"
+    },
+    {
+      "name": "Scrollable Data Table",
+      "kind": "custom",
+      "refersTo": "data-table-figure",
+      "description": "Every table lives inside a <figure> with overflow-x: auto. Its own scrollbar is styled (thin, Signal Blue thumb on a border-mist track) rather than left to the OS default, since a default overlay scrollbar (esp. macOS's auto-hiding style) gave no persistent hint that a table scrolls, leaving row actions undiscoverable off-screen. Deliberately a styled scrollbar, not a shadow/gradient edge-fade, to stay inside the No-Shadow Rule.",
+      "html": "<figure class=\"ds-table-figure\"><table><tbody><tr><td>yourhost/r/promo-2026</td><td>&hellip;</td></tr></tbody></table></figure>",
+      "css": ".ds-table-figure { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--ss-signal-500, #276fb8) var(--pico-muted-border-color, #d6deea); } .ds-table-figure::-webkit-scrollbar { height: 8px; } .ds-table-figure::-webkit-scrollbar-track { background: var(--pico-muted-border-color, #d6deea); border-radius: 999px; } .ds-table-figure::-webkit-scrollbar-thumb { background-color: var(--ss-signal-500, #276fb8); border-radius: 999px; }"
     }
   ],
   "narrative": {
@@ -114,12 +122,14 @@
       "Do reserve the 999px pill radius for the slug chip only.",
       "Do reserve the monospace font for slug/URL/timestamp data, never as a \"technical\" decorative costume.",
       "Do route every form/page error through .form-error rather than a one-off inline style.",
-      "Do give a real completed action visible payoff (see .form-success) instead of a silent form-clear."
+      "Do give a real completed action visible payoff (see .form-success) instead of a silent form-clear.",
+      "Do style scrollable tables' own scrollbar (thin, Signal Blue thumb on a border-mist track) rather than relying on the OS default, since an auto-hiding overlay scrollbar gives no persistent hint that a table scrolls."
     ],
     "donts": [
       "Don't add a box-shadow anywhere — the system is flat by construction, not by oversight.",
-      "Don't introduce a third status/error color without reconciling the two that already exist: danger-red (#b3261e, status badges) and Pico's inherited --pico-del-color (rgb(136, 56.5, 53), form errors) are visually close but not the same value.",
-      "Don't let a page-level heading imply every page needs one — several pages intentionally rely on the persistent nav's brand name instead of a redundant h1."
+      "Don't introduce a second error/status red — danger-red (#b3261e) is now the one value used by both status badges and form errors.",
+      "Don't let a page-level heading imply every page needs one — several pages intentionally rely on the persistent nav's brand name instead of a redundant h1.",
+      "Don't add a shadow/gradient edge-fade to signal a scrollable region — that would violate the No-Shadow Rule; use a styled scrollbar instead."
     ]
   }
 }
