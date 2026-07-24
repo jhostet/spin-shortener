@@ -101,7 +101,12 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   font-size: 0.85em;
   background: var(--ss-navy-950);
   color: #fff;
-  padding: 0.15em 0.6em;
+  /* Vertical padding in rem, not em: this chip renders at several
+   * different local font sizes (dashboard table cell, detail-page h1),
+   * and an em-relative value shrank to ~1.7px in the smallest of those
+   * contexts — well under the ~4px legibility floor. A rem value stays
+   * a fixed, adequate amount of breathing room in every context. */
+  padding: 0.3rem 0.6em;
   border-radius: 999px;
   text-decoration: none;
   line-height: 1.6;
