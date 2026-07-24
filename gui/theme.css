@@ -80,6 +80,17 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   --pico-color: #fff;
   --pico-border-color: rgba(255, 255, 255, 0.4);
 }
+/* Pico's default focus ring is a low-opacity box-shadow tuned for a light
+ * card background — against this nav's dark-navy fill it's nearly
+ * imperceptible, leaving keyboard users with no visible "where am I" on
+ * the one piece of chrome present on every authenticated page. A full-
+ * opacity Signal Blue outline reads clearly on navy and stays on-brand. */
+#app-header nav a:focus-visible,
+#app-header nav button:focus-visible {
+  outline: 2px solid var(--ss-signal-500);
+  outline-offset: 2px;
+  border-radius: var(--pico-border-radius);
+}
 
 /* Slug chip — the shortened-link signature: a monospace pill on navy,
  * used wherever a short slug/URL appears so the product's core artifact

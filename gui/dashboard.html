@@ -18,6 +18,17 @@
       --pico-form-element-spacing-vertical: 0.4rem;
       font-size: 0.75rem;
     }
+    /* Destination holds a raw URL with no natural length limit, so it was
+     * the one column stretching the whole table wider than the row-action
+     * buttons' own reachable width at ordinary desktop widths, not just
+     * narrow ones. Truncate visually; the full URL stays in the DOM text
+     * (still readable to screen readers) and in `title` for sighted hover. */
+    #links-table .destination-cell {
+      max-width: 22rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -158,8 +169,10 @@
                 </label>
                 <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
               </div>
-              <button type="submit" class="save-edit-btn">Save</button>
-              <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
+              <div role="group">
+                <button type="submit" class="save-edit-btn">Save</button>
+                <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
+              </div>
               <p class="edit-error form-error" role="alert"></p>
             </form>
           </td>
@@ -197,7 +210,7 @@
             ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
           </td>
           <td>${escapeHtml(link.owner)}</td>
-          <td>${escapeHtml(link.target_url)}</td>
+          <td class="destination-cell" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
           <td>${formatDateTime(link.created_at)}</td>
           <td><span class="status-badge status-${escapeHtml(link.status)}">${escapeHtml(link.status)}</span></td>
           <td>${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>

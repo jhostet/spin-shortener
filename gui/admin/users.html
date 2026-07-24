@@ -6,6 +6,22 @@
   <title>spin-shortener — Manage users</title>
   <link rel="stylesheet" href="../vendor/pico.min.css" />
   <link rel="stylesheet" href="../theme.css" />
+  <style>
+    /* Matches dashboard.html's edit-row button group so Save/Cancel stay
+     * compact and reachable on narrow viewports without side-scrolling.
+     * Pico's [role=group] defaults to width:100% with flex:1 1 auto
+     * children, which is exactly the bug (Save ballooning to the
+     * containing <td>'s full width) — width:auto shrinks the group back
+     * to its content instead of the wide colspan cell. */
+    #users-table .edit-row [role=group] {
+      width: auto;
+    }
+    #users-table .edit-row [role=group] > * {
+      --pico-form-element-spacing-horizontal: 0.5rem;
+      --pico-form-element-spacing-vertical: 0.4rem;
+      font-size: 0.75rem;
+    }
+  </style>
 </head>
 <body>
   <header id="app-header" class="container"></header>
@@ -117,8 +133,10 @@
               <label>
                 <input type="checkbox" class="edit-disabled" ${user.disabled ? "checked" : ""} /> Disabled
               </label>
-              <button type="submit" class="save-edit-btn">Save</button>
-              <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
+              <div role="group">
+                <button type="submit" class="save-edit-btn">Save</button>
+                <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
+              </div>
               <p class="edit-error form-error" role="alert"></p>
             </form>
           </td>
@@ -149,7 +167,7 @@
           <td>${escapeHtml(user.username)}</td>
           <td>${escapeHtml(user.role)}</td>
           <td>${user.permissions.length ? escapeHtml(user.permissions.map((p) => PERMISSION_LABELS[p] || p).join(", ")) : "—"}</td>
-          <td>${user.disabled ? "disabled" : "active"}</td>
+          <td><span class="status-badge status-${user.disabled ? "disabled" : "active"}">${user.disabled ? "disabled" : "active"}</span></td>
           <td>
             <button class="edit-btn outline" data-username="${escapeHtml(user.username)}">Edit</button>
             <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}">Delete</button>
