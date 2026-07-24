@@ -94,6 +94,47 @@ async function copyToClipboard(text, btn) {
   }
 }
 
+// Replaces the native confirm() for destructive actions (link/user delete)
+// with an on-brand Pico <dialog>. Resolves true/false; never rejects.
+// Confirm stays outline+secondary and Cancel stays the plain default
+// button — matching this app's own established convention that a
+// destructive action reads through de-emphasis, not a bold "danger"
+// button (see DESIGN.md's row-action Delete styling) — so the visually
+// prominent button in the dialog is the safe one, not the destructive one.
+function confirmDialog(message, { confirmLabel = "Delete", cancelLabel = "Cancel" } = {}) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.innerHTML = `
+      <article>
+        <p>${escapeHtml(message)}</p>
+        <footer>
+          <button type="button" data-action="cancel">${escapeHtml(cancelLabel)}</button>
+          <button type="button" class="outline secondary" data-action="confirm">${escapeHtml(confirmLabel)}</button>
+        </footer>
+      </article>
+    `;
+    document.body.appendChild(dialog);
+
+    function settle(result) {
+      dialog.close();
+      dialog.remove();
+      resolve(result);
+    }
+
+    dialog.querySelector('[data-action="cancel"]').addEventListener("click", () => settle(false));
+    dialog.querySelector('[data-action="confirm"]').addEventListener("click", () => settle(true));
+    // Native Esc-key dismissal fires "cancel", not "close" — treat it as a no.
+    dialog.addEventListener("cancel", () => settle(false));
+    // A click that lands on the <dialog> element itself (not its <article>
+    // content) is a backdrop click in a native dialog — dismiss like Cancel.
+    dialog.addEventListener("click", (e) => {
+      if (e.target === dialog) settle(false);
+    });
+
+    dialog.showModal();
+  });
+}
+
 // Maps API error codes (the JSON body's `error` field) to human-readable
 // text. Codes not listed here fall back to the caller-supplied default
 // rather than ever surfacing the raw machine code to a user.

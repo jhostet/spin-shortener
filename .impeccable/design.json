@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-24T15:24:15Z",
+  "generatedAt": "2026-07-24T18:56:00Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -100,6 +100,14 @@
       "description": "Every table lives inside a <figure> with overflow-x: auto. Its own scrollbar is styled (thin, Signal Blue thumb on a border-mist track) rather than left to the OS default, since a default overlay scrollbar (esp. macOS's auto-hiding style) gave no persistent hint that a table scrolls, leaving row actions undiscoverable off-screen. Deliberately a styled scrollbar, not a shadow/gradient edge-fade, to stay inside the No-Shadow Rule.",
       "html": "<figure class=\"ds-table-figure\"><table><tbody><tr><td>yourhost/r/promo-2026</td><td>&hellip;</td></tr></tbody></table></figure>",
       "css": ".ds-table-figure { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--ss-signal-500, #276fb8) var(--pico-muted-border-color, #d6deea); } .ds-table-figure::-webkit-scrollbar { height: 8px; } .ds-table-figure::-webkit-scrollbar-track { background: var(--pico-muted-border-color, #d6deea); border-radius: 999px; } .ds-table-figure::-webkit-scrollbar-thumb { background-color: var(--ss-signal-500, #276fb8); border-radius: 999px; }"
+    },
+    {
+      "name": "Confirmation Dialog",
+      "kind": "custom",
+      "refersTo": "confirm-dialog",
+      "description": "Replaces the native confirm() for destructive actions (link delete, user delete) with Pico's own dialog/article component, built dynamically by a shared confirmDialog(message) helper rather than duplicated markup per page. Dismissible via Cancel, Esc, or a backdrop click. Button styling deliberately inverts the row-level convention: Cancel is Pico's plain default (primary) button, Confirm/Delete stays outline+secondary — the same de-emphasis the row Delete button already uses — so the visually prominent button is the safe one, not the destructive one.",
+      "html": "<dialog open><article><p>Delete the link \"promo-2026\"? This can't be undone.</p><footer><button type=\"button\">Cancel</button><button type=\"button\" class=\"ds-btn-outline ds-btn-secondary\">Delete</button></footer></article></dialog>",
+      "css": ".ds-btn-outline.ds-btn-secondary { color: var(--ss-slate-500, #5b6b85); border-color: var(--ss-slate-500, #5b6b85); background: transparent; }"
     }
   ],
   "narrative": {
@@ -123,7 +131,8 @@
       "Do reserve the monospace font for slug/URL/timestamp data, never as a \"technical\" decorative costume.",
       "Do route every form/page error through .form-error rather than a one-off inline style.",
       "Do give a real completed action visible payoff (see .form-success) instead of a silent form-clear.",
-      "Do style scrollable tables' own scrollbar (thin, Signal Blue thumb on a border-mist track) rather than relying on the OS default, since an auto-hiding overlay scrollbar gives no persistent hint that a table scrolls."
+      "Do style scrollable tables' own scrollbar (thin, Signal Blue thumb on a border-mist track) rather than relying on the OS default, since an auto-hiding overlay scrollbar gives no persistent hint that a table scrolls.",
+      "Do use confirmDialog() (app.js) for destructive-action confirmation instead of the native confirm() — and keep Cancel as the visually prominent button, Confirm/Delete de-emphasized, matching the row-level Delete convention."
     ],
     "donts": [
       "Don't add a box-shadow anywhere — the system is flat by construction, not by oversight.",

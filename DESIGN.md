@@ -186,6 +186,10 @@ Modest, consistent corner rounding (`0.25rem`, Pico's default) on every card, bu
 ### Empty States
 - A single centered, muted-color (`slate-muted`) row spanning the table's full column count — used identically across the links, users, and both analytics tables whenever a list has nothing to show. The links table additionally distinguishes "nothing exists yet" from "nothing matches the current filter" with different copy.
 
+### Confirmation Dialogs
+- A shared `confirmDialog(message)` helper (`app.js`) replaces the browser's native `confirm()` for both destructive actions in the app (link delete, user delete) with Pico's own `<dialog>`/`<article>` component instead of an unthemed OS popup. Built dynamically (no markup duplicated per page); resolves a promise, dismissible via its own Cancel button, the Esc key, or a backdrop click.
+- **Button styling inverts the row-level convention on purpose:** Cancel renders as Pico's plain default (primary) button, while the destructive action stays `outline secondary` — the same de-emphasis the row-level Delete button already uses (see Buttons above). The visually prominent button in the dialog is the *safe* one, not the destructive one.
+
 ## Do's and Don'ts
 
 ### Do:

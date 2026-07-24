@@ -130,6 +130,23 @@
       return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
     }
 
+    // Mirrors the server's own invalid_window_range check (start >= end is
+    // invalid, not just start > end) so a bad combination is caught natively
+    // before submission instead of round-tripping to the API to find out.
+    // datetime-local values are fixed-width "YYYY-MM-DDTHH:mm" strings, so a
+    // plain string comparison is already correct chronological ordering.
+    function wireWindowValidation(startInput, endInput) {
+      const validate = () => {
+        if (startInput.value && endInput.value && startInput.value >= endInput.value) {
+          endInput.setCustomValidity("Expires must be after Starts.");
+        } else {
+          endInput.setCustomValidity("");
+        }
+      };
+      startInput.addEventListener("input", validate);
+      endInput.addEventListener("input", validate);
+    }
+
     function formatWindowField(value, { warnIfSoon = false, noteIfFuture = false } = {}) {
       if (!value) return "—";
       const text = escapeHtml(formatDateTime(value));
@@ -255,7 +272,9 @@
         body.appendChild(row);
         if (canEditLink(link)) {
           row.insertAdjacentHTML("afterend", editRowHtml(link));
-          body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`).style.display = "none";
+          const editRow = body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`);
+          editRow.style.display = "none";
+          wireWindowValidation(editRow.querySelector(".edit-start-at"), editRow.querySelector(".edit-end-at"));
         }
       }
 
@@ -268,7 +287,7 @@
 
       body.querySelectorAll(".delete-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          if (!confirm(`Delete the link "${btn.dataset.slug}"? This can't be undone.`)) return;
+          if (!await confirmDialog(`Delete the link "${btn.dataset.slug}"? This can't be undone.`)) return;
           const errorEl = document.getElementById("links-error");
           errorEl.textContent = "";
           const { ok, data } = await api.delete(`/links/${btn.dataset.slug}`);
@@ -423,6 +442,8 @@
       btn.click();
       btn.closest("tr").scrollIntoView({ block: "center" });
     }
+
+    wireWindowValidation(document.getElementById("start-at"), document.getElementById("end-at"));
 
     // loadMe() must resolve before loadLinks()'s first render — renderLinksTable()
     // reads currentPrincipal (set by loadMe()) to decide whether to show each

@@ -204,7 +204,7 @@
 
       body.querySelectorAll(".delete-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          if (!confirm(`Delete the user "${btn.dataset.username}"? This can't be undone.`)) return;
+          if (!await confirmDialog(`Delete the user "${btn.dataset.username}"? This can't be undone.`)) return;
           const { ok, data } = await api.delete(`/users/${encodeURIComponent(btn.dataset.username)}`);
           if (!ok) {
             document.getElementById("users-error").textContent = friendlyError(data, "Could not delete user.");
