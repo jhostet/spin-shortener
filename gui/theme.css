@@ -5,6 +5,16 @@
  */
 
 :root {
+  /* Pico scales --pico-font-size up with viewport width by default (up to
+   * 131.25% at >=1536px), which is tuned for prose/marketing content. This
+   * is a dense admin app (tables + forms), so pin it flat and tighten the
+   * spacing/type scale that rides on top of it. */
+  --pico-font-size: 100%;
+  --pico-line-height: 1.4;
+  --pico-spacing: 0.75rem;
+  --pico-form-element-spacing-vertical: 0.5rem;
+  --pico-form-element-spacing-horizontal: 0.75rem;
+
   --pico-primary: #2b7fd1;
   --pico-primary-background: #2b7fd1;
   --pico-primary-hover: #1e6bb8;
@@ -39,6 +49,11 @@
 body {
   background: var(--pico-background-color);
 }
+
+/* Trim Pico's prose-scale headings down for admin-density text. */
+h1 { --pico-font-size: 1.5rem; --pico-typography-spacing-top: 2rem; }
+h2 { --pico-font-size: 1.25rem; --pico-typography-spacing-top: 1.75rem; }
+h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 
 /* Persistent nav chrome */
 #app-header nav {
