@@ -277,96 +277,105 @@
           wireWindowValidation(editRow.querySelector(".edit-start-at"), editRow.querySelector(".edit-end-at"));
         }
       }
-
-      body.querySelectorAll(".copy-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const shortUrl = `${location.origin}/r/${btn.dataset.slug}`;
-          copyToClipboard(shortUrl, btn);
-        });
-      });
-
-      body.querySelectorAll(".delete-btn").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          if (!await confirmDialog(`Delete the link "${btn.dataset.slug}"? This can't be undone.`)) return;
-          const errorEl = document.getElementById("links-error");
-          errorEl.textContent = "";
-          const { ok, data } = await api.delete(`/links/${btn.dataset.slug}`);
-          if (!ok) {
-            errorEl.textContent = friendlyError(data, "Could not delete link.");
-            return;
-          }
-          loadLinks();
-        });
-      });
-
-      body.querySelectorAll(".edit-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const editRow = body.querySelector(`tr.edit-row[data-slug="${CSS.escape(btn.dataset.slug)}"]`);
-          editRow.style.display = editRow.style.display === "none" ? "" : "none";
-        });
-      });
-
-      body.querySelectorAll(".cancel-edit-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          btn.closest("tr.edit-row").style.display = "none";
-        });
-      });
-
-      body.querySelectorAll(".edit-form").forEach((form) => {
-        form.addEventListener("submit", async (e) => {
-          e.preventDefault();
-          const editRow = form.closest("tr.edit-row");
-          const slug = editRow.dataset.slug;
-          const targetUrl = form.querySelector(".edit-target-url").value.trim();
-          const startAt = datetimeLocalToIso(form.querySelector(".edit-start-at").value);
-          const endAt = datetimeLocalToIso(form.querySelector(".edit-end-at").value);
-          const newPassword = form.querySelector(".edit-password").value;
-          const removePassword = form.querySelector(".edit-remove-password").checked;
-          const errorEl = form.querySelector(".edit-error");
-          errorEl.textContent = "";
-
-          const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt });
-          if (!ok) {
-            errorEl.textContent = friendlyError(data, "Could not update link.");
-            return;
-          }
-
-          // Reflect the saved destination/schedule in the visible row immediately —
-          // not just in the "saved" message — in case the password step below fails
-          // and this function returns before reaching the full loadLinks() refresh.
-          const linkRecord = allLinks.find((l) => l.slug === slug);
-          if (linkRecord) {
-            linkRecord.target_url = targetUrl;
-            linkRecord.start_at = startAt;
-            linkRecord.end_at = endAt;
-          }
-          const displayRow = editRow.previousElementSibling;
-          if (displayRow) {
-            displayRow.children[2].textContent = targetUrl;
-            displayRow.children[5].innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
-            displayRow.children[6].innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
-          }
-
-          if (removePassword || newPassword) {
-            const passwordResult = await api.post(`/links/${slug}/password`, {
-              password: removePassword ? null : newPassword,
-            });
-            if (!passwordResult.ok) {
-              // The destination/schedule PATCH above already succeeded — say so,
-              // so a failed password change never reads as "nothing happened."
-              errorEl.textContent =
-                "Destination and schedule saved. " +
-                friendlyError(passwordResult.data, "Could not update link password.", {
-                  invalid_password: "Link passwords must be at least 4 characters.",
-                });
-              return;
-            }
-          }
-
-          loadLinks();
-        });
-      });
     }
+
+    // Row actions are wired once via delegation on #links-body, not re-queried
+    // and re-attached to every button on every render — renderLinksTable() reruns
+    // on every sort click and (debounced) filter keystroke, and re-listening
+    // to every row's buttons each time is wasted work that scales with row count
+    // for no benefit, since the buttons' behavior never depends on render state.
+    async function handleCopyClick(btn) {
+      const shortUrl = `${location.origin}/r/${btn.dataset.slug}`;
+      copyToClipboard(shortUrl, btn);
+    }
+
+    async function handleDeleteClick(btn) {
+      if (!await confirmDialog(`Delete the link "${btn.dataset.slug}"? This can't be undone.`)) return;
+      const errorEl = document.getElementById("links-error");
+      errorEl.textContent = "";
+      const { ok, data } = await api.delete(`/links/${btn.dataset.slug}`);
+      if (!ok) {
+        errorEl.textContent = friendlyError(data, "Could not delete link.");
+        return;
+      }
+      loadLinks();
+    }
+
+    function handleEditToggleClick(btn) {
+      const editRow = document.querySelector(`#links-body tr.edit-row[data-slug="${CSS.escape(btn.dataset.slug)}"]`);
+      editRow.style.display = editRow.style.display === "none" ? "" : "none";
+    }
+
+    function handleCancelEditClick(btn) {
+      btn.closest("tr.edit-row").style.display = "none";
+    }
+
+    async function handleEditFormSubmit(form) {
+      const editRow = form.closest("tr.edit-row");
+      const slug = editRow.dataset.slug;
+      const targetUrl = form.querySelector(".edit-target-url").value.trim();
+      const startAt = datetimeLocalToIso(form.querySelector(".edit-start-at").value);
+      const endAt = datetimeLocalToIso(form.querySelector(".edit-end-at").value);
+      const newPassword = form.querySelector(".edit-password").value;
+      const removePassword = form.querySelector(".edit-remove-password").checked;
+      const errorEl = form.querySelector(".edit-error");
+      errorEl.textContent = "";
+
+      const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt });
+      if (!ok) {
+        errorEl.textContent = friendlyError(data, "Could not update link.");
+        return;
+      }
+
+      // Reflect the saved destination/schedule in the visible row immediately —
+      // not just in the "saved" message — in case the password step below fails
+      // and this function returns before reaching the full loadLinks() refresh.
+      const linkRecord = allLinks.find((l) => l.slug === slug);
+      if (linkRecord) {
+        linkRecord.target_url = targetUrl;
+        linkRecord.start_at = startAt;
+        linkRecord.end_at = endAt;
+      }
+      const displayRow = editRow.previousElementSibling;
+      if (displayRow) {
+        displayRow.children[2].textContent = targetUrl;
+        displayRow.children[5].innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
+        displayRow.children[6].innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
+      }
+
+      if (removePassword || newPassword) {
+        const passwordResult = await api.post(`/links/${slug}/password`, {
+          password: removePassword ? null : newPassword,
+        });
+        if (!passwordResult.ok) {
+          // The destination/schedule PATCH above already succeeded — say so,
+          // so a failed password change never reads as "nothing happened."
+          errorEl.textContent =
+            "Destination and schedule saved. " +
+            friendlyError(passwordResult.data, "Could not update link password.", {
+              invalid_password: "Link passwords must be at least 4 characters.",
+            });
+          return;
+        }
+      }
+
+      loadLinks();
+    }
+
+    document.getElementById("links-body").addEventListener("click", (e) => {
+      const btn = e.target.closest(".copy-btn, .delete-btn, .edit-btn, .cancel-edit-btn");
+      if (!btn) return;
+      if (btn.matches(".copy-btn")) handleCopyClick(btn);
+      else if (btn.matches(".delete-btn")) handleDeleteClick(btn);
+      else if (btn.matches(".edit-btn")) handleEditToggleClick(btn);
+      else if (btn.matches(".cancel-edit-btn")) handleCancelEditClick(btn);
+    });
+
+    document.getElementById("links-body").addEventListener("submit", (e) => {
+      if (!e.target.matches(".edit-form")) return;
+      e.preventDefault();
+      handleEditFormSubmit(e.target);
+    });
 
     document.getElementById("create-form").addEventListener("submit", async (e) => {
       e.preventDefault();
