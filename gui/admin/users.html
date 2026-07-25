@@ -12,8 +12,13 @@
      * Pico's [role=group] defaults to width:100% with flex:1 1 auto
      * children, which is exactly the bug (Save ballooning to the
      * containing <td>'s full width) — width:auto shrinks the group back
-     * to its content instead of the wide colspan cell. */
-    #users-table .edit-row [role=group] {
+     * to its content instead of the wide colspan cell. Also covers the
+     * plain Edit/Delete row-action group (added so the mobile gap/flex-wrap
+     * fix below has an actual [role=group] to target — these buttons
+     * previously weren't wrapped in one at all, so that fix silently never
+     * applied; confirmed live via a zero computed gap between the two). */
+    #users-table .edit-row [role=group],
+    #users-table tbody > tr:not(.edit-row) td:last-child [role=group] {
       width: auto;
     }
     /* Same sticky action-column treatment as dashboard.html's #links-table:
@@ -47,10 +52,13 @@
       }
       /* Shrinks the 2-button (Edit/Delete) action column's rendered width
        * so there's less to clear in the first place — same technique as
-       * dashboard.html's #links-table. */
+       * dashboard.html's #links-table. A small gap stops Edit from touching
+       * the destructive Delete button directly beneath it (confirmed live:
+       * zero separation otherwise, a mis-tap risk on a touch device). */
       #users-table tbody > tr:not(.edit-row) td:last-child [role=group] {
         flex-wrap: wrap;
         max-width: 70px;
+        gap: 0.25rem;
       }
       /* Hiding Permissions alone still left the sticky column overlapping
        * the tail of "Status"/"active" (confirmed live — clipped to
@@ -217,10 +225,12 @@
           <td>${user.permissions.length ? escapeHtml(user.permissions.map((p) => PERMISSION_LABELS[p] || p).join(", ")) : "—"}</td>
           <td><span class="status-badge status-${user.disabled ? "disabled" : "active"}">${user.disabled ? "disabled" : "active"}</span></td>
           <td>
-            <button class="edit-btn outline" data-username="${escapeHtml(user.username)}" aria-label="Edit user ${escapeHtml(user.username)}">Edit</button>
-            ${currentPrincipal && user.username === currentPrincipal.username ? "" : `
-              <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}" aria-label="Delete user ${escapeHtml(user.username)}">Delete</button>
-            `}
+            <div role="group">
+              <button class="edit-btn outline" data-username="${escapeHtml(user.username)}" aria-label="Edit user ${escapeHtml(user.username)}">Edit</button>
+              ${currentPrincipal && user.username === currentPrincipal.username ? "" : `
+                <button class="delete-btn secondary outline" data-username="${escapeHtml(user.username)}" aria-label="Delete user ${escapeHtml(user.username)}">Delete</button>
+              `}
+            </div>
           </td>
         `;
         body.appendChild(row);
