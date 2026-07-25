@@ -17,7 +17,7 @@ import qrcode.image.svg as qr_svg
 
 from auth import Principal
 from links import can_view, get_link
-from responses import Response, json_response
+from responses import Response, SECURITY_HEADERS, json_response
 
 BOX_SIZE_BY_PRESET = {"web": 6, "print": 20}
 
@@ -61,7 +61,7 @@ async def handle_qr(store, principal: Principal, slug: str, query: dict, public_
     short_url = f"{public_base_url.rstrip('/')}/r/{slug}"
     body, content_type, ext = _render(short_url, fmt, size)
 
-    headers = {"content-type": content_type}
+    headers = {**SECURITY_HEADERS, "content-type": content_type}
     if download:
         headers["content-disposition"] = f'attachment; filename="{slug}-qr.{ext}"'
 

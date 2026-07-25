@@ -30,8 +30,22 @@ class Response:
     body: Optional[bytes]
 
 
+# This is a pure JSON API — nothing it returns should ever be rendered,
+# executed, or framed by a browser, so the CSP can be maximally strict
+# (`default-src 'none'`) unlike the GUI pages' CSP, which has to accommodate
+# inline scripts. Every response goes through `json_response` below except
+# `qr.py`'s image responses, which merge these headers in separately.
+SECURITY_HEADERS: dict[str, str] = {
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "x-frame-options": "DENY",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "content-security-policy": "default-src 'none'",
+}
+
+
 def json_response(status: int, data: dict[str, Any], headers: Optional[dict[str, str]] = None) -> Response:
-    hdrs = {"content-type": "application/json"}
+    hdrs = {**SECURITY_HEADERS, "content-type": "application/json"}
     if headers:
         hdrs.update(headers)
     return Response(status, hdrs, json.dumps(data).encode("utf-8"))

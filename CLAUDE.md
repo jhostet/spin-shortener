@@ -8,17 +8,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-`spin.toml` is the single source of truth for routing and build wiring. It defines three HTTP triggers, each mapped to a separate Wasm component:
+`spin.toml` is the single source of truth for routing and build wiring. It defines four Wasm components across six HTTP triggers (two components — `gui` and `gui-pages` — split the GUI's routes between them):
 
 - `route = "/r/..."` → **`redirect`** component (`redirect/`, Go) — resolves short links and issues redirects; the hot path, hit on every click. Built with `go tool componentize-go build`, compiling `redirect/main.go` (+ `passwordgate.go`, the embedded `prompt.html`, and the pure-logic `redirect/linkgate/` package) to `redirect/main.wasm`. Uses `github.com/spinframework/spin-go-sdk/v3/http` and registers a handler via `spinhttp.Handle`. `allowed_outbound_hosts = []` — no outbound network access, by design (see "Security tradeoffs" below for what this rules out).
 - `route = "/api/..."` → **`api`** component (`api/`, Python) — all authoring/auth/analytics logic: link CRUD, custom slugs, passwords, time windows, QR generation, analytics aggregation, local auth/sessions, and user management. Built with `uv run componentize-py -w spin:up/http-trigger@4.0.0 componentize app -o app.wasm`, compiling `api/app.py` (the WASI entrypoint/router) plus `auth.py`/`links.py`/`qr.py`/`analytics.py`/`users.py`/`responses.py`. Uses `spin_sdk.http.Handler`.
-- `route = "/..."` (catch-all) → **`gui`** component — a prebuilt static file server (`spin_static_fs.wasm`, fetched by digest from the `spin-fileserver` GitHub release) serving `gui/`: `login.html`, `dashboard.html`, `links/detail.html` (analytics + QR), `admin/users.html`, styled with a vendored Pico CSS (`gui/vendor/`).
+- `route = "/app.js"`, `route = "/theme.css"`, `route = "/vendor/pico.min.css"` → **`gui`** component — a prebuilt static file server (`spin_static_fs.wasm`, fetched by digest from the `spin-fileserver` GitHub release) serving only these genuinely-static, non-HTML assets. Its `files` mapping still covers all of `gui/` (unchanged from before the route split — narrowing it broke file resolution, see below), but only these 3 exact routes are actually reachable. **Route gotcha, confirmed live:** once this component has more than one trigger route, `spin_static_fs`'s internal path resolution breaks specifically for wildcard (`/...`) routes — a `/vendor/...` wildcard 404'd on every request; the identical file under the exact route `/vendor/pico.min.css` served correctly. Stick to exact routes for this component if any more assets are ever added to it.
+- `route = "/..."` (catch-all) → **`gui-pages`** component (`gui-pages/`, Python, same `componentize-py` toolchain as `api`) — serves the GUI's actual HTML pages (`index.html`, `login.html`, `dashboard.html`, `admin/users.html`, `links/detail.html`) via a fixed path→file allowlist (`gui-pages/routing.py`), and attaches the security response headers below to every response. Introduced specifically because `spin_static_fs` has no custom-header capability at all (confirmed: only a `CACHE_CONTROL` env var) — security headers (CSP, `X-Frame-Options`, etc.) are only meaningful on the navigated document itself, not on a `.js`/`.css` subresource, so only the actual HTML pages needed to move off the static-fileserver.
 
-Each component is built independently and only in its own `workdir` (`redirect/` or `api/`); there is no shared build step or root-level package manifest. When editing one component, you generally don't need to touch the others' toolchains.
+Each component is built independently and only in its own `workdir`; there is no shared build step or root-level package manifest. When editing one component, you generally don't need to touch the others' toolchains.
 
-**Why Go for `redirect` but Python for `api`/`gui`:** the redirect path is the hot path (every short-link click) and is written in Go for raw performance. The `api`/`gui` surfaces (link creation, management, frontend) aren't on that hot path, so they're written in Python to prioritize developer velocity and code understandability over raw speed — the performance tradeoff isn't worth it there. Keep this split in mind when adding new functionality: if it's on the redirect hot path, it likely belongs in the Go component; otherwise default to Python for velocity.
+**Why Go for `redirect` but Python for `api`/`gui-pages`:** the redirect path is the hot path (every short-link click) and is written in Go for raw performance. The `api`/`gui-pages` surfaces (link creation, management, frontend) aren't on that hot path, so they're written in Python to prioritize developer velocity and code understandability over raw speed — the performance tradeoff isn't worth it there. Keep this split in mind when adding new functionality: if it's on the redirect hot path, it likely belongs in the Go component; otherwise default to Python for velocity.
 
-Both `redirect/main.wasm` and `api/app.wasm` are build artifacts and are gitignored — they must be rebuilt via `spin up --build` (or the per-component build commands in `spin.toml`) after any source change; they are not checked into the repo.
+`redirect/main.wasm`, `api/app.wasm`, and `gui-pages/app.wasm` are all build artifacts and are gitignored — they must be rebuilt via `spin up --build` (or the per-component build commands in `spin.toml`) after any source change; they are not checked into the repo.
+
+## Security response headers
+
+Every response from `redirect`, `api`, and `gui-pages` sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, and `Strict-Transport-Security`. Each component's CSP is scoped to what it actually serves:
+
+- `gui-pages` (the real HTML pages): `default-src 'self'` plus `script-src`/`style-src 'self' 'unsafe-inline'` — **the `'unsafe-inline'` is a deliberate, disclosed tradeoff, not an oversight.** The GUI's pages carry roughly 700 lines of inline `<script>`/`<style>` across them; rewriting all of that to external files + nonces so the CSP could drop `'unsafe-inline'` entirely was out of scope for this pass (see `TASKS.md`'s future-work note). Every other directive is locked down for real: no plugins/objects, no framing, no cross-origin form submission, no base-tag hijacking. `img-src` includes `data:` because Pico CSS renders several UI affordances (sortable-column chevrons, the search icon, the calendar icon) as inline `data:image/svg+xml` background-images — confirmed live that `img-src 'self'` alone produced real CSP-violation console errors blocking them, caught only by loading the actual pages, not by reading the CSS.
+- `api` (pure JSON): `default-src 'none'` — nothing it returns should ever be rendered, executed, or framed.
+- `redirect`'s password-prompt page (the one HTML `redirect` renders): `script-src 'none'` (the page has zero `<script>` tags) plus `style-src 'unsafe-inline'` for its one inline `style="color: red"` error-message attribute.
+
+The `gui` component (the static asset routes above) gets none of these — headers on a `.js`/`.css` subresource response don't provide any real protection the navigated-document headers don't already cover.
 
 ## Task tracking
 - Maintain a `TASKS.md` file in the repo root as the single source of truth for multi-step work.
@@ -29,7 +40,7 @@ Both `redirect/main.wasm` and `api/app.wasm` are build artifacts and are gitigno
 
 ## Commands
 
-Build and run the whole app (all three components) locally:
+Build and run the whole app (all four components) locally:
 
 ```bash
 SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD=<some-password> spin up --build --runtime-config-file runtime-config.toml
@@ -49,9 +60,12 @@ go tool componentize-go build
 
 # api (Python) — from api/
 uv run componentize-py -w spin:up/http-trigger@4.0.0 componentize app -o app.wasm
+
+# gui-pages (Python) — from gui-pages/
+uv run componentize-py -w spin:up/http-trigger@4.0.0 componentize app -o app.wasm
 ```
 
-Python component dependencies (`componentize-py`, `spin-sdk`) are managed by [`uv`](https://docs.astral.sh/uv/) and pinned in `api/pyproject.toml`/`api/uv.lock`. `uv run` syncs `api/.venv` from the lockfile automatically before running, so no manual install step is required — even on a fresh clone, `spin up --build` just works. (To set up the environment yourself, e.g. for editor/language server support, run `uv sync` from `api/`.)
+Python component dependencies (`componentize-py`, `spin-sdk`) are managed by [`uv`](https://docs.astral.sh/uv/) and pinned in each Python component's own `pyproject.toml`/`uv.lock` (`api/` and `gui-pages/` each have their own — they're independent, not shared). `uv run` syncs each component's own `.venv` from its lockfile automatically before running, so no manual install step is required — even on a fresh clone, `spin up --build` just works. (To set up the environment yourself, e.g. for editor/language server support, run `uv sync` from `api/` or `gui-pages/`.)
 
 ## Tests
 
@@ -63,11 +77,14 @@ go test ./linkgate/...
 
 # api (Python) — from api/
 uv run pytest
+
+# gui-pages (Python) — from gui-pages/
+uv run pytest
 ```
 
 **`go test ./...` (bare), `go build ./...`, and `go vet ./...` will FAIL** on `package main` with `wit_exports.go:934:6: missing function body` — `main.go`/`passwordgate.go` import `spin-go-sdk`, which only compiles via the special `go tool componentize-go build` toolchain, not plain `go`. This is expected, not a broken build. Only `redirect/linkgate/` (zero `spin-go-sdk` imports) is host-testable — new pure Go logic belongs there, not in `package main`.
 
-`app.py` is intentionally excluded from `pytest` — it's the real WASI entrypoint (routing dispatch + actual `spin_sdk.key_value`/`variables`/`http.Handler` I/O) and can't be imported under host Python (`spin_sdk`'s submodules fail at import time outside the actual componentize-py build/run pipeline). It's covered by manual `spin up --build --runtime-config-file runtime-config.toml` + curl/browser smoke testing instead. `auth.py`, `links.py`, `qr.py`, and `responses.py` have zero `spin_sdk` imports and are fully unit-tested under `uv run pytest` with an in-memory `FakeStore` (`api/tests/fakes.py`) standing in for the real KV store. New pure logic should follow this same pattern: take `store`/`request` as plain parameters, and use `responses.Request`/`responses.Response` (not `spin_sdk.http`'s) — these are local dataclasses that behave identically at runtime (the real `Handler.handle()` only ever does duck-typed attribute access, never an `isinstance` check) while keeping the module host-importable.
+`app.py` is intentionally excluded from `pytest` in both `api/` and `gui-pages/` — it's the real WASI entrypoint (routing dispatch + actual `spin_sdk.key_value`/`variables`/`http.Handler` I/O, or in `gui-pages`'s case, real WASI file reads) and can't be imported under host Python (`spin_sdk`'s submodules fail at import time outside the actual componentize-py build/run pipeline). It's covered by manual `spin up --build --runtime-config-file runtime-config.toml` + curl/browser smoke testing instead. `api/auth.py`, `links.py`, `qr.py`, `responses.py`, and `gui-pages/routing.py` have zero `spin_sdk` imports and are fully unit-tested under `uv run pytest` (`api/` also uses an in-memory `FakeStore`, `api/tests/fakes.py`, standing in for the real KV store — `gui-pages` needs no such fake, since `routing.py`'s `build_response` takes a `read_file` callable as a parameter instead of touching the filesystem directly). New pure logic should follow this same pattern: take `store`/`request`/`read_file`-style dependencies as plain parameters, and (in `api/`) use `responses.Request`/`responses.Response` (not `spin_sdk.http`'s) — these are local dataclasses that behave identically at runtime (the real `Handler.handle()` only ever does duck-typed attribute access, never an `isinstance` check) while keeping the module host-importable.
 
 ## Time-windowed links
 
@@ -88,7 +105,7 @@ These are deliberate, disclosed limitations, not oversights — each stems from 
 
 - **No brute-force rate limiting on login or link passwords.** Neither `redirect` nor `api` has any `allowed_outbound_hosts` entries (confirmed: Spin denies all outbound HTTP by default when the key is omitted from a component's manifest), so neither component can reach an external atomic rate limiter (e.g. Redis `INCR`/`EXPIRE`). A KV-based attempt counter would be racy under concurrent requests anyway, since Spin's KV interface has no compare-and-swap. The only real mitigation in place is the PBKDF2 cost factor itself (100,000 iterations) slowing down each individual guess. If this becomes a real requirement, it needs a deliberate `allowed_outbound_hosts` expansion plus an external rate-limiting service — not a quiet KV-counter bolt-on.
 - **Slug/link existence and password-protection status are enumerable.** A `404` (no such slug) vs. a `200` password prompt vs. a `302` redirect inherently tells a probing visitor whether a slug exists and whether it's password-protected. This is treated as an accepted characteristic of a public redirect service, not a vulnerability to fix — slugs aren't meant to be secret. Custom slugs are more guessable than random ones; pairing a custom slug with a link password is a sensible pattern worth surfacing in product UX, not something to enforce in code.
-- **No security response headers** (CSP, `X-Content-Type-Options`, `Referrer-Policy`, HSTS, etc.) are set anywhere today — neither `redirect` nor `api` add any beyond `Content-Type`/`Cache-Control` where relevant. This is a real gap worth closing before a production deploy, not something structurally hard the way the above two are; it just hasn't been done yet.
+- **Security response headers are now set** (CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, HSTS) by `redirect`, `api`, and `gui-pages` — see "Security response headers" above for exactly what each component sends. The one remaining accepted gap: `gui-pages`'s CSP allows `'unsafe-inline'` for scripts/styles rather than the GUI's ~700 lines of inline `<script>`/`<style>` being rewritten to external files + nonces, which was out of scope for this pass (see `TASKS.md`'s future-work note).
 - **Click counts can under-count slightly during concurrent bursts** (documented above) and **the recent-events log can lose more entries than expected** to clock-resolution-driven slot collisions (documented above) — both accepted as the cost of a KV-only, no-network hot path.
 - **Reversible link passwords are not supported** — they're hashed one-way, so a link's creator can never have the plaintext redisplayed. If "show me the password I set" UX is ever wanted, that requires a materially different storage model (encryption with real key management), not a tweak to the current hashing approach.
 

@@ -19,8 +19,26 @@ func init() {
 	mux.HandleFunc("POST /r/{slug}", handleRedirectPost)
 
 	spinhttp.Handle(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// setSecurityHeaders applies the baseline security headers to every response
+// this component sends — redirects (a 302 with no body a browser would ever
+// execute) and error pages alike. Headers are set before ServeHTTP dispatches
+// to a handler; http.Error/http.NotFound/http.Redirect only ever call
+// Header().Set on their own specific keys (Content-Type, Location), never
+// clearing the whole header map, so these survive alongside them. The
+// password-prompt page additionally sets its own stricter CSP (see
+// renderPasswordPrompt in passwordgate.go), since it's the one response here
+// that actually renders real HTML a browser executes/lays out.
+func setSecurityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 }
 
 func handleRedirectGet(w http.ResponseWriter, r *http.Request) {

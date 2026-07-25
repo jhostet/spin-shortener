@@ -1,0 +1,18 @@
+[project]
+name = "gui-pages"
+version = "0.1.0"
+description = "Python component serving the GUI's HTML pages with security response headers"
+requires-python = ">=3.14"
+dependencies = [
+    "componentize-py==0.23.0",
+    "spin-sdk==4.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
