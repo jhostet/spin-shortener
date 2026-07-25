@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-25T02-28-00Z",
+  "generatedAt": "2026-07-25T02-48-00Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -77,6 +77,21 @@
           "#ed9792",
           "#f5c9c6",
           "#fbeae9"
+        ]
+      },
+      "badge-slate": {
+        "role": "neutral",
+        "displayName": "Badge Slate",
+        "canonical": "#526078",
+        "tonalRamp": [
+          "#1c2129",
+          "#343d4c",
+          "#4b576d",
+          "#5e6e88",
+          "#798aa3",
+          "#9ca8bb",
+          "#bec4d2",
+          "#d3d9e2"
         ]
       }
     },
@@ -168,9 +183,9 @@
       "name": "Slug-Kind / Lock Badges",
       "kind": "custom",
       "refersTo": "caption",
-      "description": "Small caption-scale labels next to a slug chip flagging a custom slug or a password-protected link. Neutral slate, not Signal Blue \u2014 a resting-fill use of the accent was tried and reverted (it violated the accent's hover-only rule and failed AA contrast). The two are visually identical except for text, distinguished by label alone.",
+      "description": "Small caption-scale labels next to a slug chip flagging a custom slug or a password-protected link. Neutral slate, not Signal Blue \u2014 a resting-fill use of the accent was tried and reverted (it violated the accent's hover-only rule and failed AA contrast). The two are visually identical except for text, distinguished by label alone. Uses --ss-slate-500, a token distinct from --pico-muted-color despite sharing #5b6b85 before an audit found it cleared AA by only 0.27:1 against the real table-cell background (not the white card) -- darkened to #526078 (5.6:1) for real margin. The 'not yet live' schedule annotation shares this same token and fix.",
       "html": "<span class=\"ds-slug-kind-badge\">Custom</span> <span class=\"ds-lock-badge\">Password</span>",
-      "css": ".ds-slug-kind-badge, .ds-lock-badge { display: inline-block; margin-left: 0.35em; font-family: system-ui, sans-serif; font-size: 0.75rem; font-weight: 600; vertical-align: middle; color: var(--ss-slate-500, #5b6b85); }"
+      "css": ".ds-slug-kind-badge, .ds-lock-badge { display: inline-block; margin-left: 0.35em; font-family: system-ui, sans-serif; font-size: 0.75rem; font-weight: 600; vertical-align: middle; color: var(--ss-slate-500, #526078); }"
     },
     {
       "name": "Schedule State Text",

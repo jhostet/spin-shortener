@@ -98,7 +98,14 @@
 
   --ss-navy-950: #0a1628;
   --ss-navy-800: #14243d;
-  --ss-slate-500: #5b6b85;
+  /* #5b6b85 measured 4.77:1 against the table cell's real background
+   * (--pico-background-color, #eef1f6) for .slug-kind-badge/.lock-badge —
+   * clears the 4.5:1 AA minimum, but by only 0.27:1, the same "measured
+   * against the wrong assumed background" mistake that caused the
+   * ok-green status-badge P1 in an earlier audit. #526078 clears 5.6:1 at
+   * the same hue, for real margin against any future palette drift rather
+   * than because this was a live failure. */
+  --ss-slate-500: #526078;
   --ss-signal-500: #276fb8;
   /* #1a7f5a measured 4.39:1 against the table cell's real background
    * (--pico-background-color, #eef1f6 — Pico paints td/th with this, not
