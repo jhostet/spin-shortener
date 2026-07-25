@@ -4,7 +4,7 @@ from unittest.mock import patch
 import auth
 import links
 import qr
-from responses import Request
+from responses import SECURITY_HEADERS, Request
 from tests.fakes import FakeStore
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -69,6 +69,17 @@ async def test_qr_svg_default_format():
     assert resp.status == 200
     assert resp.headers["content-type"] == "image/svg+xml"
     assert resp.body.startswith(b"<?xml")
+
+
+async def test_qr_includes_security_headers():
+    """A code review flagged qr.py as the one call site that bypasses
+    json_response's shared header-merge entirely — confirms it still gets
+    the same SECURITY_HEADERS via its own separate merge."""
+    store = FakeStore()
+    slug = await _make_link(store)
+    resp = await qr.handle_qr(store, _principal(), slug, {}, "http://localhost:3000")
+    for key, value in SECURITY_HEADERS.items():
+        assert resp.headers[key] == value
 
 
 async def test_qr_png_format():

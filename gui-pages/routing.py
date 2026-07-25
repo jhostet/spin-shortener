@@ -84,6 +84,16 @@ def build_response(uri: str, read_file: Callable[[str], bytes]) -> Response:
     if filename is None:
         return Response(404, {**SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8"}, b"Not found")
 
-    body = read_file(filename)
+    # A code review flagged that an unguarded read_file() call means a
+    # ROUTES-vs-filesystem drift (a page renamed/removed on one side but not
+    # the other) would raise unhandled and propagate out without
+    # SECURITY_HEADERS attached — the one guarantee this component exists to
+    # provide. ROUTES and the real files match today, but this is cheap
+    # insurance against that drift.
+    try:
+        body = read_file(filename)
+    except OSError:
+        return Response(500, {**SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8"}, b"Internal error")
+
     headers = {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}
     return Response(200, headers, body)

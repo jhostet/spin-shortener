@@ -22,9 +22,12 @@ func renderPasswordPrompt(w http.ResponseWriter, status int, slug, errMsg string
 	// Stricter than the GUI pages' CSP: prompt.html has zero <script> tags
 	// (confirmed — it's a bare form), so script-src can be 'none' outright
 	// rather than needing 'unsafe-inline'. style-src still needs it for the
-	// one inline style="color: red" error-message attribute.
+	// one inline style="color: red" error-message attribute. base-uri isn't
+	// covered by default-src's fallback (only fetch-directives are) — a code
+	// review caught it missing here despite form-action/frame-ancestors
+	// (also not covered by default-src) being handled explicitly.
 	w.Header().Set("Content-Security-Policy",
-		"default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+		"default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 	w.WriteHeader(status)
 	_ = promptTemplate.Execute(w, promptData{Slug: slug, Error: errMsg})
 }

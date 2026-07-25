@@ -61,8 +61,12 @@ async def handle_qr(store, principal: Principal, slug: str, query: dict, public_
     short_url = f"{public_base_url.rstrip('/')}/r/{slug}"
     body, content_type, ext = _render(short_url, fmt, size)
 
-    headers = {**SECURITY_HEADERS, "content-type": content_type}
+    # SECURITY_HEADERS applied last (see responses.json_response's comment) —
+    # neither key added here collides today, but this keeps the same
+    # can-never-be-overridden guarantee if that ever changes.
+    headers = {"content-type": content_type}
     if download:
         headers["content-disposition"] = f'attachment; filename="{slug}-qr.{ext}"'
+    headers.update(SECURITY_HEADERS)
 
     return Response(200, headers, body)

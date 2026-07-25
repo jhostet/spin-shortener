@@ -45,9 +45,17 @@ SECURITY_HEADERS: dict[str, str] = {
 
 
 def json_response(status: int, data: dict[str, Any], headers: Optional[dict[str, str]] = None) -> Response:
-    hdrs = {**SECURITY_HEADERS, "content-type": "application/json"}
+    # SECURITY_HEADERS is applied last, not first — a code review found that
+    # applying it first let any caller-supplied `headers` collide with and
+    # silently override a security header with no warning. Not exploited by
+    # any current call site (only `set-cookie` is ever passed), but the
+    # ordering was backwards for a header set whose whole point is to be a
+    # hard-to-bypass baseline. Applying it last guarantees these values
+    # always win, regardless of what a future call site passes in.
+    hdrs = {"content-type": "application/json"}
     if headers:
         hdrs.update(headers)
+    hdrs.update(SECURITY_HEADERS)
     return Response(status, hdrs, json.dumps(data).encode("utf-8"))
 
 

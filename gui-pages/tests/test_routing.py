@@ -55,6 +55,22 @@ def test_build_response_unknown_path_is_404_with_security_headers_still_set():
         assert response.headers[key] == value
 
 
+def test_build_response_file_read_failure_is_500_with_security_headers_still_set():
+    """A code review flagged the original build_response as having no guard
+    around read_file() — a ROUTES-vs-filesystem drift (a page renamed on
+    disk but not in ROUTES, or vice versa) would raise unhandled instead of
+    returning a graceful, header-carrying error."""
+
+    def failing_read_file(_):
+        raise FileNotFoundError("simulated ROUTES/filesystem drift")
+
+    response = build_response("/login.html", failing_read_file)
+
+    assert response.status == 500
+    for key, value in SECURITY_HEADERS.items():
+        assert response.headers[key] == value
+
+
 def test_security_headers_lock_down_framing_and_plugins():
     csp = SECURITY_HEADERS["content-security-policy"]
     assert "frame-ancestors 'none'" in csp
