@@ -69,7 +69,7 @@ Python component dependencies (`componentize-py`, `spin-sdk`) are managed by [`u
 
 ## Tests
 
-Go and Python each have their own test suite; there is no CI wired up yet (local-only for now).
+Go and Python each have their own test suite. A `Jenkinsfile` at the repo root runs both suites (plus `gui-pages`'s) in parallel, each on its own pinned Docker agent — wire it up as a Jenkins Multibranch Pipeline (or "Pipeline script from SCM") job pointed at this repo to get it running; nothing auto-registers it.
 
 ```bash
 # redirect (Go) — from redirect/
