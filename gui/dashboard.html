@@ -49,6 +49,49 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* Below this width the table's 7 data columns + actions no longer fit
+     * without the sticky action column visually occluding another column's
+     * content at rest (confirmed live: at 390px the sticky column's opaque
+     * background fully covered the Owner column). The real fix is fewer
+     * columns, not a wider sticky element — Owner/Destination/Created/Starts
+     * are the least essential for the "is this link still live" check this
+     * width is standing in for; Status and Expires answer that directly and
+     * stay visible alongside Short link and the actions. */
+    @media (max-width: 600px) {
+      #links-table th:nth-child(2),
+      #links-table td:nth-child(2),
+      #links-table th:nth-child(3),
+      #links-table td:nth-child(3),
+      #links-table th:nth-child(4),
+      #links-table td:nth-child(4),
+      #links-table th:nth-child(6),
+      #links-table td:nth-child(6) {
+        display: none;
+      }
+      /* Even with 4 columns hidden, View/Copy/Edit/Delete in one unwrapped
+       * row (~208px) still doesn't leave enough room for Short link/Status/
+       * Expires without the sticky column overlapping Expires. Wrapping the
+       * 4 buttons into a stacked block shrinks the column's on-screen width
+       * to ~80-90px. */
+      #links-table tbody > tr:not(.edit-row) td:last-child [role=group] {
+        flex-wrap: wrap;
+        max-width: 100px;
+      }
+      /* Neither padding-right alone (adds space after left-aligned text,
+       * doesn't move it) nor padding-right + text-align:right (the padding
+       * terms cancel out algebraically once the cell's own width is also
+       * determined by that same padding, in an auto-layout table) actually
+       * created real clearance — both measured zero effect live. The sticky
+       * actions column sits at a fixed position independent of this cell's
+       * padding, so the only thing that reliably keeps content clear of it
+       * is capping this column's own rendered width so wrapped text
+       * physically cannot reach that far right. 75px is the safe zone
+       * measured live between this column's natural left edge and the
+       * sticky column's left edge at 390px. */
+      #links-table tbody > tr:not(.edit-row) td:nth-child(7) {
+        max-width: 75px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -272,7 +315,13 @@
         row.dataset.slug = link.slug;
         row.innerHTML = `
           <td>
-            <span class="slug-chip">${escapeHtml(shortUrl)}</span>
+            <!-- The origin (http://host) is identical on every row — showing it
+                 30 times per page is pure width cost for zero information gain,
+                 and was the single biggest contributor to the table overflowing
+                 its own container even at a realistic desktop width with only a
+                 handful of rows. Copy/View still use the full shortUrl below;
+                 only the displayed chip text drops the redundant prefix. -->
+            <span class="slug-chip" title="${escapeHtml(shortUrl)}">/r/${escapeHtml(link.slug)}</span>
             ${link.custom ? '<span class="slug-kind-badge">Custom</span>' : ""}
             ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
           </td>
@@ -322,12 +371,22 @@
         errorEl.textContent = friendlyError(data, "Could not delete link.");
         return;
       }
+      // The create-success banner (with its own live Copy button) would
+      // otherwise keep referencing whatever slug was just created even after
+      // it's deleted here — silently handing out a Copy affordance for a
+      // link that no longer resolves.
+      document.getElementById("create-success").style.display = "none";
       loadLinks();
     }
 
     function handleEditToggleClick(btn) {
       const editRow = document.querySelector(`#links-body tr.edit-row[data-slug="${CSS.escape(btn.dataset.slug)}"]`);
-      editRow.style.display = editRow.style.display === "none" ? "" : "none";
+      const opening = editRow.style.display === "none";
+      editRow.style.display = opening ? "" : "none";
+      // Without this, opening the edit form on a row near/below the fold
+      // produces a click that visually does nothing — the newly-revealed
+      // form renders off-screen with no indication anything happened.
+      if (opening) editRow.scrollIntoView({ block: "center" });
     }
 
     function handleCancelEditClick(btn) {

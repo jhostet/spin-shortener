@@ -33,6 +33,37 @@
       --pico-form-element-spacing-vertical: 0.4rem;
       font-size: 0.75rem;
     }
+    /* Same fix as dashboard.html's #links-table: below this width the
+     * sticky action column's opaque background visually occludes whatever
+     * column would otherwise sit under it (confirmed live: it covered most
+     * of Permissions and part of Status at 390px). Permissions is a
+     * comma-joined list with no natural length cap and the least essential
+     * column for a quick Username/Role/Status glance, so it's the one that
+     * collapses. */
+    @media (max-width: 600px) {
+      #users-table th:nth-child(3),
+      #users-table td:nth-child(3) {
+        display: none;
+      }
+      /* Shrinks the 2-button (Edit/Delete) action column's rendered width
+       * so there's less to clear in the first place — same technique as
+       * dashboard.html's #links-table. */
+      #users-table tbody > tr:not(.edit-row) td:last-child [role=group] {
+        flex-wrap: wrap;
+        max-width: 70px;
+      }
+      /* Hiding Permissions alone still left the sticky column overlapping
+       * the tail of "Status"/"active" (confirmed live — clipped to
+       * "Statu"/"Activ"). Neither padding-right alone nor padding-right +
+       * text-align:right created real clearance (both measured zero effect
+       * live — the sticky column sits at a fixed position independent of
+       * this cell's padding). Capping this column's own max-width is what
+       * actually keeps its content clear of the sticky column. */
+      #users-table th:nth-child(4),
+      #users-table tbody > tr:not(.edit-row) td:nth-child(4) {
+        max-width: 60px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -200,7 +231,11 @@
       body.querySelectorAll(".edit-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
           const editRow = body.querySelector(`tr.edit-row[data-username="${CSS.escape(btn.dataset.username)}"]`);
-          editRow.style.display = editRow.style.display === "none" ? "" : "none";
+          const opening = editRow.style.display === "none";
+          editRow.style.display = opening ? "" : "none";
+          // Without this, opening the edit form on a row near/below the fold
+          // produces a click that visually does nothing.
+          if (opening) editRow.scrollIntoView({ block: "center" });
         });
       });
 
@@ -227,6 +262,10 @@
             document.getElementById("users-error").textContent = friendlyError(data, "Could not delete user.");
             return;
           }
+          // Mirrors dashboard.html's fix for the same class of bug: a
+          // create-success banner referencing a now-deleted username should
+          // not linger.
+          document.getElementById("create-success").style.display = "none";
           loadUsers();
         });
       });

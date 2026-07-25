@@ -51,6 +51,15 @@
   --pico-card-background-color: #fff;
   --pico-card-border-color: #d6deea;
   --pico-card-sectioning-background-color: #fff;
+  /* Pico's --pico-card-box-shadow (and --pico-dropdown-box-shadow) both
+   * default to var(--pico-box-shadow), a real multi-layer drop shadow —
+   * this theme overrode every other --pico-card-* property above but never
+   * this one, so every <article> on every page has silently rendered
+   * Pico's stock elevation shadow since this file's first commit, directly
+   * violating the No-Shadow Rule below (confirmed live via getComputedStyle
+   * on every page: a real 7-layer box-shadow, not none). */
+  --pico-card-box-shadow: none;
+  --pico-dropdown-box-shadow: none;
 
   --ss-navy-950: #0a1628;
   --ss-navy-800: #14243d;
