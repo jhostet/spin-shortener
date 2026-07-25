@@ -187,11 +187,25 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 }
 /* Breadcrumb-style page label, next to the permanent brand rather than
  * replacing it — gives links/detail.html a page identifier it previously
- * had none at all (no <h1>, and formerly no brand name either). */
-.nav-separator {
-  color: rgba(255, 255, 255, 0.35);
+ * had none at all (no <h1>, and formerly no brand name either).
+ * `#app-header nav li { color: #fff; }` above is an ID-scoped rule
+ * (specificity 1,0,2) that silently beat these plain-class rules
+ * (0,1,0) regardless of source order — a critique caught both rendering
+ * fully opaque white in the live DOM instead of their declared dimmed
+ * values, via getComputedStyle. Same specificity trap this file has
+ * already been bitten by twice (the :root color-token fix, the
+ * details summary:focus-visible fix); same fix here: match the losing
+ * selector's shape instead of trying to out-specificity it another way. */
+/* alpha 0.35 measured 3.20:1 against the nav's real #0a1628 fill (an
+ * audit finding) — under the 4.5:1 AA text minimum, though the element
+ * carries aria-hidden="true" and no unique information (the adjacent
+ * .nav-page-label conveys the actual page identity), so this was a
+ * headroom improvement rather than a live accessibility failure. 0.5
+ * clears 5.25:1 while staying visibly dimmer than .nav-page-label's 0.75. */
+#app-header nav li.nav-separator {
+  color: rgba(255, 255, 255, 0.5);
 }
-.nav-page-label {
+#app-header nav li.nav-page-label {
   color: rgba(255, 255, 255, 0.75);
   font-weight: 600;
 }
@@ -240,13 +254,16 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   font-weight: 600;
   text-transform: capitalize;
 }
-/* Below this width the breadcrumb page label and the identity chip's role
- * line are the first things worth shedding to keep the nav from wrapping
- * to multiple lines (a previously-observed issue at 390px) — the brand
- * mark and username are what actually matter for orientation on a phone. */
+/* Only the identity chip's role line sheds below this width — a critique
+ * caught that hiding the breadcrumb too (the original approach) deleted
+ * links/detail.html's page identity specifically on mobile, the exact
+ * page this whole feature exists for and the one page with no other
+ * fallback heading (unlike admin/users.html, which still has a real
+ * <h1>Manage users</h1> even with the breadcrumb hidden). The nav already
+ * wraps as whole groups at the <nav> level (see above), so keeping the
+ * breadcrumb visible doesn't reintroduce the mid-word wrapping bug that
+ * caused it to be hidden in the first place — verified live. */
 @media (max-width: 480px) {
-  .nav-separator,
-  .nav-page-label,
   .identity-role {
     display: none;
   }
@@ -475,6 +492,18 @@ button,
 [type="button"],
 [type="reset"],
 [role="button"] {
+  min-height: 44px;
+}
+
+/* Same 44px floor, extended to persistent-nav plain <a> links — an audit
+ * found .brand-link and "Manage users" measured 38.4px tall, since the
+ * button-family rule above never covered plain anchors. The brand mark is
+ * the single most-clicked element added by the nav redesign, so it's worth
+ * closing this gap rather than leaving the app's own standard inconsistent
+ * within the header that most exemplifies it. */
+#app-header nav a {
+  display: inline-flex;
+  align-items: center;
   min-height: 44px;
 }
 
