@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-25T00-36-00Z",
+  "generatedAt": "2026-07-25T01-33-00Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -52,16 +52,16 @@
       "ok-green": {
         "role": "success",
         "displayName": "OK Green",
-        "canonical": "#1a7f5a",
+        "canonical": "#177251",
         "tonalRamp": [
-          "#0d402d",
-          "#187754",
-          "#23a978",
-          "#2bd496",
-          "#5edeaf",
-          "#95e9cb",
-          "#c8f4e4",
-          "#eafbf4"
+          "#0c3a28",
+          "#166b4c",
+          "#20986c",
+          "#27bf87",
+          "#44d9a2",
+          "#75e2bb",
+          "#a3edd2",
+          "#c1f3df"
         ]
       },
       "danger-red": {
@@ -160,9 +160,9 @@
       "name": "Status Badge",
       "kind": "custom",
       "refersTo": "badge-status-active",
-      "description": "Plain colored text (no pill/background) marking a link or user as active/disabled \u2014 color is redundant with the text label, never the sole signal.",
+      "description": "Plain colored text (no pill/background) marking a link or user as active/disabled \u2014 color is redundant with the text label, never the sole signal. ok-green was darkened from #1a7f5a to #177251 after an audit measured the active badge at 4.39:1 against the table cell's real background (Pico paints td/th with --pico-background-color, not the white card behind it) -- just under the 4.5:1 AA minimum for the app's single most common status label. #177251 clears 5.2:1 at the same hue.",
       "html": "<span class=\"ds-status-badge ds-status-active\">Active</span>",
-      "css": ".ds-status-badge { font-weight: 600; text-transform: capitalize; } .ds-status-active { color: var(--ss-ok-500, #1a7f5a); } .ds-status-disabled { color: var(--ss-danger-500, #b3261e); }"
+      "css": ".ds-status-badge { font-weight: 600; text-transform: capitalize; } .ds-status-active { color: var(--ss-ok-500, #177251); } .ds-status-disabled { color: var(--ss-danger-500, #b3261e); }"
     },
     {
       "name": "Slug-Kind / Lock Badges",
@@ -219,6 +219,14 @@
       "description": "Occasional-use fields for a primary \"paste and submit\" action collapse behind a native <details>/<summary> \u2014 Pico's own styled accordion (chevron marker, color-shift summary), not a bespoke JS show/hide toggle. The link-creation form is the current example: Destination URL renders unconditionally since it's the one field every submission needs, while custom slug, schedule (Starts/Expires), and password protection collapse behind a \"More options\" summary, closed by default and reset to closed after each successful create.",
       "html": "<details><summary>More options</summary><div class=\"grid\">&hellip;</div></details>",
       "css": "/* Pico styles <details>/<summary> natively \u2014 no custom CSS required. */"
+    },
+    {
+      "name": "Focus Indicators",
+      "kind": "custom",
+      "refersTo": "focus-visible-outline",
+      "description": "A full-opacity 2px solid signal-blue outline, sitewide, on every focusable element. Pico's own default focus ring is a low-opacity rgba box-shadow that measures ~1.71:1 against a white card -- well under WCAG 1.4.11's 3:1 non-text-contrast minimum -- and was originally fixed for the persistent nav alone (its dark-navy fill made the default ring nearly invisible). An audit later found the identical unfixed problem on every other focusable element sitewide, generalized to one sitewide :focus-visible rule. Pico's own higher-specificity `details summary:focus-visible:not([role])` rule (used by the create-link form's \"More options\" toggle) silently wins over a plain :focus-visible override -- confirmed live -- so a matching-selector-shape override was added specifically for it, relying on load order to break the equal-specificity tie.",
+      "html": "<button>Row action</button>",
+      "css": ":focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; border-radius: var(--pico-border-radius); } details summary:focus-visible:not([role]) { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; }"
     }
   ],
   "narrative": {
@@ -263,7 +271,9 @@
       "Do keep a table's row-action column reachable via a sticky column (position: sticky; right: 0, solid background, hairline border) rather than letting actions scroll out of reach or capping other columns' content to force a fit.",
       "Do collapse occasional-use fields behind a native <details> disclosure when a form's primary action centers on one common field \u2014 matches the platform's own accordion idiom instead of a bespoke toggle.",
       "Do explicitly set --pico-card-box-shadow (and --pico-dropdown-box-shadow) to none in theme.css \u2014 Pico's defaults resolve to a real multi-layer shadow, and overriding every other --pico-card-* property except this one meant every card silently violated the No-Shadow Rule for the theme's entire history.",
-      "Do cap a column's own max-width (not padding-right, and not padding-right + text-align:right) to keep its content clear of a sticky neighbor column \u2014 padding-right doesn't move left-aligned content, and combined with text-align:right the padding terms cancel out once the cell's own width is also padding-driven in an auto-layout table."
+      "Do cap a column's own max-width (not padding-right, and not padding-right + text-align:right) to keep its content clear of a sticky neighbor column \u2014 padding-right doesn't move left-aligned content, and combined with text-align:right the padding terms cancel out once the cell's own width is also padding-driven in an auto-layout table.",
+      "Do set color-scheme: light and explicitly override --pico-form-element-background-color/-border-color/-color/-placeholder-color -- without this, every text input silently inherits Pico's separate prefers-color-scheme: dark form-element palette on any OS/browser set to prefer dark colors, with no in-app opt-out, since data-theme is never set anywhere.",
+      "Do use a sitewide :focus-visible rule with a full-opacity outline color, and check for higher-specificity element-specific default rules (e.g. Pico's details summary:focus-visible:not([role])) that can silently win over a generic override -- match the specific selector's shape rather than assuming a lower-specificity generic rule reaches everywhere."
     ],
     "donts": [
       "Don't add a box-shadow anywhere \u2014 the system is flat by construction, not by oversight.",

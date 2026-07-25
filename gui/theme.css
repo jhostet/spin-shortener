@@ -61,11 +61,33 @@
   --pico-card-box-shadow: none;
   --pico-dropdown-box-shadow: none;
 
+  /* Pico defines a separate dark-mode variant of these four form-element
+   * variables inside its own @media (prefers-color-scheme:dark) block —
+   * this theme never sets a data-theme attribute anywhere (confirmed: zero
+   * matches), so there's no opt-out, and every text input on every page
+   * (starting with the login screen) silently inherited that stock dark
+   * fill on any OS/browser set to prefer dark colors, while every other
+   * token here correctly stayed on the intended light palette. Explicit
+   * color-scheme:light is the actual fix — it tells the browser this page
+   * doesn't participate in prefers-color-scheme at all, rather than just
+   * patching the four variables Pico's dark block happens to touch today. */
+  color-scheme: light;
+  --pico-form-element-background-color: #fff;
+  --pico-form-element-border-color: #d6deea;
+  --pico-form-element-color: #14243d;
+  --pico-form-element-placeholder-color: #5b6b85;
+
   --ss-navy-950: #0a1628;
   --ss-navy-800: #14243d;
   --ss-slate-500: #5b6b85;
   --ss-signal-500: #276fb8;
-  --ss-ok-500: #1a7f5a;
+  /* #1a7f5a measured 4.39:1 against the table cell's real background
+   * (--pico-background-color, #eef1f6 — Pico paints td/th with this, not
+   * the white card behind it) — just under the 4.5:1 AA minimum, and the
+   * "Active" status badge is the single most common label in the app.
+   * #177251 clears 5.2:1 at the same hue, the same fix pattern already
+   * used for --ss-signal-500 above. */
+  --ss-ok-500: #177251;
   --ss-danger-500: #b3261e;
   --ss-mono-font: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
 }
@@ -99,16 +121,31 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   --pico-color: #fff;
   --pico-border-color: rgba(255, 255, 255, 0.4);
 }
-/* Pico's default focus ring is a low-opacity box-shadow tuned for a light
- * card background — against this nav's dark-navy fill it's nearly
- * imperceptible, leaving keyboard users with no visible "where am I" on
- * the one piece of chrome present on every authenticated page. A full-
- * opacity Signal Blue outline reads clearly on navy and stays on-brand. */
-#app-header nav a:focus-visible,
-#app-header nav button:focus-visible {
+/* Pico's default focus ring (--pico-primary-focus, an rgba box-shadow)
+ * measures ~1.71:1 against a white card — well under WCAG 1.4.11's 3:1
+ * non-text-contrast minimum — and against this nav's dark-navy fill it's
+ * nearly imperceptible. Originally fixed for the nav alone (the one piece
+ * of chrome present on every authenticated page); a later audit found the
+ * identical unfixed problem on every other focusable element sitewide
+ * (buttons, links, sortable headers, the create-link form's own "More
+ * options" disclosure). A full-opacity Signal Blue outline reads clearly
+ * against both the nav's navy and every card's white, so one sitewide rule
+ * replaces the nav-only version. */
+:focus-visible {
   outline: 2px solid var(--ss-signal-500);
   outline-offset: 2px;
   border-radius: var(--pico-border-radius);
+}
+/* Pico's own `details summary:focus-visible:not([role])` (used by the
+ * create-link form's "More options" toggle) has higher specificity than
+ * the plain :focus-visible above and silently wins over it — verified live,
+ * the low-opacity default outline still applied to the summary specifically
+ * even after the generic rule was added. Matching the same selector shape
+ * makes this an equal-specificity tie, which load order then breaks in
+ * this file's favor, same trick as the :root color-token fix above. */
+details summary:focus-visible:not([role]) {
+  outline: 2px solid var(--ss-signal-500);
+  outline-offset: 2px;
 }
 
 /* Slug chip — the shortened-link signature: a monospace pill on navy,
