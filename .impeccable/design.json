@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-25T01-50-00Z",
+  "generatedAt": "2026-07-25T02-28-00Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -136,9 +136,9 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Default submit/action button \u2014 Signal Blue fill, darkens on hover. Text/fill now clears 4.5:1 AA contrast (was ~4.15:1 at the original #2b7fd1).",
+      "description": "Default submit/action button \u2014 Signal Blue fill, darkens on hover. Text/fill now clears 4.5:1 AA contrast (was ~4.15:1 at the original #2b7fd1). Every button also gets a min-height: 44px touch-target floor (an audit measured 40px), and a sitewide full-opacity :focus-visible outline (see Focus Indicators) replaces the low-opacity default shown below from an earlier snapshot.",
       "html": "<button class=\"ds-btn-primary\">Shorten</button>",
-      "css": ".ds-btn-primary { background: var(--ss-signal-500, #276fb8); color: #fff; padding: 0.5rem 0.75rem; border: 0.0625rem solid var(--ss-signal-500, #276fb8); border-radius: 0.25rem; font-weight: 400; transition: background 0.2s ease-in-out; } .ds-btn-primary:hover { background: #1e6bb8; border-color: #1e6bb8; } .ds-btn-primary:focus-visible { outline: 0.125rem solid rgba(39, 111, 184, 0.375); outline-offset: 1px; }"
+      "css": ".ds-btn-primary { background: var(--ss-signal-500, #276fb8); color: #fff; padding: 0.5rem 0.75rem; border: 0.0625rem solid var(--ss-signal-500, #276fb8); border-radius: 0.25rem; font-weight: 400; min-height: 44px; transition: background 0.2s ease-in-out; } .ds-btn-primary:hover { background: #1e6bb8; border-color: #1e6bb8; } .ds-btn-primary:focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; }"
     },
     {
       "name": "Outline / Secondary Row Actions",
@@ -224,7 +224,7 @@
       "name": "Focus Indicators",
       "kind": "custom",
       "refersTo": "focus-visible-outline",
-      "description": "A full-opacity 2px solid signal-blue outline, sitewide, on every focusable element. Pico's own default focus ring is a low-opacity rgba box-shadow that measures ~1.71:1 against a white card -- well under WCAG 1.4.11's 3:1 non-text-contrast minimum -- and was originally fixed for the persistent nav alone (its dark-navy fill made the default ring nearly invisible). An audit later found the identical unfixed problem on every other focusable element sitewide, generalized to one sitewide :focus-visible rule. Pico's own higher-specificity `details summary:focus-visible:not([role])` rule (used by the create-link form's \"More options\" toggle) silently wins over a plain :focus-visible override -- confirmed live -- so a matching-selector-shape override was added specifically for it, relying on load order to break the equal-specificity tie.",
+      "description": "A full-opacity 2px solid signal-blue outline, sitewide, on every focusable element. Pico's own default focus ring is a low-opacity rgba box-shadow that measures ~1.71:1 against a white card -- well under WCAG 1.4.11's 3:1 non-text-contrast minimum -- and was originally fixed for the persistent nav alone (its dark-navy fill made the default ring nearly invisible). An audit later found the identical unfixed problem on every other focusable element sitewide, generalized to one sitewide :focus-visible rule. Pico's own higher-specificity `details summary:focus-visible:not([role])` rule (used by the create-link form's \"More options\" toggle) silently wins over a plain :focus-visible override -- confirmed live -- so a matching-selector-shape override was added specifically for it, relying on load order to break the equal-specificity tie. Re-verified by a 3rd audit pass: every focusable element, including the create-link form's \"More options\" summary, correctly shows the full-opacity outline -- this fix is holding.",
       "html": "<button>Row action</button>",
       "css": ":focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; border-radius: var(--pico-border-radius); } details summary:focus-visible:not([role]) { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; }"
     }
@@ -275,13 +275,15 @@
       "Do set color-scheme: light and explicitly override --pico-form-element-background-color/-border-color/-color/-placeholder-color -- without this, every text input silently inherits Pico's separate prefers-color-scheme: dark form-element palette on any OS/browser set to prefer dark colors, with no in-app opt-out, since data-theme is never set anywhere.",
       "Do use a sitewide :focus-visible rule with a full-opacity outline color, and check for higher-specificity element-specific default rules (e.g. Pico's details summary:focus-visible:not([role])) that can silently win over a generic override -- match the specific selector's shape rather than assuming a lower-specificity generic rule reaches everywhere.",
       "Do cap every column before a clearance-capped column too, not just the one immediately adjacent to a sticky neighbor -- an HTML table shares column width across every row, so a long value anywhere in an earlier column can push a later column's position rightward and silently defeat its own unchanged cap.",
-      "Do verify a [role=group] wrapper actually exists before relying on flex-based CSS (flex-wrap, gap, max-width) to apply to a button group -- a rule that looks correct can silently match nothing if the markup never wraps the buttons in one."
+      "Do verify a [role=group] wrapper actually exists before relying on flex-based CSS (flex-wrap, gap, max-width) to apply to a button group -- a rule that looks correct can silently match nothing if the markup never wraps the buttons in one.",
+      "Do add a min-height: 44px floor to every button/[role=button] rather than restoring the tightened --pico-form-element-spacing-vertical toward Pico's default -- that variable also drives text-input tap targets, so loosening it to fix button height would undo the deliberate admin-density type scale."
     ],
     "donts": [
       "Don't add a box-shadow anywhere \u2014 the system is flat by construction, not by oversight.",
       "Don't introduce a second error/status red \u2014 danger-red (#b3261e) is now the one value used by both status badges and form errors.",
       "Don't let a page-level heading imply every page needs one \u2014 several pages intentionally rely on the persistent nav's brand name instead of a redundant h1.",
-      "Don't add a shadow/gradient edge-fade to signal a scrollable region \u2014 that would violate the No-Shadow Rule; use a styled scrollbar instead."
+      "Don't add a shadow/gradient edge-fade to signal a scrollable region \u2014 that would violate the No-Shadow Rule; use a styled scrollbar instead.",
+      "Don't assume color-scheme: light blocks prefers-color-scheme: dark media queries from matching -- it only hints the browser's native chrome (scrollbars, autofill) toward light rendering. The only real defense against a vendor stylesheet's dark-mode block is overriding every value it sets, unconditionally, outside any media query."
     ]
   }
 }

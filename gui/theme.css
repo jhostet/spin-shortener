@@ -61,21 +61,40 @@
   --pico-card-box-shadow: none;
   --pico-dropdown-box-shadow: none;
 
-  /* Pico defines a separate dark-mode variant of these four form-element
-   * variables inside its own @media (prefers-color-scheme:dark) block —
+  /* Pico defines a dark-mode variant of nearly every --pico-form-element-*
+   * variable inside its own @media (prefers-color-scheme:dark) block, and
    * this theme never sets a data-theme attribute anywhere (confirmed: zero
-   * matches), so there's no opt-out, and every text input on every page
-   * (starting with the login screen) silently inherited that stock dark
-   * fill on any OS/browser set to prefer dark colors, while every other
-   * token here correctly stayed on the intended light palette. Explicit
-   * color-scheme:light is the actual fix — it tells the browser this page
-   * doesn't participate in prefers-color-scheme at all, rather than just
-   * patching the four variables Pico's dark block happens to touch today. */
+   * matches), so every text input on every page (starting with the login
+   * screen) silently inherited whichever of those dark values Pico's media
+   * query matched on any OS/browser set to prefer dark colors, while every
+   * other token here correctly stayed on the intended light palette.
+   * (Correction to an earlier version of this comment: color-scheme:light
+   * does NOT opt a page out of prefers-color-scheme matching — that's a
+   * common misconception. It only hints the browser's own native chrome —
+   * scrollbars, autofill styling — toward a light rendering; it has no
+   * effect on which CSS rules match. The actual fix is that every value
+   * below is declared unconditionally, outside any media query, so it
+   * always applies regardless of OS preference — kept for the native-chrome
+   * hint alone, not because it blocks the media query.) The first fix pass
+   * found and overrode 4 of these variables (background/border/color/
+   * placeholder); a second pass, triggered by finding the fix incomplete
+   * for the *focused* state specifically (a 5th variable Pico only applies
+   * on :active/:focus), swept the full --pico-form-element-* family in
+   * vendor/pico.min.css for every other variable with a distinct dark-mode
+   * value not already covered indirectly through an overridden --pico-
+   * primary*/--ss-* token, and found 3 more: active-background-color
+   * (the confirmed bug — text became ~1:1 contrast the instant a field was
+   * focused), plus the two invalid-state border colors and the selected-
+   * option background, none of which route through anything already fixed. */
   color-scheme: light;
   --pico-form-element-background-color: #fff;
   --pico-form-element-border-color: #d6deea;
   --pico-form-element-color: #14243d;
   --pico-form-element-placeholder-color: #5b6b85;
+  --pico-form-element-active-background-color: #fff;
+  --pico-form-element-invalid-border-color: #b86a6b;
+  --pico-form-element-invalid-active-border-color: #c84f48;
+  --pico-form-element-selected-background-color: #dfe3eb;
 
   --ss-navy-950: #0a1628;
   --ss-navy-800: #14243d;
@@ -329,6 +348,23 @@ main figure::-webkit-scrollbar-thumb {
 .empty-state {
   text-align: center;
   color: var(--pico-muted-color);
+}
+
+/* Every button in the app measured 40px tall (an audit finding) — under
+ * the commonly-cited 44px touch-target guideline, on a system that
+ * explicitly supports a real mobile breakpoint (column collapse, sticky
+ * action column, stacked row actions). --pico-form-element-spacing-vertical
+ * was deliberately tightened above for this app's admin-density type scale,
+ * and reducing that tightening to fix button height would also shrink
+ * every text input's tap target along with it — a floor on the rendered
+ * height, not a change to the padding driving it, keeps the density intent
+ * for dense form fields while still meeting the guideline for tap targets. */
+button,
+[type="submit"],
+[type="button"],
+[type="reset"],
+[role="button"] {
+  min-height: 44px;
 }
 
 /* Login/auth card: vertically centered regardless of viewport height,
