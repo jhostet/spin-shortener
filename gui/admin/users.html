@@ -359,7 +359,7 @@
     // viewer's own row, since the server always rejects that with
     // cannot_delete_self and showing the full "are you sure, permanent"
     // ritual for a guaranteed-doomed action is exactly backwards.
-    initHeader({ backHref: "../dashboard.html", manageUsersHref: "users.html" }).then((result) => {
+    initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Manage users", manageUsersHref: "users.html", onManageUsersPage: true }).then((result) => {
       if (result.ok) currentPrincipal = result.data;
       loadUsers();
     });

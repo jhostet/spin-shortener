@@ -140,12 +140,116 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 #app-header nav li {
   color: #fff;
 }
+/* Neither Pico's <nav> nor its <ul>s wrap by default — on a narrow
+ * viewport with more content than fits one row, the overflow was forced
+ * into mid-word line breaks ("spin-" / "shortener") instead of wrapping
+ * whole items, confirmed live. The fix wraps at the <nav> level only (the
+ * two <ul> groups drop to their own row as intact units when they don't
+ * fit side by side) — wrapping inside each <ul> instead was tried first
+ * and rejected: since <nav>'s default align-items is stretch, the
+ * brand <ul> (one short row) got stretched to match the taller wrapped
+ * account <ul>, vertically centering "spin-shortener" inside empty space
+ * instead of sitting flush at the top. */
+#app-header nav {
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+}
+#app-header nav li,
+.brand-link strong {
+  white-space: nowrap;
+}
 #app-header nav a:hover {
   color: var(--ss-signal-500);
 }
 #app-header nav #logout-btn {
   --pico-color: #fff;
   --pico-border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* Brand mark + wordmark — now a persistent, always-clickable link to the
+ * dashboard on every authenticated page. Previously it was displaced by a
+ * generic "← Back to dashboard" link on every page except the dashboard
+ * itself, so the one constant a user could orient by changed depending on
+ * which page they were on — confirmed live as a real source of navigation
+ * confusion, not just a stylistic complaint. The icon exists so the nav
+ * reads as an authored brand mark rather than "text on a colored
+ * rectangle" — a simple link glyph, matching "The Signal Room" north star
+ * (every accent-blue signal marks a link), not a decorative flourish. */
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  text-decoration: none;
+}
+.brand-mark {
+  color: var(--ss-signal-500);
+  flex-shrink: 0;
+}
+/* Breadcrumb-style page label, next to the permanent brand rather than
+ * replacing it — gives links/detail.html a page identifier it previously
+ * had none at all (no <h1>, and formerly no brand name either). */
+.nav-separator {
+  color: rgba(255, 255, 255, 0.35);
+}
+.nav-page-label {
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 600;
+}
+
+/* Identity chip — replaces the previous plain-text "username (role)" with
+ * a real component: an initial-avatar badge (0.25rem corner radius,
+ * matching every card/button in the system — deliberately NOT full pill
+ * rounding, which the Pill-Is-For-Links Rule reserves for the slug chip
+ * alone) plus a two-line name/role stack, so role reads as a clearly
+ * secondary, de-emphasized attribute rather than a parenthetical afterthought. */
+.identity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.identity-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--pico-border-radius);
+  background: var(--ss-signal-500);
+  color: #fff;
+  font-weight: 700;
+  /* Caption step (see DESIGN.md's typography hierarchy) — reused here
+   * rather than a new one-off size, the same fix already applied once to
+   * .slug-kind-badge/.lock-badge for this exact class of drift. */
+  font-size: 0.75rem;
+  line-height: 1;
+}
+.identity-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.identity-name {
+  color: #fff;
+  font-weight: 600;
+  /* No explicit size — inherits the nav's own ambient text size, matching
+   * "Manage users"/"Log out" rather than introducing a new step. */
+}
+.identity-role {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+/* Below this width the breadcrumb page label and the identity chip's role
+ * line are the first things worth shedding to keep the nav from wrapping
+ * to multiple lines (a previously-observed issue at 390px) — the brand
+ * mark and username are what actually matter for orientation on a phone. */
+@media (max-width: 480px) {
+  .nav-separator,
+  .nav-page-label,
+  .identity-role {
+    display: none;
+  }
 }
 /* Pico's default focus ring (--pico-primary-focus, an rgba box-shadow)
  * measures ~1.71:1 against a white card — well under WCAG 1.4.11's 3:1

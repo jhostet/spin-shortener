@@ -174,21 +174,42 @@ function friendlyError(data, fallback, overrides) {
   return (overrides && overrides[code]) || ERROR_MESSAGES[code] || fallback;
 }
 
-// Renders the shared nav (brand or back-link, whoami, conditional "Manage
-// users" link, logout button) into a page's `<header id="app-header">`, and
-// wires the logout handler — so logout is reachable from every authenticated
-// page, not just the dashboard. `backHref`/`manageUsersHref` let each page
-// supply paths relative to its own depth. Returns the `/auth/me` result so
-// callers can layer page-specific logic (e.g. showing/hiding other fields)
-// on top of the same principal data.
-async function initHeader({ backHref, manageUsersHref = "admin/users.html" } = {}) {
+// Renders the shared nav into a page's `<header id="app-header">` and wires
+// the logout handler — so logout is reachable from every authenticated page,
+// not just the dashboard. The brand mark is now persistent and clickable on
+// every page (previously it was replaced by a "Back to dashboard" link on
+// every page except the dashboard itself — the one thing that should never
+// change page-to-page was the one thing that did). A page identifies itself
+// via `pageLabel`, shown as a breadcrumb suffix next to the permanent brand,
+// rather than by displacing it — this also gives `links/detail.html` a page
+// label it previously had none at all (no `<h1>`, no brand, nothing).
+// `dashboardHref`/`manageUsersHref` let each page supply paths relative to
+// its own depth. `onManageUsersPage` hides the "Manage users" link when it
+// would otherwise point at the page already being viewed. Returns the
+// `/auth/me` result so callers can layer page-specific logic (e.g.
+// showing/hiding other fields) on top of the same principal data.
+async function initHeader({
+  dashboardHref = "dashboard.html",
+  pageLabel = null,
+  manageUsersHref = "admin/users.html",
+  onManageUsersPage = false,
+} = {}) {
   const header = document.getElementById("app-header");
   header.innerHTML = `
     <nav>
       <ul>
-        ${backHref
-          ? `<li><a href="${backHref}">&larr; Back to dashboard</a></li>`
-          : `<li><strong>spin-shortener</strong></li>`}
+        <li>
+          <a href="${dashboardHref}" class="brand-link" aria-label="spin-shortener — go to dashboard">
+            <svg class="brand-mark" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <strong>spin-shortener</strong>
+          </a>
+        </li>
+        ${pageLabel
+          ? `<li class="nav-separator" aria-hidden="true">/</li><li class="nav-page-label">${escapeHtml(pageLabel)}</li>`
+          : ""}
       </ul>
       <ul>
         <li id="whoami"></li>
@@ -206,8 +227,18 @@ async function initHeader({ backHref, manageUsersHref = "admin/users.html" } = {
 
   const result = await api.get("/auth/me");
   if (result.ok) {
-    document.getElementById("whoami").textContent = `${result.data.username} (${result.data.role})`;
-    if (result.data.role === "admin" || result.data.permissions.includes("users.manage")) {
+    const initial = result.data.username.charAt(0).toUpperCase();
+    document.getElementById("whoami").innerHTML = `
+      <span class="identity-chip">
+        <span class="identity-avatar" aria-hidden="true">${escapeHtml(initial)}</span>
+        <span class="identity-text">
+          <span class="identity-name">${escapeHtml(result.data.username)}</span>
+          <span class="identity-role">${escapeHtml(result.data.role)}</span>
+        </span>
+      </span>
+    `;
+    const canManageUsers = result.data.role === "admin" || result.data.permissions.includes("users.manage");
+    if (canManageUsers && !onManageUsersPage) {
       document.getElementById("manage-users-link").style.display = "";
     }
   }
