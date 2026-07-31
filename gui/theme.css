@@ -472,6 +472,17 @@ main figure::-webkit-scrollbar-thumb {
   border: 0;
 }
 
+/* The native `hidden` attribute only gets `display: none` from the UA
+ * stylesheet, which loses to any author rule that sets `display` — Pico sets
+ * `display` on `label`, on `nav li`, and on buttons, all of which are elements
+ * this app hides. `!important` is what makes a hidden element actually
+ * hidden regardless of what any component rule says. Introduced when the
+ * GUI's inline `style="display: none"` attributes were removed so the CSP
+ * could drop 'unsafe-inline' from style-src. */
+[hidden] {
+  display: none !important;
+}
+
 /* Empty-state row inside a data table body. */
 .empty-state {
   text-align: center;

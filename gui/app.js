@@ -213,7 +213,7 @@ async function initHeader({
       </ul>
       <ul>
         <li id="whoami"></li>
-        <li id="manage-users-link" style="display: none"><a href="${manageUsersHref}">Manage users</a></li>
+        <li id="manage-users-link" hidden><a href="${manageUsersHref}">Manage users</a></li>
         <li><button id="logout-btn" class="secondary outline">Log out</button></li>
       </ul>
     </nav>
@@ -239,7 +239,7 @@ async function initHeader({
     `;
     const canManageUsers = result.data.role === "admin" || result.data.permissions.includes("users.manage");
     if (canManageUsers && !onManageUsersPage) {
-      document.getElementById("manage-users-link").style.display = "";
+      document.getElementById("manage-users-link").hidden = false;
     }
   }
   return result;
