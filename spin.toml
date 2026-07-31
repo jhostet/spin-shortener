@@ -50,7 +50,7 @@ watch = ["*.py", "pyproject.toml", "uv.lock"]
 
 # Security response headers (CSP, X-Frame-Options, etc.) are only
 # meaningful on the navigated document itself, not on a .js/.css
-# subresource, so only these 3 genuinely-static asset routes stay on the
+# subresource, so the GUI's genuinely-static asset routes stay on the
 # existing, battle-tested static-fileserver binary. Spin resolves routing
 # by specificity regardless of declaration order, so these exact/prefix
 # routes correctly win over the gui-pages catch-all below for these paths.
@@ -72,6 +72,18 @@ component = "gui"
 # route fully covers this directory's real usage.
 [[trigger.http]]
 route = "/vendor/pico.min.css"
+component = "gui"
+
+# Per-page scripts and styles, one file per page. These were inline
+# <script>/<style> blocks until the gui-pages CSP dropped 'unsafe-inline'
+# from script-src/style-src, which made externalizing them mandatory —
+# see docs/plans/csp-drop-unsafe-inline.md. Exact routes only, for the
+# same reason /vendor/pico.min.css is one: wildcards 404 on this
+# component. Adding a page's asset here is required, not optional — a
+# missing route serves a fully-rendered page whose script silently 404s,
+# so the page looks fine and simply does nothing.
+[[trigger.http]]
+route = "/index.js"
 component = "gui"
 
 [component.gui]
