@@ -38,6 +38,17 @@ The `gui` component (the static asset routes above) gets none of these — heade
 - After finishing a task, immediately update its checkbox in TASKS.md before starting the next one — don't batch updates at the end.
 - If context is compacted or a new session starts, re-read TASKS.md before doing anything else.
 
+## Planner / builder subagents
+
+Non-trivial work in this repo goes through two committed subagents in `.claude/agents/`:
+
+- **`planner`** (opus) — explores the code, weighs trade-offs, and writes a plan to `docs/plans/<feature>.md` (kebab-case, descriptive — never a random slug). It also appends the unchecked `- [ ] ... — file(s): ... — done when: ...` lines to `TASKS.md` under a new descriptively-named section at the end of the file, and records rejected alternatives under `TASKS.md`'s "Considered and rejected". It never writes implementation code — its only writable paths are `docs/plans/`, its scratch file, and appends to `TASKS.md`.
+- **`builder`** (sonnet) — reads the plan file first, implements it following existing conventions, ticks each `TASKS.md` checkbox immediately after finishing that task, and verifies with the real test suites plus a live `spin up` run for user-visible changes. It stops and reports back rather than silently deviating when the plan turns out to be wrong.
+
+Typical flow: invoke `planner` with the requirement and the relevant file paths → review the plan it writes → invoke `builder` with that plan's path. Skip both for one-line fixes; the overhead isn't worth it. When delegating, give concrete references — file paths, the existing code the change interacts with, the specific requirement and non-goals — not "implement the plan"; anything left unstated gets filled in confidently and possibly wrong.
+
+Plans live in `docs/plans/` and are committed. Multi-round work uses `docs/plans/<feature>-scratch.md` (gitignored via `docs/plans/*-scratch.md`) as an append-only handoff note — one `## Round <n> — <agent> — <date>` heading per round, with Done / Open questions / Next. It is a handoff note, not either agent's memory: anything durable gets promoted into the plan file, `TASKS.md`, or here.
+
 ## Commands
 
 Build and run the whole app (all four components) locally:
