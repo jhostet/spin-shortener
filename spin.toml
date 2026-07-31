@@ -97,7 +97,7 @@ source = { url = "https://github.com/spinframework/spin-fileserver/releases/down
 # (e.g. { source = "gui/vendor", destination = "/vendor" }) also 404'd live,
 # consistent with the wildcard-route gotcha above; reverting to the
 # known-working shape was safer than further debugging spin_static_fs's
-# internals for a cosmetic tidiness gain. The 3 routes above are what
+# internals for a cosmetic tidiness gain. The exact routes above are what
 # actually restrict this component's real reachable surface — its
 # filesystem view still containing the now-unroutable HTML files is
 # harmless, since nothing can dispatch a request to them.
