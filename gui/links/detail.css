@@ -1,0 +1,14 @@
+.detail-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+/* Pico's [role=group] defaults to width:100% with flex:1 1 auto
+ * children, so an unscoped group next to the heading would stretch
+ * Copy/Edit across the full container width instead of sizing to
+ * their own content — the same bug already found and fixed on the
+ * dashboard/admin edit-row Save/Cancel groups. */
+.detail-heading [role=group] {
+  width: auto;
+}
