@@ -506,6 +506,20 @@ button,
   min-height: 44px;
 }
 
+/* The 44px floor above stretches an anchor-button's box but does not center
+ * its label the way a real <button> does for free: a block-level <a> leaves
+ * text at the top of the taller box. Measured in the dashboard's row-action
+ * group, where View's label sat 6.2px above its Copy/Edit/Delete siblings —
+ * identical 44px boxes and identical tops, so only the text betrayed it.
+ * The detail page's Edit anchor had the same defect, more subtly (1.8px).
+ * This is the same shape as the #app-header nav a fix below, generalized so
+ * the next <a role="button"> doesn't reintroduce it. */
+a[role="button"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Same 44px floor, extended to persistent-nav plain <a> links — an audit
  * found .brand-link and "Manage users" measured 38.4px tall, since the
  * button-family rule above never covered plain anchors. The brand mark is
