@@ -10,7 +10,7 @@ colors:
   border-mist: "#d6deea"
   bg-mist: "#eef1f6"
   surface-white: "#ffffff"
-  ok-green: "#1a7f5a"
+  ok-green: "#177251"
   danger-red: "#b3261e"
   inherited-error-red: "rgb(136, 56.5, 53)"
 typography:
