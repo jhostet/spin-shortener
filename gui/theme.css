@@ -281,6 +281,38 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   --pico-border-color: rgba(255, 255, 255, 0.4);
 }
 
+/* Theme control — a segmented Auto/Light/Dark group in the persistent nav.
+ * Pico's [role=group] defaults to width:100% with flex:1 1 auto children,
+ * stretching to fill the <li> — the same bug already worked around in
+ * dashboard.css/users.css/detail.css; width:auto is the fix here too. */
+.theme-toggle {
+  width: auto;
+}
+/* Pico's own button and [role=group] [type=button] rules are (0,2,0) and
+ * beat the nav's inherited `color: #fff` outright. `#app-header nav li {
+ * color: #fff }` above is (1,0,2) and has silently beaten plain-class rules
+ * on this exact <li> shape three times before (DESIGN.md) — matching that
+ * losing selector's shape, `#app-header nav .theme-toggle button` is
+ * (1,1,1), clears both, and must be verified with getComputedStyle rather
+ * than by eye. Resting state matches #logout-btn's treatment above. */
+#app-header nav .theme-toggle button {
+  background-color: transparent;
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #fff;
+  font-size: 0.75rem;
+}
+/* Pressed state reads the active theme's own fill/ink pair — the same
+ * indirection .identity-avatar uses — rather than a hardcoded fill, so it
+ * can never land at the light theme's dark-mode-invalid 2.30:1 pairing.
+ * Literal properties (not --pico-* variables) so the win over Pico's
+ * [role=group] [type=button] rule doesn't depend on which rule's variable
+ * assignment happens to cascade through — specificity alone decides it. */
+#app-header nav .theme-toggle button[aria-pressed="true"] {
+  background-color: var(--pico-primary-background);
+  border-color: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
+}
+
 /* Brand mark + wordmark — now a persistent, always-clickable link to the
  * dashboard on every authenticated page. Previously it was displaced by a
  * generic "← Back to dashboard" link on every page except the dashboard
@@ -386,6 +418,21 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 @media (max-width: 480px) {
   .identity-role {
     display: none;
+  }
+  /* Three more 44px-tall theme-control buttons overflow the nav at this
+   * width — confirmed live via scrollWidth vs clientWidth in both themes.
+   * Pre-approved fallback (plan's "Nav crowding" section): let the account
+   * <ul> alone wrap onto its own rows. align-items: flex-start on <nav> is
+   * not optional — DESIGN.md records that <nav>'s default align-items:
+   * stretch previously stretched the shorter brand group to match the
+   * taller wrapped account group, vertically centering the wordmark inside
+   * empty space. */
+  #app-header nav {
+    align-items: flex-start;
+  }
+  #app-header nav ul:last-child {
+    flex-wrap: wrap;
+    row-gap: 0.4rem;
   }
 }
 /* Pico's default focus ring (--pico-primary-focus, an rgba box-shadow)

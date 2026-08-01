@@ -214,6 +214,13 @@ async function initHeader({
       <ul>
         <li id="whoami"></li>
         <li id="manage-users-link" hidden><a href="${manageUsersHref}">Manage users</a></li>
+        <li id="theme-control">
+          <div role="group" class="theme-toggle" aria-label="Color theme">
+            <button type="button" data-theme-choice="system">Auto</button>
+            <button type="button" data-theme-choice="light">Light</button>
+            <button type="button" data-theme-choice="dark">Dark</button>
+          </div>
+        </li>
         <li><button id="logout-btn" class="secondary outline">Log out</button></li>
       </ul>
     </nav>
@@ -224,6 +231,38 @@ async function initHeader({
     setCsrfToken(null);
     location.href = "/login.html";
   });
+
+  // Reflects the current mode's aria-pressed state onto the three theme
+  // buttons — called on render and again after every click, since clicking
+  // one button un-presses the other two.
+  function renderThemePressed(ssTheme, themeButtons) {
+    const current = ssTheme.get();
+    themeButtons.forEach((btn) => {
+      btn.setAttribute("aria-pressed", String(btn.dataset.themeChoice === current));
+    });
+  }
+
+  // window.ssTheme comes from theme-init.js, a separate file on its own
+  // exact spin.toml route. If that route is ever missing or the file 404s,
+  // the page still renders and still themes (the CSS falls back to light) —
+  // but an unguarded ssTheme.get() here would throw, and since initHeader()
+  // is async and no page catches its rejection, that one TypeError would
+  // take down every page's entire init chain, not just the toggle. A
+  // silently-404ing asset is the exact failure spin.toml's own route comment
+  // warns about, so degrade to hiding a control that cannot work.
+  const ssTheme = window.ssTheme;
+  const themeButtons = Array.from(document.querySelectorAll("#theme-control [data-theme-choice]"));
+  if (ssTheme) {
+    renderThemePressed(ssTheme, themeButtons);
+    themeButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        ssTheme.set(btn.dataset.themeChoice);
+        renderThemePressed(ssTheme, themeButtons);
+      });
+    });
+  } else {
+    document.getElementById("theme-control").hidden = true;
+  }
 
   const result = await api.get("/auth/me");
   if (result.ok) {
