@@ -1,0 +1,124 @@
+#links-table th.sortable { cursor: pointer; user-select: none; }
+#links-table th.sortable:hover { color: var(--pico-primary); }
+/* Scoped to non-edit rows only: the edit-row's own <td> is a
+ * colspan="8" cell, so it's *also* `:last-child` of its <tr> — an
+ * unscoped rule here forces `nowrap` through to the Starts/Expires
+ * date-picker labels one level up, overlapping them (see below). */
+#links-table tbody > tr:not(.edit-row) td:last-child { white-space: nowrap; }
+/* The action column (View/Copy/Edit/Delete) is the one thing every row
+ * needs reachable regardless of how far the table has scrolled — Destination
+ * has no natural length cap and Owner/Created/Starts/Expires push the
+ * total width well past the viewport at ordinary desktop sizes, let alone
+ * mobile. Pinning it via position:sticky (not a shadow — see DESIGN.md's
+ * No-Shadow Rule) keeps it visible without capping any other column's
+ * content. Scoped to non-edit rows: the edit-row's own <td> is a
+ * colspan="8" cell (also :last-child of its <tr>), and sticky-pinning
+ * the whole edit form would be wrong. */
+#links-table thead th:last-child,
+#links-table tbody > tr:not(.edit-row) td:last-child {
+  position: sticky;
+  right: 0;
+  background: var(--pico-card-background-color);
+  border-left: 1px solid var(--pico-muted-border-color);
+}
+#links-table [role=group] {
+  width: auto;
+}
+#links-table [role=group] > * {
+  --pico-form-element-spacing-horizontal: 0.5rem;
+  --pico-form-element-spacing-vertical: 0.4rem;
+  font-size: 0.75rem;
+}
+/* Destination holds a raw URL with no natural length limit, so it was
+ * the one column stretching the whole table wider than the row-action
+ * buttons' own reachable width at ordinary desktop widths, not just
+ * narrow ones. Truncate visually; the full URL stays in the DOM text
+ * (still readable to screen readers) and in `title` for sighted hover. */
+#links-table .destination-cell {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A custom slug (up to 32 chars, see admin/users.html's create form)
+ * can push the chip's text onto 2-3 lines inside its border-radius:999px
+ * pill (confirmed live with the seeded "black-friday-2026" slug) —
+ * visibly deforming the app's one signature pill shape (see DESIGN.md's
+ * Pill-Is-For-Links Rule). Scoped to just this table: the chip is also
+ * used as the link-detail page's full-size h1, where showing the
+ * complete slug is the point, not something to truncate. The full URL
+ * stays in the `title` attribute set in renderLinksTable() below. */
+#links-table .slug-chip {
+  display: inline-block;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* Below this width the table's 7 data columns + actions no longer fit
+ * without the sticky action column visually occluding another column's
+ * content at rest (confirmed live: at 390px the sticky column's opaque
+ * background fully covered the Owner column). The real fix is fewer
+ * columns, not a wider sticky element — Owner/Destination/Created/Starts
+ * are the least essential for the "is this link still live" check this
+ * width is standing in for; Status and Expires answer that directly and
+ * stay visible alongside Short link and the actions. */
+@media (max-width: 600px) {
+  #links-table th:nth-child(2),
+  #links-table td:nth-child(2),
+  #links-table th:nth-child(3),
+  #links-table td:nth-child(3),
+  #links-table th:nth-child(4),
+  #links-table td:nth-child(4),
+  #links-table th:nth-child(6),
+  #links-table td:nth-child(6) {
+    display: none;
+  }
+  /* An HTML table's column width is shared across every row (the widest
+   * cell in the column, not just the visible one) — a single long
+   * custom slug ANYWHERE in the table widens column 1 for every row,
+   * which then pushes Expires' position rightward and defeats its own
+   * max-width cap below even though that cap never changed (confirmed
+   * live: adding one "black-friday-2026"-length slug elsewhere in the
+   * table broke the previously-verified clearance on an unrelated row).
+   * Capping this column directly, not just the .slug-chip inside it,
+   * is what makes the later Expires cap's assumption actually hold. */
+  #links-table th:nth-child(1),
+  #links-table tbody > tr:not(.edit-row) td:nth-child(1) {
+    max-width: 100px;
+  }
+  /* Even with 4 columns hidden, View/Copy/Edit/Delete in one unwrapped
+   * row (~208px) still doesn't leave enough room for Short link/Status/
+   * Expires without the sticky column overlapping Expires. Wrapping the
+   * 4 buttons into a stacked block shrinks the column's on-screen width
+   * to ~80-90px. A small gap keeps adjacent buttons (Edit sitting right
+   * above the destructive Delete) from touching with zero separation —
+   * confirmed live: without it, one button's bottom edge exactly meets
+   * the next one's top edge, a real mis-tap risk on a touch device. */
+  #links-table tbody > tr:not(.edit-row) td:last-child [role=group] {
+    flex-wrap: wrap;
+    max-width: 100px;
+    gap: 0.25rem;
+  }
+  /* Neither padding-right alone (adds space after left-aligned text,
+   * doesn't move it) nor padding-right + text-align:right (the padding
+   * terms cancel out algebraically once the cell's own width is also
+   * determined by that same padding, in an auto-layout table) actually
+   * created real clearance — both measured zero effect live. The sticky
+   * actions column sits at a fixed position independent of this cell's
+   * padding, so the only thing that reliably keeps content clear of it
+   * is capping this column's own rendered width so wrapped text
+   * physically cannot reach that far right. 75px is the safe zone
+   * measured live between this column's natural left edge and the
+   * sticky column's left edge at 390px. An auto-layout table sizes a
+   * column to the widest cell across *all* rows including the header —
+   * capping only td left the th's natural width (sort arrow + "Expires"
+   * text) in control, rendering 80.4px instead of 75px (a later audit
+   * caught this; the equivalent users.html fix correctly capped both
+   * from the start). */
+  #links-table thead th:nth-child(7),
+  #links-table tbody > tr:not(.edit-row) td:nth-child(7) {
+    max-width: 75px;
+  }
+}
