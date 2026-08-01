@@ -143,24 +143,18 @@
    * chip need DIFFERENT values from each other (the nav goes darker than
    * the canvas, the chip goes lighter than the card), while --ss-navy-950/
    * -800 themselves stay the same two fixed navies in both themes. Values
-   * below are today's exact rendering — this is a no-visual-change change,
-   * except for --ss-chip-hover-fg (see its own comment below). */
+   * below are today's exact rendering — this is a no-visual-change change.
+   *
+   * There is deliberately no chip *hover* pair here. The slug chip has no
+   * hover state because no chip is a link: the class only ever lands on
+   * two <span>s and one non-anchor <h1>, since making chips clickable let
+   * a click on one fire a real redirect and inflate that link's own click
+   * count. An a.slug-chip:hover rule and its two tokens survived that
+   * change as dead code and were removed once that was noticed. If a chip
+   * is ever made a link again, the analytics question has to be answered
+   * first — not the colour one. */
   --ss-chrome-bg: var(--ss-navy-950);
   --ss-chip-bg: var(--ss-navy-950);
-  --ss-chip-hover-bg: var(--ss-navy-800);
-  /* a.slug-chip:hover renders this on --ss-chip-hover-bg (--ss-navy-800,
-   * #14243d) — --ss-signal-500 (#276fb8) measured 3.00:1 there, under the
-   * 4.5:1 AA text minimum (found while measuring baselines for the
-   * light/dark theming plan, but that plan was forbidden from touching a
-   * light-theme colour, so it was logged instead of fixed here). #5f9edd is
-   * the same 210° hue lightened to real headroom: 5.50:1 against the same
-   * background, deliberately close to the dark theme's own chip-hover-fg
-   * ratio (5.47:1) rather than a bare pass. It's already the signal-blue
-   * ramp's own "light" tint (.impeccable/design.json's tonalRamp[4]), not a
-   * new hue — only --ss-chip-hover-fg re-points at it; --ss-signal-500
-   * itself, and every other element reading it (nav hover, focus ring,
-   * primary button), is untouched. */
-  --ss-chip-hover-fg: #5f9edd;
 }
 
 /* Dark — inert until data-theme="dark" is set (theme-init.js, a later task).
@@ -242,8 +236,6 @@
    * is why these can't just read a re-defined --ss-navy-950. */
   --ss-chrome-bg: #060f1d;
   --ss-chip-bg: #1e3a63;
-  --ss-chip-hover-bg: #28486f;
-  --ss-chip-hover-fg: #9ccbf7;
 }
 
 body {
@@ -494,15 +486,6 @@ details summary:focus-visible:not([role]) {
   text-decoration: none;
   line-height: 1.6;
 }
-/* Only an actual link earns the interactive hover state — the table
- * and success-banner chips are plain display text now (see dashboard.html;
- * clicking a slug-chip used to fire a real redirect and inflate that
- * link's own click count). */
-a.slug-chip:hover {
-  background: var(--ss-chip-hover-bg);
-  color: var(--ss-chip-hover-fg);
-}
-
 /* Data-like table columns (slug, destination, timestamps) read as
  * monospace, distinct from the sans-serif labels/prose around them. */
 #links-table td:nth-child(1),
