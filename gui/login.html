@@ -28,6 +28,10 @@
       </form>
       <p id="error" class="form-error" role="alert"></p>
     </article>
+    <!-- Populated by renderThemeToggle() in app.js. Sits outside the card so
+         the login form itself stays uncluttered; empty until JS runs, and
+         hidden entirely if theme-init.js is unavailable. -->
+    <div id="theme-control" class="auth-theme"></div>
   </main>
 
   <script src="app.js"></script>

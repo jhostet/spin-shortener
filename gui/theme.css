@@ -293,6 +293,35 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 .theme-toggle {
   width: auto;
 }
+/* Base treatment, used wherever the control is NOT in the nav — today that
+ * is login.html, which has no #app-header at all, so the control sits on the
+ * page background instead of the dark chrome fill.
+ *
+ * The resting colours come from Pico's own `outline secondary` variant on
+ * the buttons themselves (the same pair #logout-btn uses), not from a rule
+ * here, because both themes then get correct values for free. A first
+ * attempt set `color: var(--pico-color)` here and rendered dark-navy text on
+ * the dark background: Pico's [type="button"] rule redefines --pico-color
+ * *on the button element* to the primary inverse, so inside a button that
+ * variable is the button's own ink, not the page's body text. The rule was
+ * winning the cascade and still producing the wrong colour — variable
+ * shadowing, not specificity. Only the size is set here. */
+.theme-toggle button {
+  font-size: 0.75rem;
+}
+.theme-toggle button[aria-pressed="true"] {
+  background-color: var(--pico-primary-background);
+  border-color: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
+}
+
+/* The login page's mount point: centred under the auth card, outside it. */
+.auth-theme {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--pico-spacing);
+}
+
 /* Pico's own button and [role=group] [type=button] rules are (0,2,0) and
  * beat the nav's inherited `color: #fff` outright. `#app-header nav li {
  * color: #fff }` above is (1,0,2) and has silently beaten plain-class rules

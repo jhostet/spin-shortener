@@ -1,3 +1,6 @@
+// The login page has no nav, so it mounts the shared theme control itself.
+renderThemeToggle(document.getElementById("theme-control"));
+
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const username = document.getElementById("username").value;
