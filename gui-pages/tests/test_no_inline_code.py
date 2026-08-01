@@ -23,6 +23,17 @@ GUI_DIR = Path(__file__).resolve().parents[2] / "gui"
 
 PAGES = sorted(set(ROUTES.values()))
 
+# Every first-party script the gui component serves, discovered rather than
+# listed, for the same reason PAGES is derived from ROUTES: a new page's
+# script is covered the moment it exists instead of being quietly exempt
+# until someone remembers to add it here. vendor/ is third-party and not
+# ours to police.
+SCRIPTS = sorted(
+    str(p.relative_to(GUI_DIR))
+    for p in GUI_DIR.rglob("*.js")
+    if "vendor" not in p.relative_to(GUI_DIR).parts
+)
+
 # A <script> with no src= attribute, i.e. one with inline content. Matches
 # `<script>` and `<script type="...">` but not `<script src="app.js">`.
 INLINE_SCRIPT = re.compile(r"<script(?![^>]*\bsrc\s*=)[^>]*>", re.IGNORECASE)
@@ -74,15 +85,19 @@ def test_page_has_no_inline_event_handler(page):
     )
 
 
-# app.js and theme-init.js are served by the gui component and so are not in
-# ROUTES, but app.js builds the nav markup for every page via innerHTML (a
-# style attribute in one of its templates is checked by the CSP exactly like a
-# parsed one — that is where the seventh and last style attribute lived, and
-# it is the file most likely to regrow one), and theme-init.js is a
-# render-blocking <head> script loaded by every real page, so both are worth
-# guarding the same way a parsed page is.
-@pytest.mark.parametrize("filename", ["app.js", "theme-init.js"])
-def test_app_js_has_no_style_attribute_in_templates(filename):
+# The scripts are served by the gui component and so are not in ROUTES, but
+# they build page markup with innerHTML, and an injected style attribute or
+# srcless <script> is checked by the CSP exactly like a parsed one. app.js is
+# where the seventh and last style attribute lived and is the file most likely
+# to regrow one; dashboard.js, admin/users.js and links/detail.js build markup
+# the same way and were an unguarded gap until this was widened.
+def test_scripts_list_is_not_empty():
+    """Globbing that matches nothing would silently pass every test below."""
+    assert SCRIPTS, "no first-party scripts discovered under gui/"
+
+
+@pytest.mark.parametrize("filename", SCRIPTS)
+def test_script_has_no_style_attribute_in_templates(filename):
     assert not STYLE_ATTR.search(_read(filename)), (
         f'gui/{filename} has a style="..." attribute in a template; an '
         "innerHTML-inserted style attribute is blocked by the CSP just like a "
@@ -90,8 +105,8 @@ def test_app_js_has_no_style_attribute_in_templates(filename):
     )
 
 
-@pytest.mark.parametrize("filename", ["app.js", "theme-init.js"])
-def test_app_js_has_no_inline_script_tag_in_templates(filename):
+@pytest.mark.parametrize("filename", SCRIPTS)
+def test_script_has_no_inline_script_tag_in_templates(filename):
     assert not INLINE_SCRIPT.search(_read(filename)), (
         f"gui/{filename} builds a <script> tag without a src attribute; "
         "injected inline script is blocked by the CSP"
