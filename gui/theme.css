@@ -4,6 +4,40 @@
  * signature components (slug chip, status badge) shared across pages.
  */
 
+/* Theme-independent: density/type scale + the raw navy ramp. Both branches
+ * of this selector are (0,2,0) specificity and together they match every
+ * possible root state (data-theme absent, "light", or "dark"), so these
+ * beat Pico's own (0,1,0) :host,:root declarations — including its
+ * viewport-width font-size media queries — in BOTH themes.
+ *
+ * These tokens must NOT live inside the light-only block below: that
+ * block's selector (:root:not([data-theme="dark"])) stops matching the
+ * instant data-theme="dark" is set, so density/scale tokens left inside it
+ * would silently hand --pico-font-size back to Pico's viewport-scaling
+ * defaults (106.25%..131.25% at >=576px..1536px) and --pico-spacing back to
+ * Pico's 1rem — a visibly different type/spacing scale in dark mode, with
+ * no error or visual cue pointing at the cause. */
+:root:not([data-theme="dark"]),
+:root[data-theme="dark"] {
+  /* Pico scales --pico-font-size up with viewport width by default (up to
+   * 131.25% at >=1536px), which is tuned for prose/marketing content. This
+   * is a dense admin app (tables + forms), so pin it flat and tighten the
+   * spacing/type scale that rides on top of it. */
+  --pico-font-size: 100%;
+  --pico-line-height: 1.4;
+  --pico-spacing: 0.75rem;
+  --pico-form-element-spacing-vertical: 0.5rem;
+  --pico-form-element-spacing-horizontal: 0.75rem;
+
+  --ss-mono-font: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* The raw navy ramp — constants DESIGN.md names as identity colours in
+   * both themes. The light block below references them through semantic
+   * tokens rather than redefining them per-theme. */
+  --ss-navy-950: #0a1628;
+  --ss-navy-800: #14243d;
+}
+
 /* Must match Pico's own :root:not([data-theme="dark"]) selector exactly,
  * not plain :root — Pico defines --pico-primary-background,
  * --pico-background-color, --pico-color, --pico-h1/h2/h3-color,
@@ -15,16 +49,6 @@
  * this an equal-specificity tie, which load order (this file loads after
  * pico.min.css) then correctly breaks in this file's favor. */
 :root:not([data-theme="dark"]) {
-  /* Pico scales --pico-font-size up with viewport width by default (up to
-   * 131.25% at >=1536px), which is tuned for prose/marketing content. This
-   * is a dense admin app (tables + forms), so pin it flat and tighten the
-   * spacing/type scale that rides on top of it. */
-  --pico-font-size: 100%;
-  --pico-line-height: 1.4;
-  --pico-spacing: 0.75rem;
-  --pico-form-element-spacing-vertical: 0.5rem;
-  --pico-form-element-spacing-horizontal: 0.75rem;
-
   /* #2b7fd1 measured ~4.15:1 against white — below the 4.5:1 AA minimum
    * for normal text, on both button fills (white-on-blue) and plain
    * link text (blue-on-white/bg-mist), since contrast is symmetric.
@@ -82,7 +106,7 @@
    * on :active/:focus), swept the full --pico-form-element-* family in
    * vendor/pico.min.css for every other variable with a distinct dark-mode
    * value not already covered indirectly through an overridden --pico-
-   * primary*/--ss-* token, and found 3 more: active-background-color
+   * primary* / --ss-* token, and found 3 more: active-background-color
    * (the confirmed bug — text became ~1:1 contrast the instant a field was
    * focused), plus the two invalid-state border colors and the selected-
    * option background, none of which route through anything already fixed. */
@@ -96,8 +120,6 @@
   --pico-form-element-invalid-active-border-color: #c84f48;
   --pico-form-element-selected-background-color: #dfe3eb;
 
-  --ss-navy-950: #0a1628;
-  --ss-navy-800: #14243d;
   /* #5b6b85 measured 4.77:1 against the table cell's real background
    * (--pico-background-color, #eef1f6) for .slug-kind-badge/.lock-badge —
    * clears the 4.5:1 AA minimum, but by only 0.27:1, the same "measured
@@ -115,7 +137,100 @@
    * used for --ss-signal-500 above. */
   --ss-ok-500: #177251;
   --ss-danger-500: #b3261e;
-  --ss-mono-font: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* Semantic surface tokens — the indirection layer the nav/chip need but
+   * don't have via --ss-navy-950/-800 alone: in dark mode the nav and the
+   * chip need DIFFERENT values from each other (the nav goes darker than
+   * the canvas, the chip goes lighter than the card), while --ss-navy-950/
+   * -800 themselves stay the same two fixed navies in both themes. Values
+   * below are today's exact rendering — this is a no-visual-change change. */
+  --ss-chrome-bg: var(--ss-navy-950);
+  --ss-chip-bg: var(--ss-navy-950);
+  --ss-chip-hover-bg: var(--ss-navy-800);
+  --ss-chip-hover-fg: var(--ss-signal-500);
+}
+
+/* Dark — inert until data-theme="dark" is set (theme-init.js, a later task).
+ * :root[data-theme="dark"] is (0,2,0), beating Pico's bare [data-theme=dark]
+ * (0,1,0) by specificity, not load order. Derived from the navy identity at
+ * constant hue (Constant-Hue Rule): each value sits within ~2° of its light
+ * counterpart's hue. Same --pico-form-element-*, --pico-card-*, --pico-primary*
+ * families as the light block (sweep-the-family Do) — anything Pico's own
+ * dark block already covers correctly (secondary, contrast, code, accordion,
+ * dropdown, table, switch, range, modal overlay) is left to Pico here, same
+ * as light. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --pico-background-color: #0a1628;
+  /* One step lighter than the canvas reads as "lifting" — the same
+   * relationship the slug chip already uses against the nav. */
+  --pico-card-background-color: #14243d;
+  --pico-card-sectioning-background-color: #14243d;
+  /* Pico's own dark block re-enables --pico-card-box-shadow and
+   * --pico-dropdown-box-shadow (both default to var(--pico-box-shadow), a
+   * real multi-layer drop shadow) — the same No-Shadow Rule violation the
+   * light block above had to fix once already, confirmed live by parsing
+   * vendor/pico.min.css. Must be re-overridden here or dark mode silently
+   * reintroduces it. */
+  --pico-card-box-shadow: none;
+  --pico-dropdown-box-shadow: none;
+  /* Pico's own dark block sets --pico-card-border-color equal to the card
+   * background — an invisible border. This system's depth comes from a
+   * hairline border plus background contrast with no shadow allowed, so a
+   * borderless card here would leave nothing separating surfaces at all. */
+  --pico-card-border-color: #31456a;
+  --pico-muted-border-color: #31456a;
+
+  --pico-color: #dfe6f2;
+  --pico-h1-color: #f2f6fc;
+  --pico-h2-color: #f2f6fc;
+  --pico-h3-color: #f2f6fc;
+  --pico-muted-color: #93a3bd;
+
+  /* The primary fill is the accent colour itself, in both themes — same
+   * structure as the light block, different values. What flips is the
+   * ink: light mode is white-on-blue; dark mode is Deep-Navy-on-light-blue
+   * (not white — white-on-#6fb0ee measures 2.30:1, a real failure). A
+   * white-ink fill that also clears AA margin comfortably against this
+   * card background was tried and rejected (see the plan's Trade-offs —
+   * the light-fill/dark-ink pairing is what buys real headroom on both the
+   * fill-vs-card boundary and the label-vs-fill contrast at once). */
+  --pico-primary: #6fb0ee;
+  --pico-primary-background: #6fb0ee;
+  --pico-primary-border: #6fb0ee;
+  --pico-primary-hover: #9ccbf7;
+  --pico-primary-hover-background: #9ccbf7;
+  --pico-primary-hover-border: #9ccbf7;
+  --pico-primary-inverse: #0a1628;
+  --pico-primary-underline: rgba(111, 176, 238, 0.5);
+  --pico-primary-hover-underline: rgba(111, 176, 238, 0.75);
+  --pico-primary-focus: rgba(111, 176, 238, 0.375);
+
+  /* Same 8 --pico-form-element-* variables the light block overrides —
+   * see the file-level comment on this block for why the two lists must
+   * stay in lockstep. */
+  --pico-form-element-background-color: #0d1a2e;
+  --pico-form-element-border-color: #31456a;
+  --pico-form-element-color: #e6ecf7;
+  --pico-form-element-placeholder-color: #93a3bd;
+  --pico-form-element-active-background-color: #0d1a2e;
+  --pico-form-element-invalid-border-color: #c4767c;
+  --pico-form-element-invalid-active-border-color: #d4756c;
+  --pico-form-element-selected-background-color: #1c3054;
+
+  --ss-slate-500: #a8b6cc;
+  --ss-signal-500: #6fb0ee;
+  --ss-ok-500: #4cc79a;
+  --ss-danger-500: #ff8a80;
+
+  /* Nav stays the darkest surface on screen, as in light. Chip goes
+   * *lighter* than the card (the opposite direction from the nav), which
+   * is why these can't just read a re-defined --ss-navy-950. */
+  --ss-chrome-bg: #060f1d;
+  --ss-chip-bg: #1e3a63;
+  --ss-chip-hover-bg: #28486f;
+  --ss-chip-hover-fg: #9ccbf7;
 }
 
 body {
@@ -129,7 +244,7 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
 
 /* Persistent nav chrome */
 #app-header nav {
-  background: var(--ss-navy-950);
+  background: var(--ss-chrome-bg);
   color: #fff;
   padding: 0.75rem 1rem;
   border-radius: var(--pico-border-radius);
@@ -228,8 +343,13 @@ h3 { --pico-font-size: 1.1rem; --pico-typography-spacing-top: 1.5rem; }
   width: 1.75rem;
   height: 1.75rem;
   border-radius: var(--pico-border-radius);
-  background: var(--ss-signal-500);
-  color: #fff;
+  /* Reads Pico's own fill/ink-on-fill pairing rather than a hardcoded
+   * --ss-signal-500/#fff pair, so the avatar tracks the primary button
+   * automatically instead of needing its own per-theme values — the same
+   * fill and label colours the active theme already uses for its primary
+   * button (#276fb8/#fff at 5.18:1 in light, no rendering change here). */
+  background: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
   font-weight: 700;
   /* Caption step (see DESIGN.md's typography hierarchy) — reused here
    * rather than a new one-off size, the same fix already applied once to
@@ -302,7 +422,7 @@ details summary:focus-visible:not([role]) {
   display: inline-block;
   font-family: var(--ss-mono-font);
   font-size: 0.85em;
-  background: var(--ss-navy-950);
+  background: var(--ss-chip-bg);
   color: #fff;
   /* Vertical padding in rem, not em: this chip renders at several
    * different local font sizes (dashboard table cell, detail-page h1),
@@ -319,8 +439,8 @@ details summary:focus-visible:not([role]) {
  * clicking a slug-chip used to fire a real redirect and inflate that
  * link's own click count). */
 a.slug-chip:hover {
-  background: var(--ss-navy-800);
-  color: var(--ss-signal-500);
+  background: var(--ss-chip-hover-bg);
+  color: var(--ss-chip-hover-fg);
 }
 
 /* Data-like table columns (slug, destination, timestamps) read as
