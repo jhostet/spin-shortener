@@ -14,6 +14,7 @@ from routing import SECURITY_HEADERS, build_response, resolve_file
         ("/links/detail.html", "links/detail.html"),
         ("/nonexistent.html", None),
         ("/app.js", None),  # served by the other gui component now, not this one
+        ("/theme-init.js", None),
         ("/vendor/pico.min.css", None),
         # The per-page assets the CSP hardening externalized are served by the
         # gui component too, via exact routes in spin.toml — not by this one.

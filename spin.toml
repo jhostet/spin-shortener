@@ -82,6 +82,15 @@ component = "gui"
 # component. Adding a page's asset here is required, not optional — a
 # missing route serves a fully-rendered page whose script silently 404s,
 # so the page looks fine and simply does nothing.
+#
+# /theme-init.js is the one exception to "one file per page" in this
+# block: it is loaded by every real page (not index.html — see
+# docs/plans/light-dark-theme.md), first in <head>, to set
+# data-theme before first paint and avoid a light-then-dark flash.
+[[trigger.http]]
+route = "/theme-init.js"
+component = "gui"
+
 [[trigger.http]]
 route = "/index.js"
 component = "gui"
