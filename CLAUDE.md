@@ -47,6 +47,8 @@ Non-trivial work in this repo goes through two committed subagents in `.claude/a
 
 Typical flow: invoke `planner` with the requirement and the relevant file paths → review the plan it writes → invoke `builder` with that plan's path. Skip both for one-line fixes; the overhead isn't worth it. When delegating, give concrete references — file paths, the existing code the change interacts with, the specific requirement and non-goals — not "implement the plan"; anything left unstated gets filled in confidently and possibly wrong.
 
+**A `builder` run that involves `spin up --build` may return early**, mid-verification, with the code already written — observed once during the CSP work, where it returned the bare text "Waiting for the spin build to finish." **Resume it rather than re-running the task**: its transcript is intact, so a follow-up message picks up where it stopped, while a fresh invocation redoes work that is already on disk. Worth saying so in the delegation prompt too. Whatever it produces, verify the diff yourself before committing — check that it touched only the files its task line names, and that `git diff --numstat TASKS.md` shows only the checkbox lines it was supposed to tick.
+
 Plans live in `docs/plans/` and are committed. Multi-round work uses `docs/plans/<feature>-scratch.md` (gitignored via `docs/plans/*-scratch.md`) as an append-only handoff note — one `## Round <n> — <agent> — <date>` heading per round, with Done / Open questions / Next. It is a handoff note, not either agent's memory: anything durable gets promoted into the plan file, `TASKS.md`, or here.
 
 ## Commands

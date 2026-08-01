@@ -7,6 +7,7 @@ colors:
   navy-950: "#0a1628"
   navy-800: "#14243d"
   slate-muted: "#5b6b85"
+  badge-slate: "#526078"
   border-mist: "#d6deea"
   bg-mist: "#eef1f6"
   surface-white: "#ffffff"
