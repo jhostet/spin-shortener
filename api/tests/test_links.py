@@ -31,7 +31,7 @@ def _request(payload=None):
     ],
 )
 def test_custom_slug_validation_boundaries(slug, expected):
-    assert links._is_valid_custom_slug(slug) is expected
+    assert links.is_valid_custom_slug(slug) is expected
 
 
 async def test_create_random_slug_success():
@@ -116,20 +116,20 @@ async def test_create_with_valid_password_masks_hash_in_response():
 async def test_random_slug_retries_on_collision(monkeypatch):
     store = FakeStore()
     calls = iter(["colliding", "colliding", "free"])
-    monkeypatch.setattr(links, "_generate_slug", lambda: next(calls))
+    monkeypatch.setattr(links, "generate_slug", lambda: next(calls))
 
     await store.set("slug:colliding", b"{}")
-    slug = await links._allocate_random_slug(store)
+    slug = await links.allocate_random_slug(store, set())
     assert slug == "free"
 
 
 async def test_random_slug_raises_after_exhausting_attempts(monkeypatch):
     store = FakeStore()
-    monkeypatch.setattr(links, "_generate_slug", lambda: "always-colliding")
+    monkeypatch.setattr(links, "generate_slug", lambda: "always-colliding")
     await store.set("slug:always-colliding", b"{}")
 
     with pytest.raises(RuntimeError):
-        await links._allocate_random_slug(store)
+        await links.allocate_random_slug(store, set())
 
 
 async def test_get_owner_can_view():
@@ -575,3 +575,55 @@ async def test_update_bumps_updated_at():
     updated = json.loads(resp.body)
     assert updated["updated_at"] >= original["updated_at"]
     assert updated["created_at"] == original["created_at"]
+
+
+# --- Batched index writers (add_slugs_to_indexes / remove_slugs_from_indexes) ---
+
+
+async def test_add_slugs_to_indexes_writes_all_links_and_owner_once():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["s1", "s2", "s3"])
+    assert await links._all_slugs(store) == ["s1", "s2", "s3"]
+    assert await links._owned_slugs(store, "alice") == ["s1", "s2", "s3"]
+
+
+async def test_add_slugs_to_indexes_skips_already_present_and_preserves_order():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["s1"])
+    await links.add_slugs_to_indexes(store, "alice", ["s1", "s2"])
+    assert await links._all_slugs(store) == ["s1", "s2"]
+    assert await links._owned_slugs(store, "alice") == ["s1", "s2"]
+
+
+async def test_remove_slugs_from_indexes_multi_owner():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
+    await links.add_slugs_to_indexes(store, "bob", ["b1"])
+
+    await links.remove_slugs_from_indexes(store, {"alice": ["a1"], "bob": ["b1"]})
+
+    assert await links._all_slugs(store) == ["a2"]
+    assert await links._owned_slugs(store, "alice") == ["a2"]
+    assert await links._owned_slugs(store, "bob") == []
+
+
+async def test_index_write_once_property_for_bulk_style_batch(monkeypatch):
+    # Proves the design property the whole feature exists for: adding N slugs
+    # in one call does exactly one set() on all_links and one per distinct
+    # owner, not N.
+    store = FakeStore()
+    set_calls = []
+    original_set = store.set
+
+    async def counting_set(key, value):
+        set_calls.append(key)
+        await original_set(key, value)
+
+    monkeypatch.setattr(store, "set", counting_set)
+
+    slugs = [f"slug-{i}" for i in range(10)]
+    await links.add_slugs_to_indexes(store, "alice", slugs)
+
+    assert set_calls.count("all_links") == 1
+    assert set_calls.count("owner_links:alice") == 1
+    assert len(set_calls) == 2

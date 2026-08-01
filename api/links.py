@@ -18,16 +18,21 @@ SLUG_GENERATION_ATTEMPTS = 5
 
 CUSTOM_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 MIN_LINK_PASSWORD_LENGTH = 4
+LINK_STATUSES = ("active", "disabled")
 
 
-def _generate_slug() -> str:
+def generate_slug() -> str:
     return "".join(secrets.choice(SLUG_ALPHABET) for _ in range(SLUG_LENGTH))
 
 
-async def _allocate_random_slug(store) -> str:
+async def allocate_random_slug(store, taken: set[str]) -> str:
+    """Random slug not in `taken` and not already in the store. Adds the
+    result to `taken` so a caller allocating many in one pass cannot collide
+    with itself without a KV round trip per candidate."""
     for _ in range(SLUG_GENERATION_ATTEMPTS):
-        slug = _generate_slug()
-        if not await store.exists(f"slug:{slug}"):
+        slug = generate_slug()
+        if slug not in taken and not await store.exists(f"slug:{slug}"):
+            taken.add(slug)
             return slug
     raise RuntimeError("failed to allocate a unique slug")
 
@@ -35,20 +40,6 @@ async def _allocate_random_slug(store) -> str:
 async def _owned_slugs(store, username: str) -> list[str]:
     raw = await store.get(f"owner_links:{username}")
     return json.loads(raw) if raw else []
-
-
-async def _add_owned_slug(store, username: str, slug: str) -> None:
-    slugs = await _owned_slugs(store, username)
-    if slug not in slugs:
-        slugs.append(slug)
-    await store.set(f"owner_links:{username}", json.dumps(slugs).encode("utf-8"))
-
-
-async def _remove_owned_slug(store, username: str, slug: str) -> None:
-    slugs = await _owned_slugs(store, username)
-    if slug in slugs:
-        slugs.remove(slug)
-    await store.set(f"owner_links:{username}", json.dumps(slugs).encode("utf-8"))
 
 
 ALL_SLUGS_INDEX_KEY = "all_links"
@@ -59,18 +50,36 @@ async def _all_slugs(store) -> list[str]:
     return json.loads(raw) if raw else []
 
 
-async def _add_all_slug(store, slug: str) -> None:
-    slugs = await _all_slugs(store)
-    if slug not in slugs:
-        slugs.append(slug)
-    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs).encode("utf-8"))
+async def add_slugs_to_indexes(store, owner: str, slugs: list[str]) -> None:
+    """One read+write of `all_links`, one of `owner_links:<owner>`, for any
+    number of slugs. Order-preserving, skips slugs already present."""
+    all_slugs = await _all_slugs(store)
+    for slug in slugs:
+        if slug not in all_slugs:
+            all_slugs.append(slug)
+    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(all_slugs).encode("utf-8"))
+
+    owned = await _owned_slugs(store, owner)
+    for slug in slugs:
+        if slug not in owned:
+            owned.append(slug)
+    await store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8"))
 
 
-async def _remove_all_slug(store, slug: str) -> None:
-    slugs = await _all_slugs(store)
-    if slug in slugs:
-        slugs.remove(slug)
-    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs).encode("utf-8"))
+async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]]) -> None:
+    """One read+write of `all_links` total, plus one per distinct owner. Takes
+    a per-owner mapping because a `links.edit_all` user can delete links
+    belonging to several owners in a single action."""
+    all_to_remove = {slug for slugs in slugs_by_owner.values() for slug in slugs}
+    all_slugs = await _all_slugs(store)
+    all_slugs = [slug for slug in all_slugs if slug not in all_to_remove]
+    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(all_slugs).encode("utf-8"))
+
+    for owner, slugs in slugs_by_owner.items():
+        to_remove = set(slugs)
+        owned = await _owned_slugs(store, owner)
+        owned = [slug for slug in owned if slug not in to_remove]
+        await store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8"))
 
 
 async def get_link(store, slug: str) -> dict | None:
@@ -78,16 +87,16 @@ async def get_link(store, slug: str) -> dict | None:
     return json.loads(raw) if raw else None
 
 
-def _is_valid_target_url(target_url: str) -> bool:
+def is_valid_target_url(target_url: str) -> bool:
     parsed = urlparse(target_url)
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def _is_valid_custom_slug(slug: str) -> bool:
+def is_valid_custom_slug(slug: str) -> bool:
     return bool(CUSTOM_SLUG_PATTERN.match(slug))
 
 
-def _parse_window_field(value) -> tuple[str | None, bool]:
+def parse_window_field(value) -> tuple[str | None, bool]:
     """Returns (normalized_iso8601_utc_or_None, is_invalid). `value=None` means
     "unset", not invalid — an explicit-but-unparsable string is what's invalid.
     """
@@ -101,7 +110,7 @@ def _parse_window_field(value) -> tuple[str | None, bool]:
     return to_iso8601_utc(parsed), False
 
 
-def _public_link(record: dict) -> dict:
+def public_link(record: dict) -> dict:
     """Link record with `password_hash` replaced by a boolean flag before it's ever serialized to a client."""
     public = {k: v for k, v in record.items() if k != "password_hash"}
     public["password_protected"] = bool(record.get("password_hash"))
@@ -120,7 +129,10 @@ def can_view(principal: Principal, record: dict) -> bool:
     )
 
 
-def _can_edit(principal: Principal, record: dict) -> bool:
+def can_edit(principal: Principal, record: dict) -> bool:
+    """Shared (not module-private) — bulk.py gates bulk-action rows on the
+    same write semantics as the single-link edit/delete/password handlers
+    below."""
     return record["owner"] == principal.username or principal.has_permission("links.edit_all")
 
 
@@ -131,21 +143,21 @@ async def handle_create(store, principal: Principal, request):
         return json_response(400, {"error": "invalid_json"})
 
     target_url = payload.get("target_url")
-    if not isinstance(target_url, str) or not _is_valid_target_url(target_url):
+    if not isinstance(target_url, str) or not is_valid_target_url(target_url):
         return json_response(400, {"error": "invalid_target_url"})
 
     custom_slug = payload.get("custom_slug")
     if custom_slug is not None:
         if not principal.has_permission("links.create_custom_slug"):
             return json_response(403, {"error": "forbidden", "required_permission": "links.create_custom_slug"})
-        if not isinstance(custom_slug, str) or not _is_valid_custom_slug(custom_slug):
+        if not isinstance(custom_slug, str) or not is_valid_custom_slug(custom_slug):
             return json_response(400, {"error": "invalid_custom_slug"})
         if await store.exists(f"slug:{custom_slug}"):
             return json_response(409, {"error": "slug_taken"})
         slug = custom_slug
         custom = True
     else:
-        slug = await _allocate_random_slug(store)
+        slug = await allocate_random_slug(store, set())
         custom = False
 
     password = payload.get("password")
@@ -155,10 +167,10 @@ async def handle_create(store, principal: Principal, request):
             return json_response(400, {"error": "invalid_password"})
         password_hash = auth.hash_password(password)
 
-    start_at, start_invalid = _parse_window_field(payload.get("start_at"))
+    start_at, start_invalid = parse_window_field(payload.get("start_at"))
     if start_invalid:
         return json_response(400, {"error": "invalid_start_at"})
-    end_at, end_invalid = _parse_window_field(payload.get("end_at"))
+    end_at, end_invalid = parse_window_field(payload.get("end_at"))
     if end_invalid:
         return json_response(400, {"error": "invalid_end_at"})
     if start_at is not None and end_at is not None and start_at >= end_at:
@@ -178,9 +190,8 @@ async def handle_create(store, principal: Principal, request):
         "updated_at": now,
     }
     await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
-    await _add_owned_slug(store, principal.username, slug)
-    await _add_all_slug(store, slug)
-    return json_response(201, _public_link(record))
+    await add_slugs_to_indexes(store, principal.username, [slug])
+    return json_response(201, public_link(record))
 
 
 async def handle_list(store, principal: Principal):
@@ -192,7 +203,7 @@ async def handle_list(store, principal: Principal):
     for slug in slugs:
         record = await get_link(store, slug)
         if record is not None:
-            records.append(_public_link(record))
+            records.append(public_link(record))
     return json_response(200, {"links": records})
 
 
@@ -202,7 +213,7 @@ async def handle_get(store, principal: Principal, slug: str):
         return json_response(404, {"error": "not_found"})
     if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
-    return json_response(200, _public_link(record))
+    return json_response(200, public_link(record))
 
 
 UPDATABLE_FIELDS = {"target_url", "status", "start_at", "end_at"}
@@ -212,7 +223,7 @@ async def handle_update(store, principal: Principal, slug: str, request):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if not _can_edit(principal, record):
+    if not can_edit(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
 
     try:
@@ -225,13 +236,13 @@ async def handle_update(store, principal: Principal, slug: str, request):
 
     if "target_url" in payload:
         target_url = payload["target_url"]
-        if not isinstance(target_url, str) or not _is_valid_target_url(target_url):
+        if not isinstance(target_url, str) or not is_valid_target_url(target_url):
             return json_response(400, {"error": "invalid_target_url"})
         record["target_url"] = target_url
 
     if "status" in payload:
         status = payload["status"]
-        if status not in ("active", "disabled"):
+        if status not in LINK_STATUSES:
             return json_response(400, {"error": "invalid_status"})
         record["status"] = status
 
@@ -242,12 +253,12 @@ async def handle_update(store, principal: Principal, slug: str, request):
     merged_end = record.get("end_at")
 
     if "start_at" in payload:
-        merged_start, invalid = _parse_window_field(payload["start_at"])
+        merged_start, invalid = parse_window_field(payload["start_at"])
         if invalid:
             return json_response(400, {"error": "invalid_start_at"})
 
     if "end_at" in payload:
-        merged_end, invalid = _parse_window_field(payload["end_at"])
+        merged_end, invalid = parse_window_field(payload["end_at"])
         if invalid:
             return json_response(400, {"error": "invalid_end_at"})
 
@@ -259,18 +270,17 @@ async def handle_update(store, principal: Principal, slug: str, request):
 
     record["updated_at"] = iso_now()
     await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
-    return json_response(200, _public_link(record))
+    return json_response(200, public_link(record))
 
 
 async def handle_delete(store, principal: Principal, slug: str):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if not _can_edit(principal, record):
+    if not can_edit(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
     await store.delete(f"slug:{slug}")
-    await _remove_owned_slug(store, record["owner"], slug)
-    await _remove_all_slug(store, slug)
+    await remove_slugs_from_indexes(store, {record["owner"]: [slug]})
     return json_response(200, {"ok": True})
 
 
@@ -278,7 +288,7 @@ async def handle_set_password(store, principal: Principal, slug: str, request):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
-    if not _can_edit(principal, record):
+    if not can_edit(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
 
     try:
@@ -296,4 +306,4 @@ async def handle_set_password(store, principal: Principal, slug: str, request):
 
     record["updated_at"] = iso_now()
     await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
-    return json_response(200, _public_link(record))
+    return json_response(200, public_link(record))

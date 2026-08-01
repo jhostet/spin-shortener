@@ -6,6 +6,7 @@ from spin_sdk.http import Handler
 
 import analytics
 import auth
+import bulk
 import links
 import qr
 import users
@@ -67,6 +68,20 @@ class HttpHandler(Handler):
             if method == "GET":
                 return await links.handle_list(links_store, result)
             return await links.handle_create(links_store, result, request)
+
+        if path == "/api/links/bulk" and method == "POST":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            return await bulk.handle_bulk_create(links_store, result, request)
+
+        if path == "/api/links/bulk-action" and method == "POST":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            return await bulk.handle_bulk_action(links_store, result, request)
 
         if path.startswith("/api/links/") and path.endswith("/password") and method == "POST":
             slug = path.removeprefix("/api/links/").removesuffix("/password")
