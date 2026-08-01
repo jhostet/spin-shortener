@@ -33,10 +33,11 @@ Built as a polyglot Spin (WASM) app: a Go component for the hot-path redirect, a
 - No outbound network access from either Wasm component by design — rules out external rate-limiting or abuse-detection services; login/link-password brute-force protection currently relies only on PBKDF2 cost, not attempt-throttling
 - Slug existence and password-protection status are enumerable by a probing visitor (accepted, not treated as a vulnerability)
 - Security response headers (CSP, HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are set by every component that serves a response, added 2026-07-25. The GUI's CSP was hardened to `script-src 'self'; style-src 'self'` on 2026-07-31 by externalizing every page's inline script and style, with a test guarding against inline code returning. One `'unsafe-inline'` remains anywhere in the app — `style-src` on the redirect component's password-prompt page, for a single `style="color: red"` attribute — deliberately deferred, since that page has no external stylesheet
+- The GUI ships both a light and a dark theme, following the OS's `prefers-color-scheme` by default with a manual Auto/Light/Dark override in the persistent nav, persisted client-side only (`localStorage`, no server-side or per-user storage)
 
 ## Brand Commitments
 
-No official Tire Rack brand guide applies to this tool. A dark theme is the preferred stylistic direction, but the current dark-navy palette (`gui/theme.css`, layered on Pico CSS) is a placeholder the team chose, not an official identity to preserve — free to evolve.
+No official Tire Rack brand guide applies to this tool. A dark theme was the preferred stylistic direction and now ships as a real, selectable theme (2026-07-31) — a custom dark-navy palette derived at constant hue from the same identity as the light theme, not Pico's stock dark preset. The dark-navy palette itself (`gui/theme.css`, layered on Pico CSS, in both its light and dark forms) remains a placeholder the team chose, not an official identity to preserve — free to evolve.
 
 ## Evidence on Hand
 

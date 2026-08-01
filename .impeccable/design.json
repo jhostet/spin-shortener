@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-31T23:59:00Z",
+  "generatedAt": "2026-08-01T00:10:00Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -93,6 +93,76 @@
           "#bec4d2",
           "#d3d9e2"
         ]
+      },
+      "dark-canvas": {
+        "role": "neutral",
+        "displayName": "Dark Canvas",
+        "canonical": "#0a1628"
+      },
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "Dark Surface",
+        "canonical": "#14243d"
+      },
+      "dark-chrome": {
+        "role": "neutral",
+        "displayName": "Dark Chrome",
+        "canonical": "#060f1d"
+      },
+      "dark-border": {
+        "role": "neutral",
+        "displayName": "Dark Border",
+        "canonical": "#31456a"
+      },
+      "dark-text": {
+        "role": "neutral",
+        "displayName": "Dark Text",
+        "canonical": "#dfe6f2"
+      },
+      "dark-heading": {
+        "role": "neutral",
+        "displayName": "Dark Heading",
+        "canonical": "#f2f6fc"
+      },
+      "dark-muted": {
+        "role": "neutral",
+        "displayName": "Dark Muted",
+        "canonical": "#93a3bd"
+      },
+      "dark-badge-slate": {
+        "role": "neutral",
+        "displayName": "Dark Badge Slate",
+        "canonical": "#a8b6cc"
+      },
+      "dark-signal": {
+        "role": "primary",
+        "displayName": "Dark Signal Blue",
+        "canonical": "#6fb0ee"
+      },
+      "dark-signal-hover": {
+        "role": "primary",
+        "displayName": "Dark Signal Blue, Hover",
+        "canonical": "#9ccbf7"
+      },
+      "dark-ok": {
+        "role": "success",
+        "displayName": "Dark OK Green",
+        "canonical": "#4cc79a"
+      },
+      "dark-danger": {
+        "role": "danger",
+        "displayName": "Dark Danger Red",
+        "canonical": "#ff8a80"
+      },
+      "dark-chip": {
+        "role": "neutral",
+        "displayName": "Dark Chip",
+        "canonical": "#1e3a63"
+      },
+      "dark-chip-hover": {
+        "role": "neutral",
+        "displayName": "Dark Chip, Hover",
+        "canonical": "#28486f"
       }
     },
     "typographyMeta": {
@@ -155,9 +225,9 @@
       "name": "Slug Chip",
       "kind": "chip",
       "refersTo": "chip-slug",
-      "description": "Signature component: monospace pill marking a shortened link — used in the links table and as the link-detail page's h1. Now plain display text (a <span>) everywhere except where it's a genuine navigation link, since clicking it used to fire a real redirect and inflate that link's own click count. Content differs by context: the detail page's h1 shows the full origin/r/slug URL, the links table shows only /r/slug (full URL in a title attribute) since the origin is identical on every row and was the single biggest contributor to the table overflowing its own container even at a realistic desktop width with a small dataset. The table's chip additionally gets white-space:nowrap + text-overflow:ellipsis past a fixed width, defensive against a long custom slug wrapping the pill onto multiple lines -- scoped to just the table, never the detail page's h1 where the complete slug is the point.",
+      "description": "Signature component: monospace pill marking a shortened link — used in the links table and as the link-detail page's h1. Now plain display text (a <span>) everywhere except where it's a genuine navigation link, since clicking it used to fire a real redirect and inflate that link's own click count. Content differs by context: the detail page's h1 shows the full origin/r/slug URL, the links table shows only /r/slug (full URL in a title attribute) since the origin is identical on every row and was the single biggest contributor to the table overflowing its own container even at a realistic desktop width with a small dataset. The table's chip additionally gets white-space:nowrap + text-overflow:ellipsis past a fixed width, defensive against a long custom slug wrapping the pill onto multiple lines -- scoped to just the table, never the detail page's h1 where the complete slug is the point. Now reads through the --ss-chip-bg/--ss-chip-hover-bg/--ss-chip-hover-fg indirection layer (added for the dark theme) instead of hardcoding --ss-navy-950/-800 directly, so light mode's rendering is unchanged (both tokens equal the light theme's navy values) while dark mode can retheme the chip -- lighter than its card, the opposite direction from the nav -- without touching this rule.",
       "html": "<span class=\"ds-chip-slug\">yourhost/r/promo-2026</span>",
-      "css": ".ds-chip-slug { display: inline-block; font-family: \"SFMono-Regular\", \"JetBrains Mono\", Menlo, Consolas, monospace; font-size: 0.85em; background: var(--ss-navy-950, #0a1628); color: #fff; padding: 0.15em 0.6em; border-radius: 999px; line-height: 1.6; } a.ds-chip-slug { text-decoration: none; } a.ds-chip-slug:hover { background: var(--ss-navy-800, #14243d); color: var(--ss-signal-500, #276fb8); }"
+      "css": ".ds-chip-slug { display: inline-block; font-family: \"SFMono-Regular\", \"JetBrains Mono\", Menlo, Consolas, monospace; font-size: 0.85em; background: var(--ss-chip-bg, #0a1628); color: #fff; padding: 0.15em 0.6em; border-radius: 999px; line-height: 1.6; } a.ds-chip-slug { text-decoration: none; } a.ds-chip-slug:hover { background: var(--ss-chip-hover-bg, #14243d); color: var(--ss-chip-hover-fg, #276fb8); }"
     },
     {
       "name": "Status Badge",
@@ -195,9 +265,9 @@
       "name": "Persistent Nav Shell",
       "kind": "nav",
       "refersTo": "nav-shell",
-      "description": "The app-shell chrome rendered on every authenticated page: a persistent brand mark + wordmark (always a link to the dashboard, with a small hand-authored link-glyph SVG icon in Signal Blue), an optional breadcrumb page label, an identity chip (initial-avatar badge + name/role stack, replacing plain 'username (role)' text), a conditional 'Manage users' link (hidden on the Manage Users page itself), and logout. Keyboard focus gets a full-opacity Signal Blue outline rather than Pico's default low-opacity ring, which read as nearly imperceptible against the dark-navy fill. Previously the brand was displaced by a generic 'Back to dashboard' link on every page except the dashboard -- a real navigation-confusion bug (the one persistent orientation cue changed per page) fixed by keeping the brand permanent and adding the breadcrumb label alongside it instead. A critique caught .nav-separator/.nav-page-label silently rendering fully opaque white instead of their declared dimmed rgba values -- #app-header nav li's ID-selector color rule (specificity 1,0,2) beat the plain class rules (0,1,0) regardless of source order, the third time this exact specificity shape has bitten this file. Fixed by scoping the selectors to #app-header nav li.nav-page-label etc. The same pass also caught that hiding the breadcrumb below 480px deleted links/detail.html's only page identity on the one viewport that needed it most -- fixed by only hiding the identity chip's role line at that breakpoint, keeping the breadcrumb visible. A subsequent audit found two more gaps: .brand-link and the \"Manage users\" link measured 38.4px tall, under the 44px touch-target floor the theme already enforces on buttons -- fixed by giving nav <a> elements the same min-height: 44px floor (centered via inline-flex/align-items). It also found .nav-separator's alpha (0.35) measured 3.20:1 against the nav's navy fill, under the 4.5:1 AA text minimum, though the element is aria-hidden and carries no unique information -- alpha raised to 0.5 (5.25:1) for headroom while staying visibly dimmer than .nav-page-label's 0.75.",
-      "html": "<nav class=\"ds-nav-shell\"><ul><li><a href=\"#\" class=\"ds-brand-link\"><svg class=\"ds-brand-mark\" viewBox=\"0 0 24 24\" width=\"18\" height=\"18\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"/></svg><strong>spin-shortener</strong></a></li><li class=\"ds-nav-separator\">/</li><li class=\"ds-nav-page-label\">Manage users</li></ul><ul><li><span class=\"ds-identity-chip\"><span class=\"ds-identity-avatar\">J</span><span class=\"ds-identity-text\"><span class=\"ds-identity-name\">jdoe</span><span class=\"ds-identity-role\">admin</span></span></span></li><li><button class=\"ds-btn-outline ds-btn-secondary\">Log out</button></li></ul></nav>",
-      "css": ".ds-nav-shell { display: flex; flex-wrap: wrap; row-gap: 0.4rem; justify-content: space-between; align-items: center; background: var(--ss-navy-950, #0a1628); color: #fff; padding: 0.75rem 1rem; border-radius: 0.25rem; margin-top: 1rem; } .ds-nav-shell ul { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; align-items: center; } .ds-nav-shell li, .ds-brand-link strong { white-space: nowrap; } .ds-brand-link { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 44px; text-decoration: none; color: #fff; } .ds-brand-mark { color: var(--ss-signal-500, #276fb8); flex-shrink: 0; } .ds-nav-shell li.ds-nav-separator { color: rgba(255,255,255,0.5); } .ds-nav-shell li.ds-nav-page-label { color: rgba(255,255,255,0.75); font-weight: 600; } .ds-identity-chip { display: inline-flex; align-items: center; gap: 0.5rem; } .ds-identity-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; border-radius: 0.25rem; background: var(--ss-signal-500, #276fb8); color: #fff; font-weight: 700; font-size: 0.75rem; line-height: 1; } .ds-identity-text { display: flex; flex-direction: column; line-height: 1.25; } .ds-identity-name { color: #fff; font-weight: 600; } .ds-identity-role { color: rgba(255,255,255,0.6); font-size: 0.75rem; font-weight: 600; text-transform: capitalize; } .ds-nav-shell a:hover { color: var(--ss-signal-500, #276fb8); } .ds-nav-shell a:focus-visible, .ds-nav-shell button:focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; border-radius: 0.25rem; } @media (max-width: 480px) { .ds-identity-role { display: none; } }"
+      "description": "The app-shell chrome rendered on every authenticated page: a persistent brand mark + wordmark (always a link to the dashboard, with a small hand-authored link-glyph SVG icon in Signal Blue), an optional breadcrumb page label, an identity chip (initial-avatar badge + name/role stack, replacing plain 'username (role)' text), a conditional 'Manage users' link (hidden on the Manage Users page itself), a three-state Auto/Light/Dark theme control, and logout. Keyboard focus gets a full-opacity Signal Blue outline rather than Pico's default low-opacity ring, which read as nearly imperceptible against the dark-navy fill. Previously the brand was displaced by a generic 'Back to dashboard' link on every page except the dashboard -- a real navigation-confusion bug (the one persistent orientation cue changed per page) fixed by keeping the brand permanent and adding the breadcrumb label alongside it instead. A critique caught .nav-separator/.nav-page-label silently rendering fully opaque white instead of their declared dimmed rgba values -- #app-header nav li's ID-selector color rule (specificity 1,0,2) beat the plain class rules (0,1,0) regardless of source order, the third time this exact specificity shape has bitten this file. Fixed by scoping the selectors to #app-header nav li.nav-page-label etc. The same pass also caught that hiding the breadcrumb below 480px deleted links/detail.html's only page identity on the one viewport that needed it most -- fixed by only hiding the identity chip's role line at that breakpoint, keeping the breadcrumb visible. A subsequent audit found two more gaps: .brand-link and the \"Manage users\" link measured 38.4px tall, under the 44px touch-target floor the theme already enforces on buttons -- fixed by giving nav <a> elements the same min-height: 44px floor (centered via inline-flex/align-items). It also found .nav-separator's alpha (0.35) measured 3.20:1 against the nav's navy fill, under the 4.5:1 AA text minimum, though the element is aria-hidden and carries no unique information -- alpha raised to 0.5 (5.25:1) for headroom while staying visibly dimmer than .nav-page-label's 0.75. The nav shell's own chrome background now reads through --ss-chrome-bg (added for the dark theme) instead of hardcoding --ss-navy-950 directly -- unchanged in light mode, darker than the dark theme's own canvas in dark mode, same relationship as light. The identity avatar now reads --pico-primary-background/--pico-primary-inverse instead of a hardcoded --ss-signal-500/#fff pair, so it automatically tracks the primary button's fill/ink in both themes rather than needing its own per-theme values -- a hardcoded white ink on the dark theme's light-blue signal color would have measured 2.30:1, a real failure. Adding the theme control (~140px) overflowed the nav at 480px/390px; the account <ul> now wraps inside the existing @media (max-width: 480px) block, with align-items: flex-start on <nav> to keep the shorter brand group from being stretched by the taller wrapped group.",
+      "html": "<nav class=\"ds-nav-shell\"><ul><li><a href=\"#\" class=\"ds-brand-link\"><svg class=\"ds-brand-mark\" viewBox=\"0 0 24 24\" width=\"18\" height=\"18\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"/></svg><strong>spin-shortener</strong></a></li><li class=\"ds-nav-separator\">/</li><li class=\"ds-nav-page-label\">Manage users</li></ul><ul><li><span class=\"ds-identity-chip\"><span class=\"ds-identity-avatar\">J</span><span class=\"ds-identity-text\"><span class=\"ds-identity-name\">jdoe</span><span class=\"ds-identity-role\">admin</span></span></span></li><li><div role=\"group\" class=\"ds-theme-toggle\" aria-label=\"Color theme\"><button type=\"button\" data-theme-choice=\"system\">Auto</button><button type=\"button\" data-theme-choice=\"light\">Light</button><button type=\"button\" data-theme-choice=\"dark\" aria-pressed=\"true\">Dark</button></div></li><li><button class=\"ds-btn-outline ds-btn-secondary\">Log out</button></li></ul></nav>",
+      "css": ".ds-nav-shell { display: flex; flex-wrap: wrap; row-gap: 0.4rem; justify-content: space-between; align-items: center; background: var(--ss-chrome-bg, #0a1628); color: #fff; padding: 0.75rem 1rem; border-radius: 0.25rem; margin-top: 1rem; } .ds-nav-shell ul { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; align-items: center; } .ds-nav-shell li, .ds-brand-link strong { white-space: nowrap; } .ds-brand-link { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 44px; text-decoration: none; color: #fff; } .ds-brand-mark { color: var(--ss-signal-500, #276fb8); flex-shrink: 0; } .ds-nav-shell li.ds-nav-separator { color: rgba(255,255,255,0.5); } .ds-nav-shell li.ds-nav-page-label { color: rgba(255,255,255,0.75); font-weight: 600; } .ds-identity-chip { display: inline-flex; align-items: center; gap: 0.5rem; } .ds-identity-avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; border-radius: 0.25rem; background: var(--pico-primary-background, #276fb8); color: var(--pico-primary-inverse, #fff); font-weight: 700; font-size: 0.75rem; line-height: 1; } .ds-identity-text { display: flex; flex-direction: column; line-height: 1.25; } .ds-identity-name { color: #fff; font-weight: 600; } .ds-identity-role { color: rgba(255,255,255,0.6); font-size: 0.75rem; font-weight: 600; text-transform: capitalize; } .ds-nav-shell a:hover { color: var(--ss-signal-500, #276fb8); } .ds-nav-shell a:focus-visible, .ds-nav-shell button:focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; border-radius: 0.25rem; } .ds-theme-toggle { width: auto; } .ds-theme-toggle button { background-color: transparent; border-color: rgba(255,255,255,0.4); color: #fff; font-size: 0.75rem; } .ds-theme-toggle button[aria-pressed=\"true\"] { background-color: var(--pico-primary-background, #276fb8); border-color: var(--pico-primary-background, #276fb8); color: var(--pico-primary-inverse, #fff); } @media (max-width: 480px) { .ds-identity-role { display: none; } .ds-nav-shell { align-items: flex-start; } .ds-nav-shell ul:last-child { flex-wrap: wrap; row-gap: 0.4rem; } }"
     },
     {
       "name": "Scrollable Data Table",
