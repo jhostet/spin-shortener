@@ -143,11 +143,24 @@
    * chip need DIFFERENT values from each other (the nav goes darker than
    * the canvas, the chip goes lighter than the card), while --ss-navy-950/
    * -800 themselves stay the same two fixed navies in both themes. Values
-   * below are today's exact rendering — this is a no-visual-change change. */
+   * below are today's exact rendering — this is a no-visual-change change,
+   * except for --ss-chip-hover-fg (see its own comment below). */
   --ss-chrome-bg: var(--ss-navy-950);
   --ss-chip-bg: var(--ss-navy-950);
   --ss-chip-hover-bg: var(--ss-navy-800);
-  --ss-chip-hover-fg: var(--ss-signal-500);
+  /* a.slug-chip:hover renders this on --ss-chip-hover-bg (--ss-navy-800,
+   * #14243d) — --ss-signal-500 (#276fb8) measured 3.00:1 there, under the
+   * 4.5:1 AA text minimum (found while measuring baselines for the
+   * light/dark theming plan, but that plan was forbidden from touching a
+   * light-theme colour, so it was logged instead of fixed here). #5f9edd is
+   * the same 210° hue lightened to real headroom: 5.50:1 against the same
+   * background, deliberately close to the dark theme's own chip-hover-fg
+   * ratio (5.47:1) rather than a bare pass. It's already the signal-blue
+   * ramp's own "light" tint (.impeccable/design.json's tonalRamp[4]), not a
+   * new hue — only --ss-chip-hover-fg re-points at it; --ss-signal-500
+   * itself, and every other element reading it (nav hover, focus ring,
+   * primary button), is untouched. */
+  --ss-chip-hover-fg: #5f9edd;
 }
 
 /* Dark — inert until data-theme="dark" is set (theme-init.js, a later task).

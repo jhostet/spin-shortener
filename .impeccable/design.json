@@ -163,6 +163,11 @@
         "role": "neutral",
         "displayName": "Dark Chip, Hover",
         "canonical": "#28486f"
+      },
+      "light-chip-hover-fg": {
+        "role": "primary",
+        "displayName": "Light Chip Hover Fg",
+        "canonical": "#5f9edd"
       }
     },
     "typographyMeta": {

@@ -28,6 +28,7 @@ colors:
   dark-danger: "#ff8a80"
   dark-chip: "#1e3a63"
   dark-chip-hover: "#28486f"
+  light-chip-hover-fg: "#5f9edd"
 typography:
   display:
     fontFamily: "system-ui, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif"
@@ -115,6 +116,7 @@ A restrained palette: one accent, one dark neutral used two ways (chrome + text)
 ### Primary
 - **Signal Blue** (`#276fb8`): the one accent. Links, primary buttons, the persistent nav's hover state, sortable-column hover. Used sparingly — outside the nav and buttons it appears only as a hover accent, never a resting fill. (Originally `#2b7fd1`; darkened to clear 4.5:1 AA text contrast — the original measured ~4.15:1 against white on both button fills and plain link text.)
 - **Signal Blue, Hover** (`#1e6bb8`): darkens on `:hover`/`:active` for every primary-accent element.
+- **Light Chip Hover Fg** (`#5f9edd`, token `--ss-chip-hover-fg`): the slug chip's `:hover` text color, used only against `--ss-chip-hover-bg` (Slate Navy, `#14243d`). Not a new hue — it's Signal Blue's own ramp lightened at the same 210° hue (already present as the `signal-blue` tonal ramp's "light" tint in `.impeccable/design.json`) — but until this fix, the *token* pointed straight at `--ss-signal-500` (`#276fb8`), which measured only 3.00:1 there, under the 4.5:1 AA text minimum. Found while baselining the light/dark theming work, logged rather than fixed there since that plan was forbidden from touching a light-theme colour. `#5f9edd` measures 5.50:1 against the same background — real headroom, deliberately close to the dark theme's own `--ss-chip-hover-fg` ratio (5.47:1) so the two themes finally agree on this measurement. `--ss-signal-500` itself is untouched; every other element that reads it (nav hover, focus ring, primary button, sortable-column hover) is unaffected.
 
 ### Neutral
 - **Deep Navy** (`#0a1628`): the darkest neutral. Doubles as the persistent nav/header background *and* every heading's text color (`h1`–`h3`) — the same dark value grounds both the chrome and the content hierarchy.
