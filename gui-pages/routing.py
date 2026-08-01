@@ -31,14 +31,18 @@ ROUTES: dict[str, str] = {
 # .js/.css subresources it loads, which still route to the original
 # spin_static_fs.wasm component (see spin.toml), unchanged.
 #
-# The CSP here is a deliberate, disclosed tradeoff, not an oversight: the
-# GUI's pages carry roughly 700 lines of inline <script>/<style> across
-# them, and rewriting all of that to external files + nonces was out of
-# scope for this pass (see TASKS.md's future-work note) — so script-src/
-# style-src include 'unsafe-inline' rather than blocking inline script
-# execution outright. Every other directive is locked down for real: no
-# plugins/objects, no framing, no cross-origin form submission, no
-# base-tag hijacking.
+# script-src/style-src carry no 'unsafe-inline': every page's script and
+# style live in a sibling .js/.css file served by the gui component, so
+# there is no inline <script>, <style>, or style="..." attribute left in
+# any served page for the policy to have to allow. tests/test_no_inline_code.py
+# is what keeps that true — without it the policy is a promise enforced by
+# nothing, and the next inline block added to a page would fail as a dead
+# page in a browser rather than as a failing test.
+#
+# 'self' on both is technically redundant under default-src 'self'. They
+# are stated explicitly anyway: these are the two directives this policy
+# exists to constrain, and naming them means a future loosening of
+# default-src cannot silently loosen them along with it.
 SECURITY_HEADERS: dict[str, str] = {
     "x-content-type-options": "nosniff",
     "referrer-policy": "strict-origin-when-cross-origin",
@@ -46,8 +50,8 @@ SECURITY_HEADERS: dict[str, str] = {
     "strict-transport-security": "max-age=31536000; includeSubDomains",
     "content-security-policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
         # Pico CSS renders several UI affordances (sortable-column chevrons,
         # the search-box icon, datetime-local's calendar icon) as inline
         # data:image/svg+xml background-images, not <img> tags — confirmed
