@@ -2,14 +2,40 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Password required</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Password required — spin-shortener</title>
+  <!-- Absolute paths: this page is served from /r/{slug}, so relative ones
+       would resolve under /r/. Both files are already exact routes on the
+       gui static component, so styling this page cost no new routes and no
+       new files — and reusing theme.css's .form-error is what retired the
+       red inline attribute on the error paragraph, the only reason this
+       page's CSP ever needed 'unsafe-inline'.
+       No script is loaded, deliberately: this is the app's one
+       credential-entry page and it keeps script-src 'none', the strictest
+       policy available. That also rules out theme-init.js, so the page
+       always renders the light theme regardless of OS preference.
+       (Naming that attribute literally here would trip the inline-code
+       guard in gui-pages/tests/test_no_inline_code.py, which greps this
+       file — the guard is deliberately dumb and does not skip comments.) -->
+  <link rel="stylesheet" href="/vendor/pico.min.css" />
+  <link rel="stylesheet" href="/theme.css" />
 </head>
-<body>
-  <h1>This link is password protected</h1>
-  {{if .Error}}<p style="color: red">{{.Error}}</p>{{end}}
-  <form method="POST" action="/r/{{.Slug}}">
-    <label>Password <input type="password" name="password" required autofocus /></label>
-    <button type="submit">Unlock</button>
-  </form>
+<body class="auth-page">
+  <main class="container auth-shell">
+    <article>
+      <hgroup>
+        <h1>Password required</h1>
+        <p>This short link is protected. Enter its password to continue.</p>
+      </hgroup>
+      {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+      <form method="POST" action="/r/{{.Slug}}">
+        <label for="password">
+          Password
+          <input id="password" type="password" name="password" required autofocus />
+        </label>
+        <button type="submit">Unlock</button>
+      </form>
+    </article>
+  </main>
 </body>
 </html>

@@ -19,9 +19,19 @@ import pytest
 
 from routing import ROUTES
 
-GUI_DIR = Path(__file__).resolve().parents[2] / "gui"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+GUI_DIR = REPO_ROOT / "gui"
 
 PAGES = sorted(set(ROUTES.values()))
+
+# The redirect component's password prompt is the app's other served HTML.
+# It belongs to a Go component, not this one, and a Python test in gui-pages
+# policing it is admittedly cross-component — but it is the only HTML outside
+# ROUTES, its CSP is the strictest in the app (script-src 'none',
+# style-src 'self'), and package main is not host-testable at all, so there
+# is nowhere better for this to live. Without it the one page that takes a
+# password is the one page with no inline-code guard.
+PROMPT_HTML = REPO_ROOT / "redirect" / "prompt.html"
 
 # Every first-party script the gui component serves, discovered rather than
 # listed, for the same reason PAGES is derived from ROUTES: a new page's
@@ -111,3 +121,20 @@ def test_script_has_no_inline_script_tag_in_templates(filename):
         f"gui/{filename} builds a <script> tag without a src attribute; "
         "injected inline script is blocked by the CSP"
     )
+
+
+# The password prompt renders under script-src 'none'; style-src 'self', so an
+# inline <script>, <style> block, style attribute or on<event>= handler added
+# to it is not merely blocked but blocked harder than on any GUI page. It is
+# also the page whose single style="color: red" was the last 'unsafe-inline'
+# in the application, so it is exactly the file most likely to regrow one.
+def test_password_prompt_has_no_inline_code():
+    src = PROMPT_HTML.read_text(encoding="utf-8")
+    assert not INLINE_SCRIPT.search(src), "redirect/prompt.html has an inline <script>; its CSP is script-src 'none'"
+    assert not STYLE_BLOCK.search(src), "redirect/prompt.html has a <style> block; its CSP is style-src 'self'"
+    assert not STYLE_ATTR.search(src), (
+        'redirect/prompt.html has a style="..." attribute — use theme.css\'s '
+        ".form-error (or another shared class) as DESIGN.md requires; that "
+        "attribute was the last 'unsafe-inline' in the app"
+    )
+    assert not EVENT_HANDLER.search(src), "redirect/prompt.html has an on<event>= handler; its CSP is script-src 'none'"
