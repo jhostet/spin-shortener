@@ -176,6 +176,62 @@ function friendlyError(data, fallback, overrides) {
 
 // Renders the shared nav into a page's `<header id="app-header">` and wires
 // the logout handler — so logout is reachable from every authenticated page,
+// Builds and wires the Auto/Light/Dark control into `container`. Shared
+// rather than living inside initHeader() because login.html has no
+// `#app-header` and never calls initHeader(), yet still needs somewhere to
+// change the theme — a stored preference already applies there, since every
+// page loads theme-init.js, but without this there is no way to set one
+// before logging in.
+//
+// window.ssTheme comes from theme-init.js, a separate file on its own exact
+// spin.toml route. If that route is ever missing or the file 404s, the page
+// still renders and still themes (the CSS falls back to light) — but an
+// unguarded ssTheme.get() would throw, and on the authenticated pages that
+// throw happens inside async initHeader(), whose rejection no page catches,
+// taking down the entire init chain rather than just the toggle. A
+// silently-404ing asset is the exact failure spin.toml's own route comment
+// warns about, so degrade to hiding a control that cannot work.
+function renderThemeToggle(container) {
+  const ssTheme = window.ssTheme;
+  if (!ssTheme) {
+    container.hidden = true;
+    return;
+  }
+
+  container.innerHTML = `
+    <div role="group" class="theme-toggle" aria-label="Color theme">
+      <button type="button" class="outline secondary" data-theme-choice="system">Auto</button>
+      <button type="button" class="outline secondary" data-theme-choice="light">Light</button>
+      <button type="button" class="outline secondary" data-theme-choice="dark">Dark</button>
+    </div>
+  `;
+
+  const buttons = Array.from(container.querySelectorAll("[data-theme-choice]"));
+  // Reflects the current mode onto the three buttons — pressing one
+  // un-presses the other two, so this always rewrites all three.
+  const renderPressed = () => {
+    const current = ssTheme.get();
+    buttons.forEach((btn) => {
+      btn.setAttribute("aria-pressed", String(btn.dataset.themeChoice === current));
+    });
+  };
+
+  renderPressed();
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      ssTheme.set(btn.dataset.themeChoice);
+      renderPressed();
+    });
+  });
+
+  // theme-init.js repaints on a cross-tab change; the pressed state is this
+  // file's half of that and would otherwise go stale — the page would flip
+  // to dark while still showing Light as the selected button.
+  window.addEventListener("storage", (e) => {
+    if (e.key === ssTheme.KEY || e.key === null) renderPressed();
+  });
+}
+
 // not just the dashboard. The brand mark is now persistent and clickable on
 // every page (previously it was replaced by a "Back to dashboard" link on
 // every page except the dashboard itself — the one thing that should never
@@ -214,13 +270,7 @@ async function initHeader({
       <ul>
         <li id="whoami"></li>
         <li id="manage-users-link" hidden><a href="${manageUsersHref}">Manage users</a></li>
-        <li id="theme-control">
-          <div role="group" class="theme-toggle" aria-label="Color theme">
-            <button type="button" data-theme-choice="system">Auto</button>
-            <button type="button" data-theme-choice="light">Light</button>
-            <button type="button" data-theme-choice="dark">Dark</button>
-          </div>
-        </li>
+        <li id="theme-control"></li>
         <li><button id="logout-btn" class="secondary outline">Log out</button></li>
       </ul>
     </nav>
@@ -232,37 +282,7 @@ async function initHeader({
     location.href = "/login.html";
   });
 
-  // Reflects the current mode's aria-pressed state onto the three theme
-  // buttons — called on render and again after every click, since clicking
-  // one button un-presses the other two.
-  function renderThemePressed(ssTheme, themeButtons) {
-    const current = ssTheme.get();
-    themeButtons.forEach((btn) => {
-      btn.setAttribute("aria-pressed", String(btn.dataset.themeChoice === current));
-    });
-  }
-
-  // window.ssTheme comes from theme-init.js, a separate file on its own
-  // exact spin.toml route. If that route is ever missing or the file 404s,
-  // the page still renders and still themes (the CSS falls back to light) —
-  // but an unguarded ssTheme.get() here would throw, and since initHeader()
-  // is async and no page catches its rejection, that one TypeError would
-  // take down every page's entire init chain, not just the toggle. A
-  // silently-404ing asset is the exact failure spin.toml's own route comment
-  // warns about, so degrade to hiding a control that cannot work.
-  const ssTheme = window.ssTheme;
-  const themeButtons = Array.from(document.querySelectorAll("#theme-control [data-theme-choice]"));
-  if (ssTheme) {
-    renderThemePressed(ssTheme, themeButtons);
-    themeButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        ssTheme.set(btn.dataset.themeChoice);
-        renderThemePressed(ssTheme, themeButtons);
-      });
-    });
-  } else {
-    document.getElementById("theme-control").hidden = true;
-  }
+  renderThemeToggle(document.getElementById("theme-control"));
 
   const result = await api.get("/auth/me");
   if (result.ok) {

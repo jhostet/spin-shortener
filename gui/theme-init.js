@@ -82,6 +82,19 @@
     // it just won't live-follow an OS theme change until next navigation.
   }
 
+  // Cross-tab sync. `storage` fires only in OTHER tabs on the same origin,
+  // never in the one that wrote, so this cannot loop back on itself. Without
+  // it two simultaneously-open tabs disagree until one of them navigates,
+  // since every navigation already re-reads localStorage.
+  //
+  // e.key is null when a page calls localStorage.clear(), which invalidates
+  // our value as surely as writing to it, so that case re-applies too.
+  window.addEventListener("storage", function (e) {
+    if (e.key === KEY || e.key === null) {
+      apply();
+    }
+  });
+
   window.ssTheme = {
     KEY: KEY,
     get: get,
