@@ -32,7 +32,7 @@ Built as a polyglot Spin (WASM) app: a Go component for the hot-path redirect, a
 - Local auth with sessions; admin role + fine-grained permission system (e.g. `links.view_all`)
 - No outbound network access from either Wasm component by design — rules out external rate-limiting or abuse-detection services; login/link-password brute-force protection currently relies only on PBKDF2 cost, not attempt-throttling
 - Slug existence and password-protection status are enumerable by a probing visitor (accepted, not treated as a vulnerability)
-- No security response headers (CSP, HSTS, etc.) yet — open gap, not yet closed
+- Security response headers (CSP, HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are set by every component that serves a response, added 2026-07-25. The GUI's CSP was hardened to `script-src 'self'; style-src 'self'` on 2026-07-31 by externalizing every page's inline script and style, with a test guarding against inline code returning. One `'unsafe-inline'` remains anywhere in the app — `style-src` on the redirect component's password-prompt page, for a single `style="color: red"` attribute — deliberately deferred, since that page has no external stylesheet
 
 ## Brand Commitments
 
