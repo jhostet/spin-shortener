@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# LOCAL DEVELOPMENT ONLY. Appended to a copy of spin.toml by
+# dev/kv-explorer-up.sh to produce the gitignored spin-dev.toml. Spin never
+# reads this file on its own, and nothing in the committed spin.toml refers
+# to it: the deployed manifest has four components and no explorer.
+# See docs/plans/kv-explorer.md.
+#
+# Fermyon's prebuilt KV explorer (github.com/fermyon/spin-kv-explorer v0.10.0),
+# third-party and unmodified, added by URL + digest exactly like the gui
+# component's spin_static_fs.wasm.
+#
+# THIS COMPONENT HAS FULL CRUD over every store listed below: it can read,
+# overwrite and delete any key, with no undo. That is deliberate — repairing
+# bad local test data is half its value — but a stray click destroys local
+# data.
+#
+# `users` is deliberately NOT listed: it holds PBKDF2 password hashes and live
+# session tokens, so read access alone enables impersonation and write access
+# forges a session or replaces a hash. The store name comes from the request
+# path (/api/stores/:store) and is handed straight to kv.OpenStore, so this
+# list is the only thing that denies it — and it denies it at the host, not in
+# the UI.
+#
+# Its UI loads jQuery, Bootstrap, Popper, Font Awesome and Google Fonts from
+# cdnjs/jsdelivr/Google, and contains inline script and style. Accepted and
+# scoped: it is a separate component, so none of this app's security response
+# headers or CSP apply to it, and it is not reachable outside a local run.
+# ---------------------------------------------------------------------------
+
+[[trigger.http]]
+route = "/internal/kv-explorer/..."
+component = "kv-explorer"
+
+[component.kv-explorer]
+source = { url = "https://github.com/fermyon/spin-kv-explorer/releases/download/v0.10.0/spin-kv-explorer.wasm", digest = "sha256:65bc286f8315746d1beecd2430e178f539fa487ebf6520099daae09a35dbce1d" }
+# Narrowed from upstream's ["redis://*:*", "mysql://*:*", "postgres://*:*"],
+# which exists only for KV labels backed by an external database. This app's
+# stores are sqlite-backed (type = "spin", runtime-config.toml) and the
+# component's source makes no outbound request of any kind, so it needs
+# nothing — the same [] the redirect component uses.
+allowed_outbound_hosts = []
+key_value_stores = ["links", "analytics"]
+
+[component.kv-explorer.variables]
+kv_credentials = "{{ kv_explorer_user }}:{{ kv_explorer_password }}"
+
+# Sub-table form, not a second `[variables]` header: this file is concatenated
+# onto a spin.toml that already opens [variables], and TOML forbids reopening
+# a table. `[variables.x]` after `[variables]` is legal and deserializes
+# identically (verified with tomllib against the real spin.toml).
+[variables.kv_explorer_user]
+default = "kv"
+
+[variables.kv_explorer_password]
+required = true
+secret = true
