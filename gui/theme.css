@@ -517,11 +517,11 @@ details summary:focus-visible:not([role]) {
 }
 /* Data-like table columns (slug, destination, timestamps) read as
  * monospace, distinct from the sans-serif labels/prose around them. */
-#links-table td:nth-child(1),
-#links-table td:nth-child(3),
+#links-table td:nth-child(2),
 #links-table td:nth-child(4),
-#links-table td:nth-child(6),
+#links-table td:nth-child(5),
 #links-table td:nth-child(7),
+#links-table td:nth-child(8),
 #days-table td:first-child,
 #events-table td:first-child {
   font-family: var(--ss-mono-font);

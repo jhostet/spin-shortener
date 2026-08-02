@@ -65,14 +65,22 @@
  * width is standing in for; Status and Expires answer that directly and
  * stay visible alongside Short link and the actions. */
 @media (max-width: 600px) {
-  #links-table th:nth-child(2),
-  #links-table td:nth-child(2),
+  /* Column indices shifted by 1 when the select column was inserted as the
+   * new first column — the select column itself is also hidden here (a
+   * ~40px checkbox column would eat back the clearance the caps below were
+   * measured against, to enable a multi-select workflow nobody performs on
+   * a phone), so the visible set below 600px stays exactly what it was
+   * before this change: Short link, Status, Expires, and the actions. */
+  #links-table th:nth-child(1),
+  #links-table td:nth-child(1),
   #links-table th:nth-child(3),
   #links-table td:nth-child(3),
   #links-table th:nth-child(4),
   #links-table td:nth-child(4),
-  #links-table th:nth-child(6),
-  #links-table td:nth-child(6) {
+  #links-table th:nth-child(5),
+  #links-table td:nth-child(5),
+  #links-table th:nth-child(7),
+  #links-table td:nth-child(7) {
     display: none;
   }
   /* An HTML table's column width is shared across every row (the widest
@@ -84,8 +92,8 @@
    * table broke the previously-verified clearance on an unrelated row).
    * Capping this column directly, not just the .slug-chip inside it,
    * is what makes the later Expires cap's assumption actually hold. */
-  #links-table th:nth-child(1),
-  #links-table tbody > tr:not(.edit-row) td:nth-child(1) {
+  #links-table th:nth-child(2),
+  #links-table tbody > tr:not(.edit-row) td:nth-child(2) {
     max-width: 100px;
   }
   /* Even with 4 columns hidden, View/Copy/Edit/Delete in one unwrapped
@@ -117,8 +125,43 @@
    * text) in control, rendering 80.4px instead of 75px (a later audit
    * caught this; the equivalent users.html fix correctly capped both
    * from the start). */
-  #links-table thead th:nth-child(7),
-  #links-table tbody > tr:not(.edit-row) td:nth-child(7) {
+  #links-table thead th:nth-child(8),
+  #links-table tbody > tr:not(.edit-row) td:nth-child(8) {
     max-width: 75px;
   }
+}
+
+/* Select column: as narrow as its checkbox, never wider, so it costs no
+ * meaningful width in the desktop layout. */
+#links-table th.select-col,
+#links-table .select-cell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+/* Pico gives checkboxes a bottom margin meant for stacked form fields,
+ * which misaligns them inside a table cell/header — confirmed live with
+ * getComputedStyle, not by eye. */
+#links-table .select-cell input[type="checkbox"],
+#links-table th.select-col input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Bulk-action bar: a hairline border and background contrast only, no
+ * shadow (see DESIGN.md's No-Shadow Rule), reusing the one existing
+ * border token so no new colour is introduced. */
+#bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: var(--pico-spacing);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+}
+/* Pico groups stretch to 100% width by default — the identical override
+ * already exists for the row actions above. */
+#bulk-bar [role=group] {
+  width: auto;
 }

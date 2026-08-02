@@ -69,6 +69,57 @@ let allLinks = [];
 let sortKey = null;
 let sortDir = 1;
 
+// Slugs currently checked for a bulk action. Cleared at the top of every
+// renderLinksTable() call (filter, sort, loadLinks()) so a user can never
+// act on rows they are not currently looking at.
+let selectedSlugs = new Set();
+
+// Mirrors api/bulk.py's MAX_BULK_ROWS so the bulk bar can warn before
+// submitting a request that is guaranteed to be rejected. The server is
+// authoritative — if this drifts from the real cap, the only symptom is a
+// too_many_rows rejection naming the actual limit, never silently wrong
+// client behavior.
+const BULK_MAX_SELECTION = 50;
+
+function updateBulkBar() {
+  const bar = document.getElementById("bulk-bar");
+  const count = selectedSlugs.size;
+  bar.hidden = count === 0;
+  if (count === 0) return;
+
+  const countEl = document.getElementById("bulk-count");
+  const overCap = count > BULK_MAX_SELECTION;
+  countEl.textContent = overCap
+    ? `${count} links selected — bulk actions apply to at most ${BULK_MAX_SELECTION} at a time.`
+    : `${count} link${count === 1 ? "" : "s"} selected`;
+
+  for (const id of ["bulk-enable-btn", "bulk-disable-btn", "bulk-delete-btn"]) {
+    document.getElementById(id).disabled = overCap;
+  }
+}
+
+// The header checkbox only ever reflects/affects the *selectable*
+// (canEditLink) rows in the current filtered view — selecting a row nobody
+// is allowed to act on would promise an action the API just refuses anyway.
+function getSelectableVisibleSlugs() {
+  return getVisibleLinks().filter(canEditLink).map((link) => link.slug);
+}
+
+function updateSelectAllState() {
+  const selectAll = document.getElementById("select-all-links");
+  const selectableSlugs = getSelectableVisibleSlugs();
+  if (!selectableSlugs.length) {
+    selectAll.checked = false;
+    selectAll.indeterminate = false;
+    selectAll.disabled = true;
+    return;
+  }
+  selectAll.disabled = false;
+  const selectedCount = selectableSlugs.filter((slug) => selectedSlugs.has(slug)).length;
+  selectAll.checked = selectedCount === selectableSlugs.length;
+  selectAll.indeterminate = selectedCount > 0 && selectedCount < selectableSlugs.length;
+}
+
 function updateSortIndicators() {
   document.querySelectorAll("#links-table th.sortable").forEach((th) => {
     const indicator = th.querySelector(".sort-indicator");
@@ -98,7 +149,7 @@ function getVisibleLinks() {
 function editRowHtml(link) {
   return `
     <tr class="edit-row" data-slug="${escapeHtml(link.slug)}">
-      <td colspan="8">
+      <td colspan="9">
         <form class="edit-form">
           <label>Destination URL <input type="url" class="edit-target-url" value="${escapeHtml(link.target_url)}" required /></label>
           <div class="grid">
@@ -134,11 +185,18 @@ function renderLinksTable() {
   const body = document.getElementById("links-body");
   body.innerHTML = "";
   updateSortIndicators();
+  // Filtering, sorting and reloading all reach this function, so clearing
+  // the selection here — rather than at each of those call sites — makes it
+  // structurally impossible for a future caller to forget: a user must never
+  // act on rows they are no longer looking at.
+  selectedSlugs.clear();
+  updateBulkBar();
 
   const visibleLinks = getVisibleLinks();
   if (!visibleLinks.length) {
     const message = allLinks.length ? "No links match your filter." : "No links yet — create one above.";
-    body.innerHTML = `<tr><td colspan="8" class="empty-state">${escapeHtml(message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="empty-state">${escapeHtml(message)}</td></tr>`;
+    updateSelectAllState();
     return;
   }
 
@@ -147,6 +205,9 @@ function renderLinksTable() {
     const row = document.createElement("tr");
     row.dataset.slug = link.slug;
     row.innerHTML = `
+      <td class="select-cell">
+        ${canEditLink(link) ? `<input type="checkbox" class="row-select" data-slug="${escapeHtml(link.slug)}" aria-label="Select link ${escapeHtml(link.slug)}" />` : ""}
+      </td>
       <td>
         <!-- The origin (http://host) is identical on every row — showing it
              30 times per page is pure width cost for zero information gain,
@@ -183,6 +244,7 @@ function renderLinksTable() {
       wireWindowValidation(editRow.querySelector(".edit-start-at"), editRow.querySelector(".edit-end-at"));
     }
   }
+  updateSelectAllState();
 }
 
 // Row actions are wired once via delegation on #links-body, not re-queried
@@ -254,9 +316,12 @@ async function handleEditFormSubmit(form) {
   }
   const displayRow = editRow.previousElementSibling;
   if (displayRow) {
-    displayRow.children[2].textContent = targetUrl;
-    displayRow.children[5].innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
-    displayRow.children[6].innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
+    // Positional indices shifted by 1 when the select-column was inserted
+    // as the new first <td> — destination was children[2], now children[3];
+    // Starts/Expires were [5]/[6], now [6]/[7]. This fails silently if wrong.
+    displayRow.children[3].textContent = targetUrl;
+    displayRow.children[6].innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
+    displayRow.children[7].innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
   }
 
   if (removePassword || newPassword) {
@@ -292,6 +357,98 @@ document.getElementById("links-body").addEventListener("submit", (e) => {
   e.preventDefault();
   handleEditFormSubmit(e.target);
 });
+
+// Row checkboxes go through the same delegated #links-body listener as the
+// row-action buttons above, rather than a per-row listener attached in
+// renderLinksTable() — that delegation exists deliberately for performance
+// (see the comment above handleCopyClick) and applies equally here.
+document.getElementById("links-body").addEventListener("change", (e) => {
+  const cb = e.target.closest(".row-select");
+  if (!cb) return;
+  if (cb.checked) selectedSlugs.add(cb.dataset.slug);
+  else selectedSlugs.delete(cb.dataset.slug);
+  updateSelectAllState();
+  updateBulkBar();
+});
+
+document.getElementById("select-all-links").addEventListener("change", (e) => {
+  const selectableSlugs = getSelectableVisibleSlugs();
+  if (e.target.checked) {
+    selectableSlugs.forEach((slug) => selectedSlugs.add(slug));
+  } else {
+    selectableSlugs.forEach((slug) => selectedSlugs.delete(slug));
+  }
+  document.querySelectorAll("#links-body .row-select").forEach((cb) => {
+    cb.checked = selectedSlugs.has(cb.dataset.slug);
+  });
+  updateSelectAllState();
+  updateBulkBar();
+});
+
+// Renders one <li> per row error. Shared shape for both bulk endpoints: a
+// bulk-create row error carries {line, slug, error} while a bulk-action row
+// error carries {slug, error} — the "line" label is simply omitted when
+// there isn't one, so this needs no separate branch per caller.
+function renderRowErrorList(rowErrors, overrides) {
+  const items = rowErrors
+    .map((rowErr) => {
+      const label = rowErr.line != null ? `Line ${rowErr.line}` : rowErr.slug;
+      const problem = escapeHtml(friendlyError(rowErr, "This row isn't valid.", overrides));
+      return `<li>${label ? `<strong>${escapeHtml(String(label))}:</strong> ` : ""}${problem}</li>`;
+    })
+    .join("");
+  return `<ul>${items}</ul>`;
+}
+
+async function handleBulkAction(action) {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
+
+  if (action === "delete") {
+    const message =
+      slugs.length === 1
+        ? `Delete the link "${slugs[0]}"? This can't be undone.`
+        : `Delete ${slugs.length} links? This can't be undone.`;
+    const options = slugs.length === 1 ? {} : { confirmLabel: `Delete ${slugs.length} links` };
+    if (!(await confirmDialog(message, options))) return;
+  }
+
+  const errorEl = document.getElementById("links-error");
+  const errorsEl = document.getElementById("bulk-action-errors");
+  const successEl = document.getElementById("links-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+
+  const { ok, data } = await api.post("/links/bulk-action", { slugs, action });
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      errorEl.textContent = `Nothing was changed — ${data.row_errors.length} of the selected links are no longer available. Refresh and try again.`;
+      errorsEl.innerHTML = renderRowErrorList(data.row_errors);
+      errorsEl.hidden = false;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not update the selected links.");
+    }
+    return;
+  }
+
+  const verb = action === "delete" ? "Deleted" : action === "enable" ? "Enabled" : "Disabled";
+  successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
+
+  if (action === "delete") {
+    // Same reasoning as handleDeleteClick: the create-success banner's own
+    // live Copy button may reference a slug that was just bulk-deleted.
+    document.getElementById("create-success").hidden = true;
+  }
+
+  loadLinks();
+}
+
+document.getElementById("bulk-enable-btn").addEventListener("click", () => handleBulkAction("enable"));
+document.getElementById("bulk-disable-btn").addEventListener("click", () => handleBulkAction("disable"));
+document.getElementById("bulk-delete-btn").addEventListener("click", () => handleBulkAction("delete"));
 
 document.getElementById("create-form").addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -58,10 +58,21 @@
       <label for="links-filter" class="visually-hidden">Filter links</label>
       <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
       <p id="links-error" class="form-error" role="alert"></p>
+      <div id="bulk-action-errors" hidden></div>
+      <div id="bulk-bar" role="status" hidden>
+        <span id="bulk-count"></span>
+        <div role="group">
+          <button type="button" id="bulk-enable-btn" class="outline">Enable</button>
+          <button type="button" id="bulk-disable-btn" class="outline">Disable</button>
+          <button type="button" id="bulk-delete-btn" class="secondary outline">Delete</button>
+        </div>
+      </div>
+      <p id="links-success" class="form-success" aria-live="polite" hidden></p>
       <figure id="links-figure">
         <table id="links-table">
           <thead>
             <tr>
+              <th class="select-col"><input type="checkbox" id="select-all-links" aria-label="Select all links in view" /></th>
               <th class="sortable" data-sort-key="slug" tabindex="0" aria-sort="none">Short link<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="owner" tabindex="0" aria-sort="none">Owner<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="target_url" tabindex="0" aria-sort="none">Destination<span class="sort-indicator"></span></th>
