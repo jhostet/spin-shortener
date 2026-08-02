@@ -10,12 +10,58 @@ function permissionsLegendText(role) {
   return role === "admin" ? "Permissions (ignored — admins have full access)" : 'Permissions (for role "user")';
 }
 
+const DOMAINS_LEGEND_TEXT = "Short-link domains (none checked = all domains)";
+
+// The full base URL is unpoisonable value; the host is all that's shown so
+// the checkbox list stays scannable next to the permissions column.
+function domainHost(domain) {
+  try {
+    return new URL(domain).host;
+  } catch {
+    return domain;
+  }
+}
+
+// assigned_domains is not a permission (it's not consulted by
+// Principal.has_permission at all), so unlike the permissions fieldset it is
+// never disabled for admins — an admin still needs a domain list to drive
+// their own selector.
+function domainCheckboxesHtml(className, configured, selected) {
+  const known = configured.map((domain) => `
+    <label>
+      <input type="checkbox" class="${className}" value="${escapeHtml(domain)}" ${selected.includes(domain) ? "checked" : ""} />
+      ${escapeHtml(domainHost(domain))}
+    </label>
+  `).join("");
+  // A domain the user was previously assigned that has since been removed
+  // from public_base_urls: rendered checked-and-disabled so the operator can
+  // see it, and :not(:disabled) on the submit selector drops it on next save
+  // instead of round-tripping a now-invalid value back into
+  // _validate_assigned_domains.
+  const stale = selected.filter((domain) => !configured.includes(domain)).map((domain) => `
+    <label>
+      <input type="checkbox" class="${className}" value="${escapeHtml(domain)}" checked disabled />
+      ${escapeHtml(domainHost(domain))} — no longer configured
+    </label>
+  `).join("");
+  return known + stale;
+}
+
 // Admins bypass every permission check (see auth.Principal.has_permission),
 // so the checkbox values are inert for them; disabling the fieldset makes
 // that visible instead of implying the checked boxes still matter.
 function updatePermissionsFieldset(fieldset, legend, role) {
   fieldset.disabled = role === "admin";
   legend.textContent = permissionsLegendText(role);
+}
+
+function renderNewDomainsFieldset() {
+  const fieldset = document.getElementById("new-domains-fieldset");
+  fieldset.hidden = allDomains.length < 2;
+  fieldset.innerHTML = `
+    <legend>${escapeHtml(DOMAINS_LEGEND_TEXT)}</legend>
+    ${domainCheckboxesHtml("new-domain", allDomains, [])}
+  `;
 }
 
 function editRowHtml(user) {
@@ -45,6 +91,10 @@ function editRowHtml(user) {
             <legend class="edit-permissions-legend">${escapeHtml(permissionsLegendText(user.role))}</legend>
             ${checkboxes}
           </fieldset>
+          <fieldset class="edit-domains-fieldset" ${allDomains.length < 2 ? "hidden" : ""}>
+            <legend>${escapeHtml(DOMAINS_LEGEND_TEXT)}</legend>
+            ${domainCheckboxesHtml("edit-domain", allDomains, user.assigned_domains || [])}
+          </fieldset>
           <label>
             <input type="checkbox" class="edit-disabled" ${user.disabled ? "checked" : ""} /> Disabled
           </label>
@@ -60,6 +110,7 @@ function editRowHtml(user) {
 }
 
 let currentPrincipal = null;
+let allDomains = [];
 
 async function loadUsers() {
   const { ok, data } = await api.get("/users");
@@ -70,6 +121,8 @@ async function loadUsers() {
   }
 
   document.getElementById("users-error").textContent = "";
+  allDomains = data.all_domains || [];
+  renderNewDomainsFieldset();
 
   const body = document.getElementById("users-body");
   body.innerHTML = "";
@@ -163,6 +216,7 @@ async function loadUsers() {
       const payload = {
         role: newRole,
         permissions: Array.from(form.querySelectorAll(".edit-permission:checked")).map((cb) => cb.value),
+        assigned_domains: Array.from(form.querySelectorAll(".edit-domain:checked:not(:disabled)")).map((cb) => cb.value),
         disabled: form.querySelector(".edit-disabled").checked,
       };
       const password = form.querySelector(".edit-password").value;
@@ -191,6 +245,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     password: document.getElementById("new-password").value,
     role: document.getElementById("new-role").value,
     permissions: Array.from(document.querySelectorAll(".new-permission:checked")).map((cb) => cb.value),
+    assigned_domains: Array.from(document.querySelectorAll(".new-domain:checked:not(:disabled)")).map((cb) => cb.value),
   };
 
   const { ok, data } = await api.post("/users", payload);
