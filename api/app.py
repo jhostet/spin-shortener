@@ -7,6 +7,7 @@ from spin_sdk.http import Handler
 import analytics
 import auth
 import bulk
+import domains
 import links
 import qr
 import users
@@ -39,6 +40,7 @@ class HttpHandler(Handler):
         admin_password = await variables.get("admin_bootstrap_password")
         await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
         cookie_secure = await _cookie_secure()
+        configured_domains = domains.parse_base_urls(await variables.get("public_base_urls"))
 
         if path == "/api/auth/login" and method == "POST":
             return await self._login(users_store, request, cookie_secure)
@@ -58,6 +60,8 @@ class HttpHandler(Handler):
                 "username": result.username,
                 "role": result.role,
                 "permissions": result.permissions,
+                "assigned_domains": result.assigned_domains,
+                "domains": domains.visible_base_urls(result.assigned_domains, configured_domains),
             })
 
         if path == "/api/links" and method in ("GET", "POST"):
@@ -113,8 +117,7 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             links_store = await key_value.open("links")
-            public_base_url = await variables.get("public_base_url")
-            return await qr.handle_qr(links_store, result, slug, query, public_base_url)
+            return await qr.handle_qr(links_store, result, slug, query, configured_domains)
 
         if path.startswith("/api/links/") and method in ("GET", "PATCH", "DELETE"):
             slug = path.removeprefix("/api/links/")
@@ -135,8 +138,8 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             if method == "GET":
-                return await users.handle_list(users_store, result)
-            return await users.handle_create(users_store, result, request)
+                return await users.handle_list(users_store, result, configured_domains)
+            return await users.handle_create(users_store, result, request, configured_domains)
 
         if path.startswith("/api/users/") and method in ("GET", "PATCH", "DELETE"):
             username = path.removeprefix("/api/users/")
@@ -148,7 +151,7 @@ class HttpHandler(Handler):
             if method == "GET":
                 return await users.handle_get(users_store, result, username)
             if method == "PATCH":
-                return await users.handle_update(users_store, result, username, request)
+                return await users.handle_update(users_store, result, username, request, configured_domains)
             return await users.handle_delete(users_store, result, username)
 
         return json_response(404, {"error": "not_found"})

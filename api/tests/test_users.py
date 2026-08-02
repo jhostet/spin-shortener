@@ -15,10 +15,13 @@ def _request(payload=None):
     return Request(method="POST", uri="/api/users", headers={}, body=body)
 
 
-async def _make_user(store, username="alice", **overrides):
+CONFIGURED_DOMAINS = ["https://a.example.com", "https://b.example.com"]
+
+
+async def _make_user(store, username="alice", configured_domains=CONFIGURED_DOMAINS, **overrides):
     payload = {"username": username, "password": "longenough"}
     payload.update(overrides)
-    resp = await users.handle_create(store, _principal(), _request(payload))
+    resp = await users.handle_create(store, _principal(), _request(payload), configured_domains)
     return resp
 
 
@@ -27,14 +30,14 @@ async def _make_user(store, username="alice", **overrides):
 
 async def test_list_requires_users_manage():
     store = FakeStore()
-    resp = await users.handle_list(store, _principal(role="user", permissions=[]))
+    resp = await users.handle_list(store, _principal(role="user", permissions=[]), CONFIGURED_DOMAINS)
     assert resp.status == 403
     assert json.loads(resp.body)["required_permission"] == "users.manage"
 
 
 async def test_create_requires_users_manage():
     store = FakeStore()
-    resp = await users.handle_create(store, _principal(role="user", permissions=[]), _request({"username": "x", "password": "longenough"}))
+    resp = await users.handle_create(store, _principal(role="user", permissions=[]), _request({"username": "x", "password": "longenough"}), CONFIGURED_DOMAINS)
     assert resp.status == 403
 
 
@@ -46,7 +49,7 @@ async def test_get_requires_users_manage():
 
 async def test_update_requires_users_manage():
     store = FakeStore()
-    resp = await users.handle_update(store, _principal(role="user", permissions=[]), "alice", _request({"disabled": True}))
+    resp = await users.handle_update(store, _principal(role="user", permissions=[]), "alice", _request({"disabled": True}), CONFIGURED_DOMAINS)
     assert resp.status == 403
 
 
@@ -58,7 +61,7 @@ async def test_delete_requires_users_manage():
 
 async def test_explicit_users_manage_permission_bypasses_admin_requirement():
     store = FakeStore()
-    resp = await users.handle_list(store, _principal(username="ops", role="user", permissions=["users.manage"]))
+    resp = await users.handle_list(store, _principal(username="ops", role="user", permissions=["users.manage"]), CONFIGURED_DOMAINS)
     assert resp.status == 200
 
 
@@ -98,28 +101,28 @@ async def test_create_duplicate_username_conflict():
 
 async def test_create_invalid_username():
     store = FakeStore()
-    resp = await users.handle_create(store, _principal(), _request({"username": "  ", "password": "longenough"}))
+    resp = await users.handle_create(store, _principal(), _request({"username": "  ", "password": "longenough"}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_username"
 
 
 async def test_create_password_too_short():
     store = FakeStore()
-    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "short"}))
+    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "short"}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_password"
 
 
 async def test_create_invalid_role():
     store = FakeStore()
-    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "longenough", "role": "superadmin"}))
+    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "longenough", "role": "superadmin"}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_role"
 
 
 async def test_create_unknown_permission_rejected():
     store = FakeStore()
-    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "longenough", "permissions": ["not.a.real.permission"]}))
+    resp = await users.handle_create(store, _principal(), _request({"username": "alice", "password": "longenough", "permissions": ["not.a.real.permission"]}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_permissions"
 
@@ -131,7 +134,7 @@ async def test_list_returns_all_users_without_password_hash():
     store = FakeStore()
     await _make_user(store, username="alice")
     await _make_user(store, username="bob")
-    resp = await users.handle_list(store, _principal())
+    resp = await users.handle_list(store, _principal(), CONFIGURED_DOMAINS)
     assert resp.status == 200
     body = json.loads(resp.body)
     usernames = {u["username"] for u in body["users"]}
@@ -151,21 +154,21 @@ async def test_get_not_found():
 async def test_update_empty_payload_rejected():
     store = FakeStore()
     await _make_user(store, username="alice")
-    resp = await users.handle_update(store, _principal(), "alice", _request({}))
+    resp = await users.handle_update(store, _principal(), "alice", _request({}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_fields_to_update"
 
 
 async def test_update_not_found():
     store = FakeStore()
-    resp = await users.handle_update(store, _principal(), "doesnotexist", _request({"disabled": True}))
+    resp = await users.handle_update(store, _principal(), "doesnotexist", _request({"disabled": True}), CONFIGURED_DOMAINS)
     assert resp.status == 404
 
 
 async def test_update_role_and_permissions():
     store = FakeStore()
     await _make_user(store, username="alice")
-    resp = await users.handle_update(store, _principal(), "alice", _request({"role": "admin", "permissions": ["links.view_all"]}))
+    resp = await users.handle_update(store, _principal(), "alice", _request({"role": "admin", "permissions": ["links.view_all"]}), CONFIGURED_DOMAINS)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["role"] == "admin"
@@ -175,7 +178,7 @@ async def test_update_role_and_permissions():
 async def test_update_invalid_role_rejected():
     store = FakeStore()
     await _make_user(store, username="alice")
-    resp = await users.handle_update(store, _principal(), "alice", _request({"role": "superadmin"}))
+    resp = await users.handle_update(store, _principal(), "alice", _request({"role": "superadmin"}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_role"
 
@@ -183,7 +186,7 @@ async def test_update_invalid_role_rejected():
 async def test_update_disable_another_user():
     store = FakeStore()
     await _make_user(store, username="alice")
-    resp = await users.handle_update(store, _principal(username="admin"), "alice", _request({"disabled": True}))
+    resp = await users.handle_update(store, _principal(username="admin"), "alice", _request({"disabled": True}), CONFIGURED_DOMAINS)
     assert resp.status == 200
     assert json.loads(resp.body)["disabled"] is True
 
@@ -191,7 +194,7 @@ async def test_update_disable_another_user():
 async def test_update_cannot_disable_self():
     store = FakeStore()
     await _make_user(store, username="admin", password="longenough2")
-    resp = await users.handle_update(store, _principal(username="admin"), "admin", _request({"disabled": True}))
+    resp = await users.handle_update(store, _principal(username="admin"), "admin", _request({"disabled": True}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "cannot_disable_self"
 
@@ -199,7 +202,7 @@ async def test_update_cannot_disable_self():
 async def test_update_password():
     store = FakeStore()
     await _make_user(store, username="alice")
-    resp = await users.handle_update(store, _principal(), "alice", _request({"password": "newlongpassword"}))
+    resp = await users.handle_update(store, _principal(), "alice", _request({"password": "newlongpassword"}), CONFIGURED_DOMAINS)
     assert resp.status == 200
     stored = await auth.get_user(store, "alice")
     assert auth.verify_password("newlongpassword", stored["password_hash"])
@@ -209,7 +212,7 @@ async def test_update_password():
 async def test_update_partial_leaves_other_fields_untouched():
     store = FakeStore()
     await _make_user(store, username="alice", permissions=["links.view_all"])
-    resp = await users.handle_update(store, _principal(), "alice", _request({"disabled": True}))
+    resp = await users.handle_update(store, _principal(), "alice", _request({"disabled": True}), CONFIGURED_DOMAINS)
     body = json.loads(resp.body)
     assert body["disabled"] is True
     assert body["permissions"] == ["links.view_all"]  # untouched
@@ -239,3 +242,75 @@ async def test_delete_cannot_delete_self():
     resp = await users.handle_delete(store, _principal(username="admin"), "admin")
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "cannot_delete_self"
+
+
+# --- assigned_domains ---
+
+
+async def test_create_with_assigned_domains():
+    store = FakeStore()
+    resp = await _make_user(store, assigned_domains=["https://a.example.com"])
+    assert resp.status == 201
+    body = json.loads(resp.body)
+    assert body["assigned_domains"] == ["https://a.example.com"]
+
+
+async def test_create_unknown_domain_rejected_and_nothing_written():
+    store = FakeStore()
+    resp = await users.handle_create(
+        store, _principal(),
+        _request({"username": "alice", "password": "longenough", "assigned_domains": ["https://evil.example"]}),
+        CONFIGURED_DOMAINS,
+    )
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_assigned_domains"
+    assert await auth.get_user(store, "alice") is None
+
+
+async def test_update_assigned_domains():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_update(
+        store, _principal(), "alice",
+        _request({"assigned_domains": ["https://b.example.com"]}),
+        CONFIGURED_DOMAINS,
+    )
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["assigned_domains"] == ["https://b.example.com"]
+
+
+async def test_update_unknown_domain_rejected_and_nothing_written():
+    store = FakeStore()
+    await _make_user(store, username="alice", assigned_domains=["https://a.example.com"])
+    resp = await users.handle_update(
+        store, _principal(), "alice",
+        _request({"assigned_domains": ["https://evil.example"]}),
+        CONFIGURED_DOMAINS,
+    )
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_assigned_domains"
+    unchanged = await auth.get_user(store, "alice")
+    assert unchanged["assigned_domains"] == ["https://a.example.com"]
+
+
+async def test_list_returns_all_domains():
+    store = FakeStore()
+    resp = await users.handle_list(store, _principal(), CONFIGURED_DOMAINS)
+    assert resp.status == 200
+    assert json.loads(resp.body)["all_domains"] == CONFIGURED_DOMAINS
+
+
+async def test_public_user_exposes_assigned_domains():
+    user = {
+        "username": "alice",
+        "password_hash": "x",
+        "role": "user",
+        "permissions": [],
+        "assigned_domains": ["https://a.example.com"],
+        "provider": "local",
+        "disabled": False,
+    }
+    public = users._public_user(user)
+    assert public["assigned_domains"] == ["https://a.example.com"]
+    assert "password_hash" not in public

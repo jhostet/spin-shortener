@@ -126,6 +126,21 @@ async def test_resolve_session_missing_or_tampered_cookie():
     assert await auth.resolve_session(store, _fake_request(cookie="session=doesnotexist")) is None
 
 
+async def test_resolve_session_defaults_assigned_domains_when_key_absent():
+    """A user record written before assigned_domains existed has no such
+    key at all — resolve_session must still succeed and default to []."""
+    store = FakeStore()
+    await auth.put_user(store, {
+        "username": "alice", "password_hash": "x", "role": "user",
+        "permissions": [], "provider": "local", "disabled": False,
+    })
+    token, _ = await auth.create_session(store, "alice", "local")
+
+    principal = await auth.resolve_session(store, _fake_request(cookie=f"session={token}"))
+    assert principal is not None
+    assert principal.assigned_domains == []
+
+
 async def test_resolve_session_for_deleted_user_fails():
     store = FakeStore()
     await auth.put_user(store, {

@@ -4,9 +4,13 @@ Uses the pure-Python `qrcode` package (SVG output natively, PNG via the
 pure-Python `pypng`-backed `PyPNGImage` factory) since componentize-py cannot
 bundle C-extension packages like Pillow.
 
-The QR always encodes the *short* link (`{public_base_url}/r/{slug}`), never
-the raw target_url — encoding the target directly would let a scan bypass the
-redirect, click analytics, and any password gate entirely.
+The QR always encodes the *short* link (`{base_url}/r/{slug}`), never the raw
+target_url — encoding the target directly would let a scan bypass the
+redirect, click analytics, and any password gate entirely. `base_url` is
+resolved (never trusted directly from the caller) against the configured
+`public_base_urls` list via `domains.resolve_base_url` — see
+docs/plans/multi-domain-display.md for why an unvalidated client-supplied
+base URL is a QR-poisoning vector.
 """
 
 import io
@@ -15,6 +19,7 @@ import qrcode
 import qrcode.image.pure as qr_pure
 import qrcode.image.svg as qr_svg
 
+import domains
 from auth import Principal
 from links import can_view, get_link
 from responses import Response, SECURITY_HEADERS, json_response
@@ -41,7 +46,7 @@ def _render(short_url: str, fmt: str, size: str) -> tuple[bytes, str, str]:
     return buf.getvalue(), "image/png", "png"
 
 
-async def handle_qr(store, principal: Principal, slug: str, query: dict, public_base_url: str):
+async def handle_qr(store, principal: Principal, slug: str, query: dict, base_urls: list[str]):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
@@ -58,7 +63,14 @@ async def handle_qr(store, principal: Principal, slug: str, query: dict, public_
 
     download = _query_value(query, "download", "0") == "1"
 
-    short_url = f"{public_base_url.rstrip('/')}/r/{slug}"
+    if not base_urls:
+        return json_response(500, {"error": "no_base_url_configured"})
+
+    base_url = domains.resolve_base_url(_query_value(query, "base", ""), base_urls)
+    if base_url is None:
+        return json_response(400, {"error": "invalid_base_url"})
+
+    short_url = f"{base_url}/r/{slug}"
     body, content_type, ext = _render(short_url, fmt, size)
 
     # SECURITY_HEADERS applied last (see responses.json_response's comment) —

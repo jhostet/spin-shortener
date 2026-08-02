@@ -31,7 +31,19 @@ def _validate_permissions(permissions) -> Optional[str]:
     return None
 
 
-async def handle_list(store, principal: Principal):
+def _validate_assigned_domains(value, configured: list[str]) -> Optional[str]:
+    """Mirrors _validate_permissions exactly: one error string for both a
+    malformed value and a member outside the allowed set, checked against
+    `configured` (the deployment's `public_base_urls`) rather than a fixed
+    frozenset — this is configuration, not a vocabulary."""
+    if not isinstance(value, list) or not all(isinstance(d, str) for d in value):
+        return "invalid_assigned_domains"
+    if set(value) - set(configured):
+        return "invalid_assigned_domains"
+    return None
+
+
+async def handle_list(store, principal: Principal, configured_domains: list[str]):
     if not principal.has_permission("users.manage"):
         return _forbidden()
 
@@ -41,10 +53,10 @@ async def handle_list(store, principal: Principal):
         user = await auth.get_user(store, username)
         if user is not None:
             users.append(_public_user(user))
-    return json_response(200, {"users": users})
+    return json_response(200, {"users": users, "all_domains": configured_domains})
 
 
-async def handle_create(store, principal: Principal, request):
+async def handle_create(store, principal: Principal, request, configured_domains: list[str]):
     if not principal.has_permission("users.manage"):
         return _forbidden()
 
@@ -73,11 +85,17 @@ async def handle_create(store, principal: Principal, request):
     if error:
         return json_response(400, {"error": error})
 
+    assigned_domains = payload.get("assigned_domains", [])
+    error = _validate_assigned_domains(assigned_domains, configured_domains)
+    if error:
+        return json_response(400, {"error": error})
+
     user = {
         "username": username,
         "password_hash": auth.hash_password(password),
         "role": role,
         "permissions": permissions,
+        "assigned_domains": assigned_domains,
         "provider": "local",
         "disabled": False,
         "created_at": iso_now(),
@@ -97,10 +115,10 @@ async def handle_get(store, principal: Principal, username: str):
     return json_response(200, _public_user(user))
 
 
-UPDATABLE_FIELDS = {"role", "permissions", "disabled", "password"}
+UPDATABLE_FIELDS = {"role", "permissions", "disabled", "password", "assigned_domains"}
 
 
-async def handle_update(store, principal: Principal, username: str, request):
+async def handle_update(store, principal: Principal, username: str, request, configured_domains: list[str]):
     if not principal.has_permission("users.manage"):
         return _forbidden()
 
@@ -127,6 +145,12 @@ async def handle_update(store, principal: Principal, username: str, request):
         if error:
             return json_response(400, {"error": error})
         user["permissions"] = payload["permissions"]
+
+    if "assigned_domains" in payload:
+        error = _validate_assigned_domains(payload["assigned_domains"], configured_domains)
+        if error:
+            return json_response(400, {"error": error})
+        user["assigned_domains"] = payload["assigned_domains"]
 
     if "disabled" in payload:
         disabled = payload["disabled"]

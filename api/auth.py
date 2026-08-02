@@ -13,7 +13,7 @@ import hmac
 import json
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from responses import Request, get_header, iso_now, parse_cookies
@@ -76,6 +76,12 @@ class Principal:
     role: str
     permissions: list[str]
     csrf_token: str
+    # A convenience guardrail, not a security control — restricts which
+    # short-link domains the GUI's selector offers this user. Deliberately
+    # not in KNOWN_PERMISSIONS (see the module comment above); appended last
+    # with a default so every existing keyword-argument construction site
+    # keeps working unchanged.
+    assigned_domains: list[str] = field(default_factory=list)
 
     def has_permission(self, permission: str) -> bool:
         return self.role == "admin" or permission in self.permissions
@@ -146,6 +152,7 @@ async def ensure_bootstrap_admin(store, username: str, password: str) -> None:
         "password_hash": hash_password(password),
         "role": "admin",
         "permissions": [],
+        "assigned_domains": [],
         "provider": "local",
         "disabled": False,
         "created_at": iso_now(),
@@ -200,6 +207,7 @@ async def resolve_session(store, request: Request) -> Optional[Principal]:
         role=user["role"],
         permissions=user["permissions"],
         csrf_token=session["csrf_token"],
+        assigned_domains=user.get("assigned_domains", []),
     )
 
 
