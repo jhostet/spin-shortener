@@ -1,5 +1,13 @@
 # Banned-Word Check for Link Slugs
 
+> **STATUS: NOT IMPLEMENTED — decided against 2026-08-02.** Tasks 1-3 of this
+> plan were built and passing before the user reviewed the proposed word list
+> and chose not to ship the feature; the code was reverted in full. See
+> `TASKS.md`'s `## Banned-word slug check` section for the reasoning. This
+> document is kept for its analysis, not as pending work — in particular the
+> segment-versus-substring matching argument and the Scunthorpe cases, which
+> apply to any future slug-validation work regardless of this feature.
+
 ## Context
 
 Every short link this app publishes carries its slug in the URL itself, and
