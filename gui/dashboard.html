@@ -93,6 +93,10 @@
       <h2 id="links-heading">Your links</h2>
       <label for="links-filter" class="visually-hidden">Filter links</label>
       <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
+      <!-- Exports whatever the filter and sort are currently showing, so
+           filtering to a campaign and exporting gives you that campaign. Needs
+           no selection: it is deliberately independent of the checkboxes. -->
+      <button type="button" id="export-csv" class="outline">Export CSV</button>
       <p id="links-error" class="form-error" role="alert"></p>
       <div id="bulk-action-errors" hidden></div>
       <div id="bulk-bar" role="status" hidden>

@@ -163,6 +163,9 @@ function editRowHtml(link) {
             </label>
             <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
           </div>
+          <div class="grid">
+            <label><input type="checkbox" class="edit-disabled" ${link.status === "disabled" ? "checked" : ""} /> Disabled (stops <code>/r/${escapeHtml(link.slug)}</code> resolving)</label>
+          </div>
           <div role="group">
             <button type="submit" class="save-edit-btn">Save</button>
             <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
@@ -296,10 +299,15 @@ async function handleEditFormSubmit(form) {
   const endAt = datetimeLocalToIso(form.querySelector(".edit-end-at").value);
   const newPassword = form.querySelector(".edit-password").value;
   const removePassword = form.querySelector(".edit-remove-password").checked;
+  // PATCH /links/{slug} has accepted `status` since Phase 1, but until this
+  // control existed no client ever sent it — bulk enable/disable was the only
+  // way to change a link's status from the GUI, so disabling one link meant
+  // selecting it and using a bar labelled for bulk work.
+  const status = form.querySelector(".edit-disabled").checked ? "disabled" : "active";
   const errorEl = form.querySelector(".edit-error");
   errorEl.textContent = "";
 
-  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt });
+  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, status });
   if (!ok) {
     errorEl.textContent = friendlyError(data, "Could not update link.");
     return;
@@ -662,3 +670,60 @@ wireWindowValidation(document.getElementById("bulk-start-at"), document.getEleme
 // row's Edit/Delete controls, and running them concurrently could render
 // the first paint with every row's Edit/Delete hidden, even the viewer's own.
 loadMe().then(() => loadLinks().then(openDeepLinkedEditRow));
+
+// --- CSV export -------------------------------------------------------------
+// Client-side only: the dashboard already holds every link the user may see in
+// `allLinks`, so this needs no endpoint, no permission work and no selection.
+// It exports the current filtered/sorted view, matching how select-all behaves.
+//
+// Deliberately NOT re-importable into bulk create: that parser is
+// first-delimiter-wins on two columns, so any third column would land inside
+// the destination and fail as an invalid URL. This file is for reading in a
+// spreadsheet, not for restoring — re-importing would create new links and
+// collide on every slug that still exists.
+
+const CSV_COLUMNS = [
+  ["Short link", (l) => `${location.origin}/r/${l.slug}`],
+  ["Owner", (l) => l.owner],
+  ["Destination", (l) => l.target_url],
+  ["Created", (l) => l.created_at ?? ""],
+  ["Status", (l) => l.status],
+  ["Starts", (l) => l.start_at ?? ""],
+  ["Expires", (l) => l.end_at ?? ""],
+];
+
+// RFC 4180: quote a field that contains a comma, quote, CR or LF, and double
+// any quote inside it. Destinations really do contain commas — the bulk parser
+// has a case for exactly that — so this is load-bearing, not defensive.
+function csvField(value) {
+  const s = String(value ?? "");
+  return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+}
+
+function linksToCsv(links) {
+  const rows = [CSV_COLUMNS.map(([header]) => header)];
+  for (const link of links) rows.push(CSV_COLUMNS.map(([, get]) => get(link)));
+  // CRLF per RFC 4180, and a UTF-8 BOM so Excel reads non-ASCII destinations
+  // correctly instead of mojibake. Timestamps stay ISO 8601 rather than the
+  // table's display format, so a spreadsheet can sort and filter on them.
+  return "﻿" + rows.map((r) => r.map(csvField).join(",")).join("\r\n") + "\r\n";
+}
+
+document.getElementById("export-csv").addEventListener("click", () => {
+  const links = getVisibleLinks();
+  const errorEl = document.getElementById("links-error");
+  errorEl.textContent = "";
+  if (!links.length) {
+    errorEl.textContent = "Nothing to export — no links match the current filter.";
+    return;
+  }
+  const blob = new Blob([linksToCsv(links)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `links-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
