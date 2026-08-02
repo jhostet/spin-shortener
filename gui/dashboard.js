@@ -450,6 +450,134 @@ document.getElementById("bulk-enable-btn").addEventListener("click", () => handl
 document.getElementById("bulk-disable-btn").addEventListener("click", () => handleBulkAction("disable"));
 document.getElementById("bulk-delete-btn").addEventListener("click", () => handleBulkAction("delete"));
 
+// Dashboard-local overrides for api/bulk.py's per-row error codes — the
+// invalid_password override at handleEditFormSubmit is the precedent for
+// giving one call site's copy priority over the shared ERROR_MESSAGES map.
+// Codes not listed here (invalid_custom_slug, slug_taken) already read fine
+// from the shared map.
+const BULK_ROW_MESSAGES = {
+  missing_target_url: "This line has a short link but no destination URL.",
+  duplicate_slug_in_submission: "This short link appears earlier in your list.",
+  custom_slug_forbidden: "You don't have permission to choose your own short links — leave the first column blank.",
+  invalid_target_url: "Not a valid destination URL (include https://). If this is a header row, delete it.",
+};
+
+// Mirrors api/bulk.py's MAX_BULK_BODY_BYTES so a large file can be rejected
+// before FileReader ever reads it. The server is authoritative — a drift
+// here only ever produces a body_too_large rejection naming the real limit,
+// never silently wrong client behavior (same reasoning as BULK_MAX_SELECTION
+// above).
+const BULK_MAX_BODY_BYTES = 262144;
+
+// Builds the Line/Short link/Problem table for a bulk_validation_failed
+// response. No truncation needed — MAX_BULK_ROWS caps row_errors at 50,
+// a readable table rather than a wall (see the plan's rejected-alternatives
+// note on the now-removed 200-row cutoff).
+function renderBulkErrorTable(rowErrors) {
+  const rows = rowErrors
+    .map((rowErr) => {
+      const line = escapeHtml(String(rowErr.line));
+      const slug = rowErr.slug ? escapeHtml(rowErr.slug) : "—";
+      const problem = escapeHtml(friendlyError(rowErr, "This row isn't valid.", BULK_ROW_MESSAGES));
+      return `<tr><td>${line}</td><td>${slug}</td><td>${problem}</td></tr>`;
+    })
+    .join("");
+  return `
+    <table id="bulk-errors-table">
+      <thead><tr><th>Line</th><th>Short link</th><th>Problem</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// Clears all three bulk-create result elements — called at the top of every
+// render path so a stale success/error never sits alongside a fresh one.
+function clearBulkResults() {
+  const errorEl = document.getElementById("bulk-error");
+  const errorsEl = document.getElementById("bulk-errors");
+  const successEl = document.getElementById("bulk-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+  successEl.textContent = "";
+}
+
+// The file input is a convenience, not a second submission path: choosing a
+// file reads it into #bulk-text and clears the input, so there is always
+// exactly one source of truth (the textarea) at submit time.
+document.getElementById("bulk-file").addEventListener("change", (e) => {
+  const fileInput = e.target;
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  if (file.size > BULK_MAX_BODY_BYTES) {
+    clearBulkResults();
+    document.getElementById("bulk-error").textContent =
+      `That's too much text — the limit is ${Math.floor(BULK_MAX_BODY_BYTES / 1024)} KB.`;
+    fileInput.value = "";
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    document.getElementById("bulk-text").value = reader.result;
+    fileInput.value = "";
+  });
+  reader.readAsText(file);
+});
+
+document.getElementById("bulk-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = document.getElementById("bulk-text").value;
+  const startAt = datetimeLocalToIso(document.getElementById("bulk-start-at").value);
+  const endAt = datetimeLocalToIso(document.getElementById("bulk-end-at").value);
+  const password = document.getElementById("bulk-password").value || null;
+
+  clearBulkResults();
+  const errorEl = document.getElementById("bulk-error");
+  const errorsEl = document.getElementById("bulk-errors");
+  const successEl = document.getElementById("bulk-success");
+
+  const payload = { text, start_at: startAt, end_at: endAt };
+  if (password) payload.password = password;
+
+  const { ok, data } = await api.post("/links/bulk", payload);
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      const n = data.row_errors.length;
+      errorEl.textContent = `Nothing was created — ${n} row${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} fixing.`;
+      errorsEl.innerHTML = renderBulkErrorTable(data.row_errors);
+      errorsEl.hidden = false;
+    } else if (data && data.error === "too_many_rows") {
+      // The textarea is deliberately NOT cleared here, so the user can cut
+      // the list down in place rather than re-pasting from scratch.
+      const batches = Math.ceil(data.row_count / data.max_rows);
+      errorEl.textContent =
+        `Too many rows — this file has ${data.row_count} and the limit is ${data.max_rows} per submission. ` +
+        `Split it into ${batches} smaller batch${batches === 1 ? "" : "es"} and submit them one at a time.`;
+    } else if (data && data.error === "body_too_large") {
+      errorEl.textContent = `That's too much text — the limit is ${Math.floor(data.max_bytes / 1024)} KB.`;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not create links.", {
+        invalid_password: "Link passwords must be at least 4 characters.",
+      });
+    }
+    return;
+  }
+
+  successEl.textContent = `Created ${data.count} link${data.count === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
+  document.getElementById("bulk-text").value = "";
+  document.getElementById("bulk-start-at").value = "";
+  document.getElementById("bulk-end-at").value = "";
+  document.getElementById("bulk-password").value = "";
+  // The panel stays open — unlike #advanced-options, its success banner
+  // lives inside the details it belongs to, so closing it would hide the
+  // payoff the user just triggered.
+  loadLinks();
+});
+
 document.getElementById("create-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const targetUrl = document.getElementById("target-url").value;
@@ -527,6 +655,7 @@ function openDeepLinkedEditRow() {
 }
 
 wireWindowValidation(document.getElementById("start-at"), document.getElementById("end-at"));
+wireWindowValidation(document.getElementById("bulk-start-at"), document.getElementById("bulk-end-at"));
 
 // loadMe() must resolve before loadLinks()'s first render — renderLinksTable()
 // reads currentPrincipal (set by loadMe()) to decide whether to show each

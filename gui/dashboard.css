@@ -165,3 +165,17 @@
 #bulk-bar [role=group] {
   width: auto;
 }
+
+/* Bulk-create textarea holds slugs and URLs — data, not prose — so it reads
+ * monospace per DESIGN.md's rule, same reasoning as the links table's
+ * data columns. */
+#bulk-text {
+  font-family: var(--ss-mono-font);
+}
+/* Mirrors #days-table td:first-child's treatment (theme.css): the Line and
+ * Short link columns are data, the Problem column is prose. */
+#bulk-errors-table td:nth-child(1),
+#bulk-errors-table td:nth-child(2) {
+  font-family: var(--ss-mono-font);
+  font-size: 0.85em;
+}

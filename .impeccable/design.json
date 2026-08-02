@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-01T04:30:00Z",
+  "generatedAt": "2026-08-02T00:57:34Z",
   "title": "Design System: spin-shortener",
   "extensions": {
     "colorMeta": {
@@ -295,6 +295,14 @@
       "description": "A full-opacity 2px solid signal-blue outline, sitewide, on every focusable element. Pico's own default focus ring is a low-opacity rgba box-shadow that measures ~1.71:1 against a white card -- well under WCAG 1.4.11's 3:1 non-text-contrast minimum -- and was originally fixed for the persistent nav alone (its dark-navy fill made the default ring nearly invisible). An audit later found the identical unfixed problem on every other focusable element sitewide, generalized to one sitewide :focus-visible rule. Pico's own higher-specificity `details summary:focus-visible:not([role])` rule (used by the create-link form's \"More options\" toggle) silently wins over a plain :focus-visible override -- confirmed live -- so a matching-selector-shape override was added specifically for it, relying on load order to break the equal-specificity tie. Re-verified by a 3rd audit pass: every focusable element, including the create-link form's \"More options\" summary, correctly shows the full-opacity outline -- this fix is holding.",
       "html": "<button>Row action</button>",
       "css": ":focus-visible { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; border-radius: var(--pico-border-radius); } details summary:focus-visible:not([role]) { outline: 2px solid var(--ss-signal-500, #276fb8); outline-offset: 2px; }"
+    },
+    {
+      "name": "Bulk Action Bar",
+      "kind": "custom",
+      "refersTo": "bulk-action-bar",
+      "description": "A role=\"status\" bar between the links table's filter box and the table itself, hidden whenever nothing is selected. Hairline border-mist border, --pico-border-radius corners, no shadow -- same flat-surface treatment as every card/container. Holds a live selection count (e.g. \"3 links selected\") plus a role=\"group\" button cluster: Enable/Disable render outline, Delete additionally gets .secondary -- the identical de-emphasis convention the row-level Delete button already uses, so the destructive action reads through recession, not a danger fill. Confirmation states the scale: a 1-selection delete reuses today's exact single-row confirm wording verbatim; an N-selection delete reads \"Delete N links? This can't be undone.\" with the confirm button itself labelled \"Delete N links\" via confirmDialog's existing confirmLabel option -- the count is the safety signal, not a list of every selected slug. Enable/Disable intentionally skip confirmation since both are reversible by the adjacent button.",
+      "html": "<div id=\"bulk-bar\" role=\"status\"><span id=\"bulk-count\">3 links selected</span><div role=\"group\"><button class=\"outline\">Enable</button><button class=\"outline\">Disable</button><button class=\"secondary outline\">Delete</button></div></div>",
+      "css": "#bulk-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: var(--pico-spacing); padding: 0.5rem 0.75rem; border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); } #bulk-bar [role=group] { width: auto; }"
     }
   ],
   "narrative": {
@@ -347,7 +355,8 @@
       "Do add a min-height: 44px floor to every button/[role=button] rather than restoring the tightened --pico-form-element-spacing-vertical toward Pico's default -- that variable also drives text-input tap targets, so loosening it to fix button height would undo the deliberate admin-density type scale.",
       "Do keep the persistent nav's brand mark permanent and clickable on every authenticated page -- never displace it with a page-specific 'back' link, which makes the one thing a user orients by change depending on which page they're on. Identify a sub-page via a breadcrumb label next to the brand instead.",
       "Do hide a nav link to the page currently being viewed rather than showing it as a self-referential link to itself -- confirmed as a real navigation-confusion source (a 'Manage users' link visible while already viewing the Manage Users page).",
-      "Do extend the sitewide 44px min-height floor to plain nav <a> elements (brand mark, text links), not just button/[role=button] -- an audit found the persistent nav's own brand-link measured 38.4px, since the button-family rule never covered plain anchors even in the one component that should exemplify the standard."
+      "Do extend the sitewide 44px min-height floor to plain nav <a> elements (brand mark, text links), not just button/[role=button] -- an audit found the persistent nav's own brand-link measured 38.4px, since the button-family rule never covered plain anchors even in the one component that should exemplify the standard.",
+      "Do scope a select-all control to the currently-filtered set only, and clear the selection on any re-render (filter change, sort change, or a completed action) -- a user must never be able to act on rows they are no longer looking at."
     ],
     "donts": [
       "Don't add a box-shadow anywhere — the system is flat by construction, not by oversight.",

@@ -51,6 +51,42 @@
       </form>
       <p id="create-error" class="form-error" role="alert"></p>
       <p id="create-success" class="form-success" aria-live="polite" hidden></p>
+
+      <!-- A second, independent <details> disclosure rather than nesting
+           inside #create-form — a nested <form> is invalid HTML and the
+           two submit buttons would fight over which one a keypress fires. -->
+      <details id="bulk-panel">
+        <summary>Create many at once</summary>
+        <form id="bulk-form">
+          <label for="bulk-text">Short link and destination, one per line</label>
+          <textarea id="bulk-text" name="text" rows="8"
+            placeholder="black-friday,https://example.com/sale&#10;,https://example.com/other"></textarea>
+          <small id="bulk-format-hint">Two columns separated by a comma or a tab: short link, then destination. Leave the short link blank (or give just a URL) to generate one. Blank lines and <code>#</code> comments are ignored; a header row is detected and skipped.</small>
+
+          <label for="bulk-file">…or choose a .csv, .tsv or .txt file</label>
+          <input type="file" id="bulk-file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" />
+
+          <fieldset>
+            <legend>Applies to every link in this batch</legend>
+            <div class="grid">
+              <label for="bulk-start-at">Starts (optional)
+                <input type="datetime-local" id="bulk-start-at" />
+              </label>
+              <label for="bulk-end-at">Expires (optional)
+                <input type="datetime-local" id="bulk-end-at" />
+              </label>
+            </div>
+            <label for="bulk-password">Password protection (optional)
+              <input type="password" id="bulk-password" minlength="4" placeholder="Leave blank for no password" />
+            </label>
+          </fieldset>
+
+          <button type="submit">Create links</button>
+        </form>
+        <p id="bulk-error" class="form-error" role="alert"></p>
+        <div id="bulk-errors" hidden></div>
+        <p id="bulk-success" class="form-success" aria-live="polite" hidden></p>
+      </details>
     </article>
 
     <article>

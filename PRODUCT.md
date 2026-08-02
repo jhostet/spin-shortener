@@ -28,6 +28,7 @@ Built as a polyglot Spin (WASM) app: a Go component for the hot-path redirect, a
 - Optional per-link password protection (one-way hashed — not recoverable/displayable once set)
 - Optional start/end scheduling windows; outside the window a link 404s indistinguishably from a nonexistent slug
 - QR codes (SVG/PNG) per link
+- Bulk link management on the dashboard: create up to 50 links at once from a pasted list or an uploaded .csv/.tsv/.txt file (batch-level password/schedule, all-or-nothing validation with a per-row error report), plus multi-select Delete and Enable/Disable of up to 50 existing links at once
 - Click analytics: accurate running totals and per-day counts, plus a best-effort (lossy, not complete) recent-events sample
 - Local auth with sessions; admin role + fine-grained permission system (e.g. `links.view_all`)
 - No outbound network access from either Wasm component by design — rules out external rate-limiting or abuse-detection services; login/link-password brute-force protection currently relies only on PBKDF2 cost, not attempt-throttling
