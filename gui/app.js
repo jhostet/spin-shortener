@@ -174,8 +174,6 @@ function friendlyError(data, fallback, overrides) {
   return (overrides && overrides[code]) || ERROR_MESSAGES[code] || fallback;
 }
 
-// Renders the shared nav into a page's `<header id="app-header">` and wires
-// the logout handler — so logout is reachable from every authenticated page,
 // Builds and wires the Auto/Light/Dark control into `container`. Shared
 // rather than living inside initHeader() because login.html has no
 // `#app-header` and never calls initHeader(), yet still needs somewhere to
@@ -232,6 +230,112 @@ function renderThemeToggle(container) {
   });
 }
 
+// Domain selector — the persistent-nav counterpart to the theme control,
+// following its exact precedent (decision 6 in
+// docs/plans/multi-domain-display.md): a viewer preference, persisted in
+// localStorage, degrading safely rather than throwing if its dependency
+// (here, a populated domain list from /auth/me) is missing.
+const SS_DOMAIN_KEY = "ss-domain";
+// Set by initHeader() from the /auth/me response's `domains` field before any
+// page can call shortUrlFor() — every authenticated page already sequences
+// its first render behind initHeader() resolving.
+let availableDomains = [];
+const domainChangeListeners = [];
+
+// localStorage access is wrapped in try/catch on both read and write, mirroring
+// theme-init.js — Safari private mode and blocked-storage configurations throw
+// on *access*, not just on write.
+function readStoredDomain() {
+  try {
+    return localStorage.getItem(SS_DOMAIN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDomain(value) {
+  try {
+    localStorage.setItem(SS_DOMAIN_KEY, value);
+  } catch {
+    // best-effort — the selector still works for the rest of this page load
+  }
+}
+
+// An unrecognized stored value (e.g. an assignment that dropped a domain)
+// falls through to availableDomains[0] without rewriting storage — same rule
+// as theme-init.js's get() — so the choice comes back if it becomes valid
+// again. `|| location.origin` is the last-resort fallback, matching today's
+// pre-feature behavior, so a failed /auth/me or an empty configured list
+// degrades to the current app rather than rendering "undefined/r/x".
+function getSelectedDomain() {
+  const stored = readStoredDomain();
+  if (stored && availableDomains.includes(stored)) return stored;
+  return availableDomains[0] || location.origin;
+}
+
+// Called at the moment of use, never captured in a closure at render time —
+// this is what lets a Copy button keep working across a domain change
+// without the caller re-registering its listener.
+function shortUrlFor(slug) {
+  return `${getSelectedDomain()}/r/${slug}`;
+}
+
+function onDomainChange(fn) {
+  domainChangeListeners.push(fn);
+}
+
+// domainList.length < 2 hides the control entirely — a one-option selector is
+// pure clutter, and this keeps the nav byte-for-byte unchanged for any
+// single-domain deployment (every deployment today).
+function renderDomainSelector(container, domainList) {
+  availableDomains = domainList || [];
+  if (availableDomains.length < 2) {
+    container.hidden = true;
+    return;
+  }
+
+  // option value is the exact server-supplied base URL string (compared
+  // against the configured list by the QR endpoint); option text is just the
+  // host, since a full https://... prefix on every option would widen an
+  // already-crowded nav for no benefit. No visible label — aria-label only,
+  // so this never lands inside `#app-header nav li { color: #fff }`'s
+  // thrice-recorded specificity trap for a label that would gain nothing.
+  const options = availableDomains
+    .map((base) => {
+      let host = base;
+      try {
+        host = new URL(base).host;
+      } catch {
+        // malformed entries shouldn't reach here (server-validated), but
+        // fall back to the raw string rather than an empty option
+      }
+      return `<option value="${escapeHtml(base)}">${escapeHtml(host)}</option>`;
+    })
+    .join("");
+  container.innerHTML = `<select class="domain-select" aria-label="Short link domain">${options}</select>`;
+  container.hidden = false;
+
+  const select = container.querySelector(".domain-select");
+  select.value = getSelectedDomain();
+
+  select.addEventListener("change", () => {
+    writeStoredDomain(select.value);
+    domainChangeListeners.forEach((fn) => fn());
+  });
+
+  // Cross-tab sync — the same four lines renderThemeToggle already has, for
+  // the same reason: two open tabs would otherwise disagree until one
+  // navigates.
+  window.addEventListener("storage", (e) => {
+    if (e.key === SS_DOMAIN_KEY || e.key === null) {
+      select.value = getSelectedDomain();
+      domainChangeListeners.forEach((fn) => fn());
+    }
+  });
+}
+
+// Renders the shared nav into a page's `<header id="app-header">` and wires
+// the logout handler — so logout is reachable from every authenticated page,
 // not just the dashboard. The brand mark is now persistent and clickable on
 // every page (previously it was replaced by a "Back to dashboard" link on
 // every page except the dashboard itself — the one thing that should never
@@ -270,6 +374,7 @@ async function initHeader({
       <ul>
         <li id="whoami"></li>
         <li id="manage-users-link" hidden><a href="${manageUsersHref}">Manage users</a></li>
+        <li id="domain-control"></li>
         <li id="theme-control"></li>
         <li><button id="logout-btn" class="secondary outline">Log out</button></li>
       </ul>
@@ -300,6 +405,9 @@ async function initHeader({
     if (canManageUsers && !onManageUsersPage) {
       document.getElementById("manage-users-link").hidden = false;
     }
+    // Called here, after the /auth/me await, rather than eagerly like
+    // renderThemeToggle — the domain list comes from this response.
+    renderDomainSelector(document.getElementById("domain-control"), result.data.domains);
   }
   return result;
 }

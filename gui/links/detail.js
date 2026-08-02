@@ -12,11 +12,6 @@ async function loadLinkInfo() {
     return;
   }
 
-  const shortUrl = `${location.origin}/r/${slug}`;
-  document.getElementById("short-link-heading").textContent = shortUrl;
-  const copyBtn = document.getElementById("detail-copy-btn");
-  copyBtn.hidden = false;
-  copyBtn.addEventListener("click", (evt) => copyToClipboard(shortUrl, evt.currentTarget));
   document.getElementById("target-url").textContent = data.target_url;
   const statusEl = document.getElementById("status");
   statusEl.textContent = data.status;
@@ -35,9 +30,23 @@ async function loadLinkInfo() {
   );
   document.getElementById("detail-edit-link").hidden = !canEdit;
 
-  document.getElementById("qr-preview").src = `/api/links/${slug}/qr?format=png&size=web`;
-  document.getElementById("qr-svg-download").href = `/api/links/${slug}/qr?format=svg&size=print&download=1`;
-  document.getElementById("qr-png-download").href = `/api/links/${slug}/qr?format=png&size=print&download=1`;
+  applyShortUrl();
+}
+
+// Sets the heading, the Copy target and the three QR URLs from the currently
+// selected domain — extracted so a later domain change (registered via
+// onDomainChange below) can re-run just this part, without re-fetching the
+// link or re-registering #detail-copy-btn's listener. Re-setting
+// #qr-preview's src re-fetches the image, which is the point: the preview
+// must show the QR for the domain currently selected.
+function applyShortUrl() {
+  document.getElementById("short-link-heading").textContent = shortUrlFor(slug);
+  document.getElementById("detail-copy-btn").hidden = false;
+
+  const base = encodeURIComponent(getSelectedDomain());
+  document.getElementById("qr-preview").src = `/api/links/${slug}/qr?format=png&size=web&base=${base}`;
+  document.getElementById("qr-svg-download").href = `/api/links/${slug}/qr?format=svg&size=print&download=1&base=${base}`;
+  document.getElementById("qr-png-download").href = `/api/links/${slug}/qr?format=png&size=print&download=1&base=${base}`;
 }
 
 async function loadAnalytics() {
@@ -86,6 +95,11 @@ initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Link details", mana
     document.body.textContent = "No link specified.";
   } else {
     document.getElementById("detail-edit-link").href = `../dashboard.html?edit=${encodeURIComponent(slug)}`;
+    // Registered once, as today — reads shortUrlFor(slug) at click time
+    // rather than capturing a URL, so applyShortUrl() re-running on a domain
+    // change never needs to (and never does) re-register this listener.
+    document.getElementById("detail-copy-btn").addEventListener("click", (evt) => copyToClipboard(shortUrlFor(slug), evt.currentTarget));
+    onDomainChange(applyShortUrl);
     loadLinkInfo();
     loadAnalytics();
   }

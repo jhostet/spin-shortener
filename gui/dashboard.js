@@ -204,7 +204,7 @@ function renderLinksTable() {
   }
 
   for (const link of visibleLinks) {
-    const shortUrl = `${location.origin}/r/${link.slug}`;
+    const shortUrl = shortUrlFor(link.slug);
     const row = document.createElement("tr");
     row.dataset.slug = link.slug;
     row.innerHTML = `
@@ -256,8 +256,7 @@ function renderLinksTable() {
 // to every row's buttons each time is wasted work that scales with row count
 // for no benefit, since the buttons' behavior never depends on render state.
 async function handleCopyClick(btn) {
-  const shortUrl = `${location.origin}/r/${btn.dataset.slug}`;
-  copyToClipboard(shortUrl, btn);
+  copyToClipboard(shortUrlFor(btn.dataset.slug), btn);
 }
 
 async function handleDeleteClick(btn) {
@@ -620,12 +619,36 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   document.getElementById("link-password").value = "";
   document.getElementById("advanced-options").open = false;
 
-  const shortUrl = `${location.origin}/r/${data.slug}`;
-  successEl.innerHTML = `Link created: <span class="slug-chip">${escapeHtml(shortUrl)}</span> <button type="button" class="outline">Copy</button>`;
-  successEl.hidden = false;
-  successEl.querySelector("button").addEventListener("click", (evt) => copyToClipboard(shortUrl, evt.currentTarget));
-
+  renderCreateSuccess(data.slug);
   loadLinks();
+});
+
+// Extracted so a domain change (below) can re-render this banner for the
+// slug just created, without duplicating the markup/wiring. Stores the slug
+// on the element via dataset rather than a closure variable, so the
+// domain-change callback (which runs long after this call returns) can find
+// it again. The Copy button's handler calls shortUrlFor(slug) *inside* the
+// handler rather than capturing the URL at render time, so it keeps working
+// across a later domain change without needing to be re-registered.
+function renderCreateSuccess(slug) {
+  const successEl = document.getElementById("create-success");
+  successEl.dataset.slug = slug;
+  successEl.innerHTML = `Link created: <span class="slug-chip">${escapeHtml(shortUrlFor(slug))}</span> <button type="button" class="outline">Copy</button>`;
+  successEl.hidden = false;
+  successEl.querySelector("button").addEventListener("click", (evt) => copyToClipboard(shortUrlFor(slug), evt.currentTarget));
+}
+
+// A domain change re-renders the table (row title tooltips) and, if it's
+// currently visible, the create-success banner — both of which embed a
+// shortUrlFor(...) value that would otherwise go stale until the next
+// action. renderLinksTable() also clears any bulk selection as a side effect
+// of its normal re-render path (selectedSlugs.clear() at its top, by
+// design — same as a filter or sort re-render), which is expected here too,
+// not a bug.
+onDomainChange(() => {
+  renderLinksTable();
+  const successEl = document.getElementById("create-success");
+  if (!successEl.hidden && successEl.dataset.slug) renderCreateSuccess(successEl.dataset.slug);
 });
 
 let filterDebounceTimer = null;
@@ -683,7 +706,7 @@ loadMe().then(() => loadLinks().then(openDeepLinkedEditRow));
 // collide on every slug that still exists.
 
 const CSV_COLUMNS = [
-  ["Short link", (l) => `${location.origin}/r/${l.slug}`],
+  ["Short link", (l) => shortUrlFor(l.slug)],
   ["Owner", (l) => l.owner],
   ["Destination", (l) => l.target_url],
   ["Created", (l) => l.created_at ?? ""],
