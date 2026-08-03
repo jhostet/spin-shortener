@@ -11,6 +11,7 @@ from routing import SECURITY_HEADERS, build_response, resolve_file
         ("/login.html", "login.html"),
         ("/dashboard.html", "dashboard.html"),
         ("/admin/users.html", "admin/users.html"),
+        ("/admin/backup.html", "admin/backup.html"),
         ("/links/detail.html", "links/detail.html"),
         ("/nonexistent.html", None),
         ("/app.js", None),  # served by the other gui component now, not this one

@@ -23,6 +23,7 @@ ROUTES: dict[str, str] = {
     "/login.html": "login.html",
     "/dashboard.html": "dashboard.html",
     "/admin/users.html": "admin/users.html",
+    "/admin/backup.html": "admin/backup.html",
     "/links/detail.html": "links/detail.html",
 }
 

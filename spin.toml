@@ -116,6 +116,10 @@ route = "/admin/users.css"
 component = "gui"
 
 [[trigger.http]]
+route = "/admin/backup.js"
+component = "gui"
+
+[[trigger.http]]
 route = "/dashboard.js"
 component = "gui"
 

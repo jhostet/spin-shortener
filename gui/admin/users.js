@@ -126,6 +126,23 @@ async function loadUsers() {
 
   const body = document.getElementById("users-body");
   body.innerHTML = "";
+
+  // A restored account carries no usable password_hash by design (see
+  // docs/plans/kv-backup-restore.md) and can never authenticate
+  // (api/auth.py's LocalAuthProvider.authenticate). This notice turns
+  // "the data was restored" into "here is the work left to do" — the
+  // per-row badge below identifies which accounts, this identifies how many.
+  const noPasswordCount = data.users.filter((user) => user.password_set === false).length;
+  const noticeEl = document.getElementById("password-reset-notice");
+  if (noPasswordCount > 0) {
+    noticeEl.textContent = noPasswordCount === 1
+      ? `1 account has no password and can't sign in — set one with Edit.`
+      : `${noPasswordCount} accounts have no password and can't sign in — set one with Edit.`;
+    noticeEl.hidden = false;
+  } else {
+    noticeEl.hidden = true;
+  }
+
   if (!data.users.length) {
     body.innerHTML = `<tr><td colspan="5" class="empty-state">No users yet.</td></tr>`;
     return;
@@ -137,7 +154,10 @@ async function loadUsers() {
       <td>${escapeHtml(user.username)}</td>
       <td>${escapeHtml(user.role)}</td>
       <td>${user.permissions.length ? escapeHtml(user.permissions.map((p) => PERMISSION_LABELS[p] || p).join(", ")) : "—"}</td>
-      <td><span class="status-badge status-${user.disabled ? "disabled" : "active"}">${user.disabled ? "disabled" : "active"}</span></td>
+      <td>
+        <span class="status-badge status-${user.disabled ? "disabled" : "active"}">${user.disabled ? "disabled" : "active"}</span>
+        ${user.password_set === false ? `<span class="status-badge status-disabled">no password</span>` : ""}
+      </td>
       <td>
         <div role="group">
           <button class="edit-btn outline" data-username="${escapeHtml(user.username)}" aria-label="Edit user ${escapeHtml(user.username)}">Edit</button>

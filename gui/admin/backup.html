@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spin-shortener — Backup and restore</title>
+  <script src="../theme-init.js"></script>
+  <link rel="stylesheet" href="../vendor/pico.min.css" />
+  <link rel="stylesheet" href="../theme.css" />
+</head>
+<body>
+  <header id="app-header" class="container"></header>
+
+  <main class="container">
+    <h1>Backup and restore</h1>
+    <p id="forbidden-notice" class="form-error" role="alert" hidden>
+      You don't have permission to manage backups.
+    </p>
+
+    <div id="admin-content">
+      <article>
+        <h2>Download a backup</h2>
+        <p>
+          Downloads a JSON file of the selected stores. Passwords, password
+          hashes and sign-in sessions are never included.
+        </p>
+        <fieldset id="export-stores-fieldset">
+          <legend>Include</legend>
+          <label><input type="checkbox" class="export-store" value="links" checked /> Links</label>
+          <label><input type="checkbox" class="export-store" value="users" checked /> Users</label>
+          <label><input type="checkbox" class="export-store" value="analytics" checked /> Analytics</label>
+        </fieldset>
+        <button type="button" id="export-btn">Download backup</button>
+        <p id="export-error" class="form-error" role="alert"></p>
+        <p id="export-success" class="form-success" aria-live="polite" hidden></p>
+      </article>
+
+      <article>
+        <h2>Restore from a backup</h2>
+        <p class="form-error">
+          Restoring replaces the links, users and analytics stores covered by
+          the file. This can't be undone, and it signs everyone out —
+          including you.
+        </p>
+        <label for="restore-file">Backup file
+          <input type="file" id="restore-file" accept=".json,application/json" />
+        </label>
+        <div id="restore-summary" aria-live="polite"></div>
+        <label for="restore-confirm">Type REPLACE to confirm
+          <input type="text" id="restore-confirm" autocomplete="off" />
+        </label>
+        <button type="button" id="restore-btn" class="outline secondary" disabled>Restore</button>
+        <p id="restore-error" class="form-error" role="alert"></p>
+        <div id="restore-result" aria-live="polite"></div>
+      </article>
+    </div>
+  </main>
+
+  <script src="../app.js"></script>
+  <script src="backup.js"></script>
+</body>
+</html>
