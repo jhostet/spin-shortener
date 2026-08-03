@@ -15,7 +15,9 @@ VALID_ROLES = ("user", "admin")
 
 
 def _public_user(user: dict) -> dict:
-    return {k: v for k, v in user.items() if k != "password_hash"}
+    public = {k: v for k, v in user.items() if k != "password_hash"}
+    public["password_set"] = bool(user.get("password_hash"))
+    return public
 
 
 def _forbidden():

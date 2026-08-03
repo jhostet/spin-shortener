@@ -90,6 +90,34 @@ async def test_local_auth_provider_unknown_user():
     assert await auth.LocalAuthProvider().authenticate(store, "nobody", "hunter2") is None
 
 
+@pytest.mark.parametrize("missing_hash_value", [None, ""])
+async def test_local_auth_provider_no_usable_hash_returns_none(missing_hash_value):
+    """A restored user record with no usable password hash must be
+    un-authenticatable — a clean 401, never a KeyError-turned-500."""
+    store = FakeStore()
+    await auth.put_user(store, {
+        "username": "alice",
+        "password_hash": missing_hash_value,
+        "role": "user",
+        "permissions": [],
+        "provider": "local",
+        "disabled": False,
+    })
+    assert await auth.LocalAuthProvider().authenticate(store, "alice", "hunter2") is None
+
+
+async def test_local_auth_provider_no_password_hash_key_at_all():
+    store = FakeStore()
+    await auth.put_user(store, {
+        "username": "alice",
+        "role": "user",
+        "permissions": [],
+        "provider": "local",
+        "disabled": False,
+    })
+    assert await auth.LocalAuthProvider().authenticate(store, "alice", "hunter2") is None
+
+
 async def test_create_and_resolve_session_roundtrip():
     store = FakeStore()
     await auth.put_user(store, {

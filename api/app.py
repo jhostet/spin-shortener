@@ -6,12 +6,31 @@ from spin_sdk.http import Handler
 
 import analytics
 import auth
+import backup
 import bulk
 import domains
 import links
 import qr
 import users
 from responses import Request, Response, json_response
+
+
+async def _kv_keys(store) -> list[str]:
+    """Drain the (stream, future) pair spin:key-value/key-value@3.0.0's
+    get-keys returns into a plain list. Isolated here so backup.py can take a
+    list_keys callable as a parameter and stay host-importable, the same way
+    gui-pages/routing.py takes read_file. Confirmed working idiom — see
+    docs/plans/kv-backup-restore-scratch.md's Round 1 spike note.
+    """
+    reader, fut = await store.get_keys()
+    keys: list[str] = []
+    while True:
+        chunk = await reader.read(1024)  # returns [] once the writer drops
+        if not chunk:
+            break
+        keys.extend(chunk)
+    await fut.read()
+    return keys
 
 
 async def _cookie_secure() -> bool:
@@ -153,6 +172,30 @@ class HttpHandler(Handler):
             if method == "PATCH":
                 return await users.handle_update(users_store, result, username, request, configured_domains)
             return await users.handle_delete(users_store, result, username)
+
+        if path == "/api/admin/backup" and method == "GET":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            analytics_store = await key_value.open("analytics")
+            num_event_slots = int(await variables.get("analytics_event_slots"))
+            return await backup.handle_export(
+                {"links": links_store, "users": users_store, "analytics": analytics_store},
+                result, query, _kv_keys, num_event_slots,
+            )
+
+        if path == "/api/admin/restore" and method == "POST":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            analytics_store = await key_value.open("analytics")
+            num_event_slots = int(await variables.get("analytics_event_slots"))
+            return await backup.handle_restore(
+                {"links": links_store, "users": users_store, "analytics": analytics_store},
+                result, request, _kv_keys, num_event_slots,
+            )
 
         return json_response(404, {"error": "not_found"})
 

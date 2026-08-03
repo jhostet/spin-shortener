@@ -133,7 +133,15 @@ class LocalAuthProvider:
         user = await get_user(store, username)
         if user is None or user.get("disabled"):
             return None
-        if not verify_password(password, user["password_hash"]):
+        stored_hash = user.get("password_hash")
+        if not stored_hash:
+            # A restored account carries no password hash by design (see
+            # docs/plans/kv-backup-restore.md). Defined here as an explicit
+            # "cannot authenticate" rather than left to verify_password: the
+            # old user["password_hash"] raised KeyError, which the SDK's bare
+            # except turned into a 500 instead of a 401.
+            return None
+        if not verify_password(password, stored_hash):
             return None
         return AuthResult(
             username=user["username"],

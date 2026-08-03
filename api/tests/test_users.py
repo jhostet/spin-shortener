@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import auth
 import users
 from responses import Request
@@ -314,3 +316,40 @@ async def test_public_user_exposes_assigned_domains():
     public = users._public_user(user)
     assert public["assigned_domains"] == ["https://a.example.com"]
     assert "password_hash" not in public
+
+
+# --- password_set ---
+
+
+def test_public_user_password_set_true_when_hashed():
+    user = {"username": "alice", "password_hash": "pbkdf2_sha256$1$c2FsdA==$aGFzaA==", "role": "user", "permissions": []}
+    public = users._public_user(user)
+    assert public["password_set"] is True
+    assert "password_hash" not in public
+
+
+@pytest.mark.parametrize("hashless_value", [None, "", "MISSING"])
+def test_public_user_password_set_false_when_hashless(hashless_value):
+    user = {"username": "alice", "role": "user", "permissions": []}
+    if hashless_value != "MISSING":
+        user["password_hash"] = hashless_value
+    public = users._public_user(user)
+    assert public["password_set"] is False
+
+
+async def test_create_response_includes_password_set_true():
+    store = FakeStore()
+    resp = await _make_user(store, username="alice")
+    body = json.loads(resp.body)
+    assert body["password_set"] is True
+    assert "password_hash" not in body
+
+
+async def test_list_response_never_contains_password_hash_and_has_password_set():
+    store = FakeStore()
+    await _make_user(store, username="alice")
+    resp = await users.handle_list(store, _principal(), CONFIGURED_DOMAINS)
+    body = json.loads(resp.body)
+    assert all("password_hash" not in u for u in body["users"])
+    assert all("password_set" in u for u in body["users"])
+    assert body["users"][0]["password_set"] is True

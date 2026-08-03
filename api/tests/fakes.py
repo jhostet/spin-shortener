@@ -21,3 +21,13 @@ class FakeStore:
 
     async def exists(self, key: str) -> bool:
         return key in self._data
+
+    def keys(self) -> list[str]:
+        return list(self._data.keys())
+
+
+async def fake_list_keys(store) -> list[str]:
+    """Stands in for app.py's real `_kv_keys` drain helper (the `get_keys`
+    stream/future pair), so backup.py's pure handlers can be exercised without
+    a real WASI KV bridge."""
+    return store.keys()
