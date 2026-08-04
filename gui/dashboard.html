@@ -104,6 +104,10 @@
       <input type="search" id="links-filter" placeholder="Filter by short link, destination, or tag..." />
       <label for="tag-filter" class="visually-hidden">Filter by tag</label>
       <select id="tag-filter"><option value="">All tags</option></select>
+      <span id="owner-filter-wrap" hidden>
+        <label for="owner-filter" class="visually-hidden">Filter by owner</label>
+        <select id="owner-filter"><option value="">All owners</option></select>
+      </span>
       <!-- Exports whatever the filter and sort are currently showing, so
            filtering to a campaign and exporting gives you that campaign. Needs
            no selection: it is deliberately independent of the checkboxes. -->

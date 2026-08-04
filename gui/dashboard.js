@@ -85,6 +85,12 @@ let allLinks = [];
 let sortKey = null;
 let sortDir = 1;
 
+// The owner named by ?owner= on first load — the admin Users page links here
+// when a delete is refused because the user still owns links. Consumed once
+// and then cleared, so a later loadLinks() (after a bulk action) preserves
+// whatever the operator has since chosen instead of snapping back to the URL.
+let pendingOwnerFilter = new URLSearchParams(location.search).get("owner");
+
 // Splits a comma-separated tags input into a normalized array — trimmed,
 // lowercased, empties dropped, de-duplicated. Mirrors api/tags.py's
 // normalize_tag so the common case never round-trips to a 400; the server
@@ -120,6 +126,51 @@ function rebuildTagFilterOptions() {
   const options = allKnownTags().map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
   select.innerHTML = `<option value="">All tags</option>${options}`;
   if (current && allKnownTags().includes(current)) select.value = current;
+}
+
+// The sorted distinct union of every `owner` across allLinks — record-derived
+// like allKnownTags(), so it's correctly ownership-scoped for free (allLinks
+// is already what handle_list returned for this principal) and catches index
+// drift the 409 gate's owner_links: read would miss.
+function allKnownOwners() {
+  return [...new Set(allLinks.map((l) => l.owner))].sort();
+}
+
+// allUsernames is empty for anyone without users.manage — without this guard
+// every owner would read as deleted for such a viewer, which is wrong.
+function isDeletedOwner(owner) {
+  return allUsernames.length > 0 && !allUsernames.includes(owner);
+}
+
+// Repopulates #owner-filter from the current allKnownOwners(), preserving the
+// active selection if it still exists; otherwise consumes pendingOwnerFilter
+// (the admin Users page's ?owner= deep link) exactly once. Modelled line-for-
+// line on rebuildTagFilterOptions().
+function rebuildOwnerFilterOptions() {
+  const wrap = document.getElementById("owner-filter-wrap");
+  const select = document.getElementById("owner-filter");
+  const current = select.value;
+  const owners = allKnownOwners();
+  const options = owners
+    .map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}${isDeletedOwner(o) ? " — deleted account" : ""}</option>`)
+    .join("");
+  select.innerHTML = `<option value="">All owners</option>${options}`;
+  if (current && owners.includes(current)) {
+    select.value = current;
+  } else if (pendingOwnerFilter) {
+    // Added even when it matches no link, so a deep link that arrives one
+    // action too late (e.g. the owner was already reassigned) still reads as
+    // "no links match your filter" rather than silently showing everything.
+    if (!owners.includes(pendingOwnerFilter)) {
+      select.insertAdjacentHTML(
+        "beforeend",
+        `<option value="${escapeHtml(pendingOwnerFilter)}">${escapeHtml(pendingOwnerFilter)}${isDeletedOwner(pendingOwnerFilter) ? " — deleted account" : ""}</option>`
+      );
+    }
+    select.value = pendingOwnerFilter;
+    pendingOwnerFilter = null;
+  }
+  wrap.hidden = owners.length < 2 && !select.value;
 }
 
 // <datalist> matches against the input's whole value, so in a
@@ -182,9 +233,20 @@ function updateBulkBar() {
 // options from allUsernames, selecting `selected` if it's one of them.
 function populateOwnerSelect(select, selected) {
   const usernames = allUsernames.length ? allUsernames : (selected ? [selected] : []);
-  select.innerHTML = usernames
+  let html = usernames
     .map((u) => `<option value="${escapeHtml(u)}" ${u === selected ? "selected" : ""}>${escapeHtml(u)}</option>`)
     .join("");
+  // A current owner absent from allUsernames (an orphaned link) gets a
+  // disabled placeholder option so the select shows the truth instead of
+  // silently pre-selecting the first real user — and, because the select's
+  // value then equals link.owner, handleEditFormSubmit's
+  // `ownerSelect.value !== linkRecord.owner` check stops firing a spurious
+  // reassign confirmation on an unrelated save. Mirrors users.js's
+  // domainCheckboxesHtml handling of a no-longer-configured domain.
+  if (selected && allUsernames.length && !allUsernames.includes(selected)) {
+    html = `<option value="${escapeHtml(selected)}" selected disabled>${escapeHtml(selected)} — deleted account</option>${html}`;
+  }
+  select.innerHTML = html;
 }
 
 // The header checkbox only ever reflects/affects the *selectable*
@@ -231,6 +293,12 @@ function getVisibleLinks() {
 
   const tag = document.getElementById("tag-filter").value;
   if (tag) visible = visible.filter((link) => (link.tags ?? []).includes(tag));
+
+  // Exact equality, not a substring match — this selection feeds a bulk
+  // reassign, and a fuzzy owner match would eventually move somebody else's
+  // link.
+  const owner = document.getElementById("owner-filter").value;
+  if (owner) visible = visible.filter((link) => link.owner === owner);
 
   if (sortKey) {
     // start_at/end_at may be null (unbounded window) — sort those first regardless of direction.
@@ -279,6 +347,7 @@ async function loadLinks() {
   if (!ok) return;
   allLinks = data.links;
   rebuildTagFilterOptions();
+  rebuildOwnerFilterOptions();
   renderLinksTable();
 }
 
@@ -321,7 +390,7 @@ function renderLinksTable() {
         ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
         ${(link.tags ?? []).map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")}
       </td>
-      <td>${escapeHtml(link.owner)}</td>
+      <td>${escapeHtml(link.owner)}${isDeletedOwner(link.owner) ? ' <span class="status-badge status-disabled">deleted account</span>' : ""}</td>
       <td class="destination-cell" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
       <td>${formatDateTime(link.created_at)}</td>
       <td><span class="status-badge status-${escapeHtml(link.status)}">${escapeHtml(link.status)}</span></td>
@@ -872,6 +941,7 @@ document.getElementById("links-filter").addEventListener("input", () => {
 });
 
 document.getElementById("tag-filter").addEventListener("change", renderLinksTable);
+document.getElementById("owner-filter").addEventListener("change", renderLinksTable);
 
 document.querySelectorAll("#links-table th.sortable").forEach((th) => {
   const activate = () => {

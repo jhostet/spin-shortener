@@ -113,6 +113,18 @@ function editRowHtml(user) {
 let currentPrincipal = null;
 let allDomains = [];
 
+// Same disjunction links.can_view uses server-side — gates the "Show these
+// links on the dashboard" link so a users.manage-only operator (who would
+// see an empty dashboard) gets a sentence naming the permission they need
+// instead of a dead link.
+function canViewAllLinks() {
+  return !!currentPrincipal && (
+    currentPrincipal.role === "admin" ||
+    currentPrincipal.permissions.includes("links.view_all") ||
+    currentPrincipal.permissions.includes("links.edit_all")
+  );
+}
+
 async function loadUsers() {
   const { ok, data } = await api.get("/users");
   if (!ok) {
@@ -201,10 +213,23 @@ async function loadUsers() {
 
   body.querySelectorAll(".delete-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!await confirmDialog(`Delete the user "${btn.dataset.username}"? This can't be undone.`)) return;
-      const { ok, data } = await api.delete(`/users/${encodeURIComponent(btn.dataset.username)}`);
+      const username = btn.dataset.username;
+      const actionEl = document.getElementById("users-error-action");
+      actionEl.hidden = true;
+      if (!await confirmDialog(`Delete the user "${username}"? This can't be undone.`)) return;
+      const { ok, data } = await api.delete(`/users/${encodeURIComponent(username)}`);
       if (!ok) {
-        document.getElementById("users-error").textContent = friendlyError(data, "Could not delete user.");
+        const count = (data && typeof data.link_count === "number") ? data.link_count : 0;
+        document.getElementById("users-error").textContent = friendlyError(data, "Could not delete user.", {
+          user_owns_links:
+            `"${username}" still owns ${count} link${count === 1 ? "" : "s"}. `
+            + `Reassign or delete them first, then delete the account.`
+            + (canViewAllLinks() ? "" : ` You'll need the "View all links" permission to do that.`),
+        });
+        if (data && data.error === "user_owns_links" && canViewAllLinks()) {
+          document.getElementById("show-owner-links").href = `../dashboard.html?owner=${encodeURIComponent(username)}`;
+          actionEl.hidden = false;
+        }
         return;
       }
       // Mirrors dashboard.html's fix for the same class of bug: a

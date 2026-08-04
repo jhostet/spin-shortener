@@ -168,6 +168,7 @@ const ERROR_MESSAGES = {
   too_many_tags: "That's too many tags for one link.",
   no_tags: "Enter at least one tag.",
   unknown_owner: "That user doesn't exist — pick someone from the list.",
+  user_owns_links: "That user still owns links — reassign or delete them first.",
 };
 
 // `overrides` lets one call site's copy win over the shared map for a code
