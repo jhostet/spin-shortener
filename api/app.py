@@ -8,6 +8,7 @@ import analytics
 import auth
 import backup
 import bulk
+import consistency
 import domains
 import links
 import qr
@@ -196,6 +197,19 @@ class HttpHandler(Handler):
             return await backup.handle_restore(
                 {"links": links_store, "users": users_store, "analytics": analytics_store},
                 result, request, _kv_keys, num_event_slots,
+            )
+
+        if path == "/api/admin/consistency" and method == "GET":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            # The analytics store is deliberately NOT opened: orphan analytics
+            # are normal (links.handle_delete never removes them), so a check
+            # over them would fire on healthy state forever. See
+            # docs/plans/kv-consistency-check.md's rejected alternatives.
+            return await consistency.handle_consistency(
+                {"links": links_store, "users": users_store}, result, _kv_keys,
             )
 
         return json_response(404, {"error": "not_found"})
