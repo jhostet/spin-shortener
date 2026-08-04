@@ -193,7 +193,7 @@ Links carry free-form tags, and a `users.manage` holder can reassign a link's ow
 
 **Tags live only inside the `slug:<slug>` record, as a `tags` array — there is no `tag:` index and no `_meta:tags` registry.** Vocabulary rules are in `api/tags.py`: lowercase, `^[a-z0-9][a-z0-9_-]*$`, 1–32 chars, **max 10 per link**, stored normalized, de-duplicated and sorted. The character set is deliberately narrower than the slug's (no uppercase) so that `Sale` and `sale` can never become two tags; the 10-per-link cap exists because tags render as chips inside the links table's existing Short-link cell, and a row with dozens of them would wreck the column.
 
-**Why no index.** The dashboard already holds every link in `allLinks` (`GET /api/links` has no pagination), so filtering and autocomplete are pure client-side work over data already in memory. A `tag:<tag>` index would have bought nothing for that and cost a two-index read-modify-write on every single-link `PATCH` — up to 20 of them at the 10-tag cap, with no compare-and-swap available anywhere in Spin's KV. It would also have created a new KV key type, which obliges a matching `api/backup.py` change (`INDEX_KEYS`, `restore_write_order`). **If either an index or a registry is ever added, that `backup.py` change is mandatory, not optional** — a new key type that `backup.py` doesn't know about is silently dropped on restore. A test in `api/tests/test_backup.py` pins that today's tags round-trip needs no such change.
+**Why no index.** The dashboard already holds every link in `allLinks` (`GET /api/links` has no pagination), so filtering and autocomplete are pure client-side work over data already in memory. A `tag:<tag>` index would have bought nothing for that and cost a two-index read-modify-write on every single-link `PATCH` — up to 20 of them at the 10-tag cap, with no compare-and-swap available anywhere in Spin's KV. It would also have created a new KV key type, which obliges a matching `api/backup.py` change (`INDEX_KEYS`, `restore_write_order`). **If either an index or a registry is ever added, that `backup.py` change is mandatory, not optional** — a new key type that `backup.py` doesn't know about is silently dropped on restore. **Since 2026-08-04 there is a second obligation:** `api/consistency.py` must learn the new key's shape too, or the consistency check reports it as `unrecognized_key` on every run (see "KV consistency check"). A test in `api/tests/test_backup.py` pins that today's tags round-trip needs no such change.
 
 **The cost of that choice:** tag suggestions are ownership-scoped. A user without `links.view_all` is only ever offered tags they have personally used, because the suggestion list is derived from the links they can see. Filtering still works correctly on everything they can see.
 
@@ -230,6 +230,39 @@ Both scenarios are pinned by `api/tests/test_user_deletion.py` rather than merel
 
 - The dashboard's `#owner-filter` is **derived from the `owner` field on the loaded records, not from `owner_links:`**, so it is ownership-scoped for free and additionally surfaces links whose owner no longer exists. **That makes it the repair path** for any deployment that orphaned links before this gate existed; those owners render with a `— deleted account` marker reusing the existing `status-disabled` treatment (no new token).
 - `?owner=` is **consumed once**. A reload after a bulk action keeps whatever filter the operator has since chosen instead of snapping back to the URL.
+
+## KV consistency check
+
+`GET /api/admin/consistency` walks the `links` and `users` stores and reports where the indexes have drifted from the records they describe. **It reports; it never repairs** — there is no `?fix=`, no repair endpoint, and the walk performs no writes at all. Gated on `users.manage`. Pure logic in `api/consistency.py` (zero WASI SDK imports, `store` objects and the `list_keys` callable passed in, `api/backup.py` as the model); the GUI is a third article on `gui/admin/backup.html`. Plan: `docs/plans/kv-consistency-check.md`.
+
+**Twelve checks**, always all present in every report at `count: 0` when clean, in this order. Warnings first in each group below only for readability — the report's own order is this one:
+
+| id | severity | means |
+|---|---|---|
+| `unindexed_link` | warning | a `slug:` record missing from `all_links` — resolves, but invisible in the dashboard |
+| `missing_link_record` | info | `all_links` names a slug with no record — `handle_list` already skips it |
+| `unindexed_owner_link` | warning | a record whose owner's `owner_links:` doesn't list it |
+| `owner_index_mismatch` | warning | listed under one owner, record names another |
+| `orphan_owner_index_entry` | info | an `owner_links:` entry with no backing record |
+| `unknown_link_owner` | warning | a record whose `owner` has no user record |
+| `dangling_owner_index` | warning | an `owner_links:<U>` for a `U` that isn't a known user |
+| `unindexed_user` | warning | a `user:` record missing from `_meta:usernames` — can sign in, invisible to administration |
+| `missing_user_record` | info | `_meta:usernames` names a user with no record |
+| `orphan_session` | warning | a `session:` naming a user with no record |
+| `unreadable_value` | warning | a value that wouldn't parse into its expected shape |
+| `unrecognized_key` | info | a key matching none of the known shapes for its store |
+
+**`unindexed_owner_link` is the one this endpoint was built for.** `users.handle_delete`'s `409` gate reads `links.owned_slugs` — the `owner_links:<username>` index, one KV read, deliberately not an O(all links) walk. So a record whose `owner` is carol but which has drifted out of `owner_links:carol` **does not block carol's deletion** and is orphaned by the very flow built to prevent orphans (it then shows up as `unknown_link_owner`). `api/tests/test_consistency_scenarios.py` pins both halves: the check fires, and `handle_delete` still returns 200.
+
+**The `analytics` store is never opened or scanned.** `links.handle_delete` never removes analytics keys, so `count:<slug>`/`events:<slug>:<slot>` for a deleted slug is **normal state, not drift** — reporting it would make every healthy deployment show findings, which is how a checker gets ignored. Revisit only if deletion is ever changed to purge analytics. **Expired `session:` records and empty `owner_links:` keys are excluded for the same reason** (that second exclusion also answers the question `docs/plans/user-deletion-link-ownership.md` deferred about deleting emptied index keys at the source: empty keys are never reported, so they are not noise, and its stated trigger is not met).
+
+**A report can never carry credential material.** A `user:` record's *value* is never read — only its key name; checks 6-9 need nothing else, and check 10 reads only the `username` field of a `session:` value. A test generates a report over a store holding a real PBKDF2 hash and asserts neither `password_hash` nor `pbkdf2_sha256` appears in the body.
+
+**`MAX_FINDINGS_PER_CHECK = 100`, per check, not global** — one noisy check would otherwise starve every other one out of the report. It is a plain module constant, not a Spin variable, on the same reasoning as `MAX_BULK_ROWS`: one function in one component reads it. **When a check truncates, `count` stays exact and `truncated` is set**, and the GUI says "Showing the first N of M" — a capped list must never read as complete.
+
+**The walk has no snapshot.** Spin KV offers no transaction, so a concurrent write can produce a transient finding. That is why the page tells the operator to re-run: a real finding appears on both runs. Do not "fix" this with locking; there is nothing to lock with.
+
+**A new KV key type now obliges *two* changes, not one** (see also "Link tags and ownership"): `backup.py`'s `INDEX_KEYS`/`restore_write_order`, **and** `consistency.py`'s key-shape recognition — otherwise the new key reports itself as `unrecognized_key` on every single run.
 
 ## KV backup and restore
 
