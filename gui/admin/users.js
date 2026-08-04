@@ -1,8 +1,9 @@
-const ALL_PERMISSIONS = ["links.create_custom_slug", "links.view_all", "links.edit_all", "users.manage"];
+const ALL_PERMISSIONS = ["links.create_custom_slug", "links.view_all", "links.edit_all", "links.tag", "users.manage"];
 const PERMISSION_LABELS = {
   "links.create_custom_slug": "Create custom slugs",
   "links.view_all": "View all links",
   "links.edit_all": "Edit all links",
+  "links.tag": "Tag links in bulk",
   "users.manage": "Manage users",
 };
 

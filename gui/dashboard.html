@@ -45,7 +45,13 @@
             Password protection (optional)
             <input id="link-password" name="password" type="password" minlength="4" placeholder="Leave blank for no password" />
           </label>
+
+          <label for="link-tags">
+            Tags (optional, comma-separated)
+            <input id="link-tags" name="tags" type="text" list="tag-suggestions" placeholder="sale, q4, email" />
+          </label>
         </details>
+        <datalist id="tag-suggestions"></datalist>
 
         <button type="submit">Shorten</button>
       </form>
@@ -79,6 +85,9 @@
             <label for="bulk-password">Password protection (optional)
               <input type="password" id="bulk-password" minlength="4" placeholder="Leave blank for no password" />
             </label>
+            <label for="bulk-tags">Tags (optional, comma-separated)
+              <input type="text" id="bulk-tags" list="tag-suggestions" placeholder="sale, q4" />
+            </label>
           </fieldset>
 
           <button type="submit">Create links</button>
@@ -92,7 +101,9 @@
     <article>
       <h2 id="links-heading">Your links</h2>
       <label for="links-filter" class="visually-hidden">Filter links</label>
-      <input type="search" id="links-filter" placeholder="Filter by short link or destination..." />
+      <input type="search" id="links-filter" placeholder="Filter by short link, destination, or tag..." />
+      <label for="tag-filter" class="visually-hidden">Filter by tag</label>
+      <select id="tag-filter"><option value="">All tags</option></select>
       <!-- Exports whatever the filter and sort are currently showing, so
            filtering to a campaign and exporting gives you that campaign. Needs
            no selection: it is deliberately independent of the checkboxes. -->
@@ -105,6 +116,15 @@
           <button type="button" id="bulk-enable-btn" class="outline">Enable</button>
           <button type="button" id="bulk-disable-btn" class="outline">Disable</button>
           <button type="button" id="bulk-delete-btn" class="secondary outline">Delete</button>
+        </div>
+        <div id="bulk-tag-controls" role="group" hidden>
+          <input type="text" id="bulk-tag-input" list="tag-suggestions" aria-label="Tags to add or remove" placeholder="tag" />
+          <button type="button" id="bulk-tag-add-btn" class="outline">Add tag</button>
+          <button type="button" id="bulk-tag-remove-btn" class="outline">Remove tag</button>
+        </div>
+        <div id="bulk-owner-controls" role="group" hidden>
+          <select id="bulk-owner-select" aria-label="Reassign selected links to"></select>
+          <button type="button" id="bulk-reassign-btn" class="outline">Reassign</button>
         </div>
       </div>
       <p id="links-success" class="form-success" aria-live="polite" hidden></p>

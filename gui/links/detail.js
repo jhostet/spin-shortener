@@ -17,6 +17,10 @@ async function loadLinkInfo() {
   statusEl.textContent = data.status;
   statusEl.classList.add(`status-${data.status}`);
   document.getElementById("custom-slug-status").textContent = data.custom ? "Yes" : "No";
+  const tagList = data.tags ?? [];
+  document.getElementById("tags").innerHTML = tagList.length
+    ? tagList.map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")
+    : "—";
   document.getElementById("password-status").textContent = data.password_protected ? "Password-protected" : "None";
   document.getElementById("start-at").textContent = data.start_at ? formatDateTime(data.start_at) : "—";
   document.getElementById("end-at").textContent = data.end_at ? formatDateTime(data.end_at) : "—";

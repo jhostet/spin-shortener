@@ -1,4 +1,16 @@
 let currentPrincipal = null;
+// Populated from GET /api/users only when the principal holds users.manage
+// (that endpoint 403s otherwise, and api.get surfaces that as ok: false) —
+// the source for #bulk-owner-select and each edit row's .edit-owner select.
+let allUsernames = [];
+
+function canTagLinks() {
+  return !!currentPrincipal && (currentPrincipal.role === "admin" || currentPrincipal.permissions.includes("links.tag"));
+}
+
+function canManageUsers() {
+  return !!currentPrincipal && (currentPrincipal.role === "admin" || currentPrincipal.permissions.includes("users.manage"));
+}
 
 async function loadMe() {
   const { ok, data } = await initHeader();
@@ -9,6 +21,10 @@ async function loadMe() {
     }
     if (data.role === "admin" || data.permissions.includes("links.view_all") || data.permissions.includes("links.edit_all")) {
       document.getElementById("links-heading").textContent = "All links";
+    }
+    if (canManageUsers()) {
+      const usersResult = await api.get("/users");
+      if (usersResult.ok) allUsernames = usersResult.data.users.map((u) => u.username);
     }
   }
 }
@@ -69,6 +85,64 @@ let allLinks = [];
 let sortKey = null;
 let sortDir = 1;
 
+// Splits a comma-separated tags input into a normalized array — trimmed,
+// lowercased, empties dropped, de-duplicated. Mirrors api/tags.py's
+// normalize_tag so the common case never round-trips to a 400; the server
+// stays authoritative for actual validation (character set, length, cap).
+function parseTagsInput(value) {
+  const seen = new Set();
+  for (const raw of (value || "").split(",")) {
+    const tag = raw.trim().toLowerCase();
+    if (tag) seen.add(tag);
+  }
+  return [...seen];
+}
+
+// The sorted distinct union of every tag across allLinks — the autocomplete
+// and filter-option source. Deliberately client-derived, not a server call:
+// allLinks is already ownership-scoped by handle_list, so this never
+// suggests a tag the viewer couldn't already see (see docs/plans/
+// link-tags-and-ownership.md's rejected _meta:tags registry).
+function allKnownTags() {
+  const tags = new Set();
+  for (const link of allLinks) {
+    for (const tag of link.tags ?? []) tags.add(tag);
+  }
+  return [...tags].sort();
+}
+
+// Repopulates #tag-filter from the current allKnownTags(), preserving the
+// active selection if it still exists (e.g. after a reload where that tag
+// is still in use).
+function rebuildTagFilterOptions() {
+  const select = document.getElementById("tag-filter");
+  const current = select.value;
+  const options = allKnownTags().map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+  select.innerHTML = `<option value="">All tags</option>${options}`;
+  if (current && allKnownTags().includes(current)) select.value = current;
+}
+
+// <datalist> matches against the input's whole value, so in a
+// comma-separated field it stops helping after the first tag. The fix is to
+// prefix each option with everything up to and including the last comma, so
+// the browser's prefix-match keeps working per-token. Degrades to a plain
+// text input if a browser ignores any of this — nothing about submission
+// depends on the datalist.
+function refreshTagDatalist(input) {
+  const prefix = input.value.slice(0, input.value.lastIndexOf(",") + 1);
+  const already = new Set(parseTagsInput(input.value));
+  document.getElementById("tag-suggestions").innerHTML = allKnownTags()
+    .filter((t) => !already.has(t))
+    .map((t) => `<option value="${escapeHtml(prefix + (prefix ? " " : "") + t)}"></option>`)
+    .join("");
+}
+
+// Wired on every tags input (create, edit rows, bulk-create, bulk bar) so
+// the shared datalist always reflects what's being typed right now.
+document.addEventListener("input", (e) => {
+  if (e.target.matches('input[list="tag-suggestions"]')) refreshTagDatalist(e.target);
+});
+
 // Slugs currently checked for a bulk action. Cleared at the top of every
 // renderLinksTable() call (filter, sort, loadLinks()) so a user can never
 // act on rows they are not currently looking at.
@@ -85,17 +159,32 @@ function updateBulkBar() {
   const bar = document.getElementById("bulk-bar");
   const count = selectedSlugs.size;
   bar.hidden = count === 0;
+
+  document.getElementById("bulk-tag-controls").hidden = !canTagLinks();
+  document.getElementById("bulk-owner-controls").hidden = !canManageUsers();
+  if (canManageUsers()) populateOwnerSelect(document.getElementById("bulk-owner-select"));
+
   if (count === 0) return;
 
   const countEl = document.getElementById("bulk-count");
   const overCap = count > BULK_MAX_SELECTION;
   countEl.textContent = overCap
-    ? `${count} links selected — bulk actions apply to at most ${BULK_MAX_SELECTION} at a time.`
+    ? `${count} links selected — bulk actions apply to at most ${BULK_MAX_SELECTION} at a time. Narrow the filter, or clear some selections.`
     : `${count} link${count === 1 ? "" : "s"} selected`;
 
-  for (const id of ["bulk-enable-btn", "bulk-disable-btn", "bulk-delete-btn"]) {
+  for (const id of ["bulk-enable-btn", "bulk-disable-btn", "bulk-delete-btn",
+                     "bulk-tag-add-btn", "bulk-tag-remove-btn", "bulk-reassign-btn"]) {
     document.getElementById(id).disabled = overCap;
   }
+}
+
+// Shared by #bulk-owner-select and each edit row's .edit-owner — builds the
+// options from allUsernames, selecting `selected` if it's one of them.
+function populateOwnerSelect(select, selected) {
+  const usernames = allUsernames.length ? allUsernames : (selected ? [selected] : []);
+  select.innerHTML = usernames
+    .map((u) => `<option value="${escapeHtml(u)}" ${u === selected ? "selected" : ""}>${escapeHtml(u)}</option>`)
+    .join("");
 }
 
 // The header checkbox only ever reflects/affects the *selectable*
@@ -134,8 +223,14 @@ function getVisibleLinks() {
   let visible = !term
     ? allLinks
     : allLinks.filter(
-        (link) => link.slug.toLowerCase().includes(term) || link.target_url.toLowerCase().includes(term)
+        (link) =>
+          link.slug.toLowerCase().includes(term) ||
+          link.target_url.toLowerCase().includes(term) ||
+          (link.tags ?? []).some((t) => t.includes(term))
       );
+
+  const tag = document.getElementById("tag-filter").value;
+  if (tag) visible = visible.filter((link) => (link.tags ?? []).includes(tag));
 
   if (sortKey) {
     // start_at/end_at may be null (unbounded window) — sort those first regardless of direction.
@@ -163,6 +258,8 @@ function editRowHtml(link) {
             </label>
             <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
           </div>
+          <label>Tags <input type="text" class="edit-tags" list="tag-suggestions" value="${escapeHtml((link.tags ?? []).join(", "))}" /></label>
+          ${canManageUsers() ? `<label>Owner <select class="edit-owner"></select></label>` : ""}
           <div class="grid">
             <label><input type="checkbox" class="edit-disabled" ${link.status === "disabled" ? "checked" : ""} /> Disabled (stops <code>/r/${escapeHtml(link.slug)}</code> resolving)</label>
           </div>
@@ -181,6 +278,7 @@ async function loadLinks() {
   const { ok, data } = await api.get("/links");
   if (!ok) return;
   allLinks = data.links;
+  rebuildTagFilterOptions();
   renderLinksTable();
 }
 
@@ -221,6 +319,7 @@ function renderLinksTable() {
         <span class="slug-chip" title="${escapeHtml(shortUrl)}">/r/${escapeHtml(link.slug)}</span>
         ${link.custom ? '<span class="slug-kind-badge">Custom</span>' : ""}
         ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
+        ${(link.tags ?? []).map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")}
       </td>
       <td>${escapeHtml(link.owner)}</td>
       <td class="destination-cell" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
@@ -245,6 +344,8 @@ function renderLinksTable() {
       const editRow = body.querySelector(`tr.edit-row[data-slug="${CSS.escape(link.slug)}"]`);
       editRow.style.display = "none";
       wireWindowValidation(editRow.querySelector(".edit-start-at"), editRow.querySelector(".edit-end-at"));
+      const ownerSelect = editRow.querySelector(".edit-owner");
+      if (ownerSelect) populateOwnerSelect(ownerSelect, link.owner);
     }
   }
   updateSelectAllState();
@@ -298,6 +399,7 @@ async function handleEditFormSubmit(form) {
   const endAt = datetimeLocalToIso(form.querySelector(".edit-end-at").value);
   const newPassword = form.querySelector(".edit-password").value;
   const removePassword = form.querySelector(".edit-remove-password").checked;
+  const tagList = parseTagsInput(form.querySelector(".edit-tags").value);
   // PATCH /links/{slug} has accepted `status` since Phase 1, but until this
   // control existed no client ever sent it — bulk enable/disable was the only
   // way to change a link's status from the GUI, so disabling one link meant
@@ -306,7 +408,7 @@ async function handleEditFormSubmit(form) {
   const errorEl = form.querySelector(".edit-error");
   errorEl.textContent = "";
 
-  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, status });
+  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, status, tags: tagList });
   if (!ok) {
     errorEl.textContent = friendlyError(data, "Could not update link.");
     return;
@@ -320,6 +422,7 @@ async function handleEditFormSubmit(form) {
     linkRecord.target_url = targetUrl;
     linkRecord.start_at = startAt;
     linkRecord.end_at = endAt;
+    linkRecord.tags = tagList;
   }
   const displayRow = editRow.previousElementSibling;
   if (displayRow) {
@@ -343,6 +446,30 @@ async function handleEditFormSubmit(form) {
         friendlyError(passwordResult.data, "Could not update link password.", {
           invalid_password: "Link passwords must be at least 4 characters.",
         });
+      return;
+    }
+  }
+
+  // Owner is a separate call, exactly mirroring the password change above —
+  // reassignment goes through the shared bulk-action endpoint (there is no
+  // single-link owner endpoint; see docs/plans/link-tags-and-ownership.md's
+  // "Owner reassignment goes through bulk-action" trade-off), with a
+  // count-and-target-bearing confirm since reassignment is destructive-ish.
+  const ownerSelect = form.querySelector(".edit-owner");
+  if (ownerSelect && linkRecord && ownerSelect.value !== linkRecord.owner) {
+    if (!await confirmDialog(`Reassign "${slug}" to "${ownerSelect.value}"?`, { confirmLabel: "Reassign" })) {
+      loadLinks();
+      return;
+    }
+    const reassignResult = await api.post("/links/bulk-action", {
+      slugs: [slug],
+      action: "reassign",
+      owner: ownerSelect.value,
+    });
+    if (!reassignResult.ok) {
+      errorEl.textContent =
+        "Destination, schedule and tags saved. " +
+        friendlyError(reassignResult.data, "Could not reassign this link.");
       return;
     }
   }
@@ -457,6 +584,88 @@ document.getElementById("bulk-enable-btn").addEventListener("click", () => handl
 document.getElementById("bulk-disable-btn").addEventListener("click", () => handleBulkAction("disable"));
 document.getElementById("bulk-delete-btn").addEventListener("click", () => handleBulkAction("delete"));
 
+// action is "tag" or "untag". No confirmation dialog: both are reversible by
+// the adjacent button, and DESIGN.md's Bulk Action Bar rule says confirming
+// a reversible action trains people to dismiss confirms.
+async function handleBulkTag(action) {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
+  const tagList = parseTagsInput(document.getElementById("bulk-tag-input").value);
+  if (!tagList.length) return;
+
+  const errorEl = document.getElementById("links-error");
+  const errorsEl = document.getElementById("bulk-action-errors");
+  const successEl = document.getElementById("links-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+
+  const { ok, data } = await api.post("/links/bulk-action", { slugs, action, tags: tagList });
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      errorEl.textContent = `Nothing was changed — ${data.row_errors.length} of the selected links are no longer available. Refresh and try again.`;
+      errorsEl.innerHTML = renderRowErrorList(data.row_errors);
+      errorsEl.hidden = false;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not update tags on the selected links.");
+    }
+    return;
+  }
+
+  const verb = action === "tag" ? "Tagged" : "Untagged";
+  successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
+  document.getElementById("bulk-tag-input").value = "";
+  loadLinks();
+}
+
+document.getElementById("bulk-tag-add-btn").addEventListener("click", () => handleBulkTag("tag"));
+document.getElementById("bulk-tag-remove-btn").addEventListener("click", () => handleBulkTag("untag"));
+
+// Reassignment is destructive-ish (a link disappears from its old owner's
+// dashboard), so unlike tag/untag it gets a count-and-target-bearing
+// confirmDialog — matching the bulk-delete confirmation's
+// count-states-the-scale convention.
+async function handleBulkReassign() {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
+  const owner = document.getElementById("bulk-owner-select").value;
+  if (!owner) return;
+
+  const n = slugs.length;
+  if (!await confirmDialog(
+    `Reassign ${n} link${n === 1 ? "" : "s"} to "${owner}"? They will move out of their current owners' lists.`,
+    { confirmLabel: `Reassign ${n} link${n === 1 ? "" : "s"}` }
+  )) return;
+
+  const errorEl = document.getElementById("links-error");
+  const errorsEl = document.getElementById("bulk-action-errors");
+  const successEl = document.getElementById("links-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+
+  const { ok, data } = await api.post("/links/bulk-action", { slugs, action: "reassign", owner });
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      errorEl.textContent = `Nothing was changed — ${data.row_errors.length} of the selected links are no longer available. Refresh and try again.`;
+      errorsEl.innerHTML = renderRowErrorList(data.row_errors);
+      errorsEl.hidden = false;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not reassign the selected links.");
+    }
+    return;
+  }
+
+  successEl.textContent = `Reassigned ${data.count} link${data.count === 1 ? "" : "s"} to "${owner}".`;
+  successEl.hidden = false;
+  loadLinks();
+}
+
+document.getElementById("bulk-reassign-btn").addEventListener("click", handleBulkReassign);
+
 // Dashboard-local overrides for api/bulk.py's per-row error codes — the
 // invalid_password override at handleEditFormSubmit is the precedent for
 // giving one call site's copy priority over the shared ERROR_MESSAGES map.
@@ -540,13 +749,14 @@ document.getElementById("bulk-form").addEventListener("submit", async (e) => {
   const startAt = datetimeLocalToIso(document.getElementById("bulk-start-at").value);
   const endAt = datetimeLocalToIso(document.getElementById("bulk-end-at").value);
   const password = document.getElementById("bulk-password").value || null;
+  const tagList = parseTagsInput(document.getElementById("bulk-tags").value);
 
   clearBulkResults();
   const errorEl = document.getElementById("bulk-error");
   const errorsEl = document.getElementById("bulk-errors");
   const successEl = document.getElementById("bulk-success");
 
-  const payload = { text, start_at: startAt, end_at: endAt };
+  const payload = { text, start_at: startAt, end_at: endAt, tags: tagList };
   if (password) payload.password = password;
 
   const { ok, data } = await api.post("/links/bulk", payload);
@@ -579,6 +789,7 @@ document.getElementById("bulk-form").addEventListener("submit", async (e) => {
   document.getElementById("bulk-start-at").value = "";
   document.getElementById("bulk-end-at").value = "";
   document.getElementById("bulk-password").value = "";
+  document.getElementById("bulk-tags").value = "";
   // The panel stays open — unlike #advanced-options, its success banner
   // lives inside the details it belongs to, so closing it would hide the
   // payoff the user just triggered.
@@ -592,6 +803,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   const startAt = datetimeLocalToIso(document.getElementById("start-at").value);
   const endAt = datetimeLocalToIso(document.getElementById("end-at").value);
   const password = document.getElementById("link-password").value || null;
+  const tagList = parseTagsInput(document.getElementById("link-tags").value);
   const errorEl = document.getElementById("create-error");
   const successEl = document.getElementById("create-success");
   errorEl.textContent = "";
@@ -602,6 +814,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     custom_slug: customSlug,
     start_at: startAt,
     end_at: endAt,
+    tags: tagList,
   };
   if (password) payload.password = password;
 
@@ -617,6 +830,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   document.getElementById("start-at").value = "";
   document.getElementById("end-at").value = "";
   document.getElementById("link-password").value = "";
+  document.getElementById("link-tags").value = "";
   document.getElementById("advanced-options").open = false;
 
   renderCreateSuccess(data.slug);
@@ -656,6 +870,8 @@ document.getElementById("links-filter").addEventListener("input", () => {
   clearTimeout(filterDebounceTimer);
   filterDebounceTimer = setTimeout(renderLinksTable, 200);
 });
+
+document.getElementById("tag-filter").addEventListener("change", renderLinksTable);
 
 document.querySelectorAll("#links-table th.sortable").forEach((th) => {
   const activate = () => {
@@ -713,6 +929,7 @@ const CSV_COLUMNS = [
   ["Status", (l) => l.status],
   ["Starts", (l) => l.start_at ?? ""],
   ["Expires", (l) => l.end_at ?? ""],
+  ["Tags", (l) => (l.tags ?? []).join(" ")],
 ];
 
 // RFC 4180: quote a field that contains a comma, quote, CR or LF, and double

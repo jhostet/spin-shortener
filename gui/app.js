@@ -163,6 +163,11 @@ const ERROR_MESSAGES = {
   username_taken: "That username is already taken.",
   invalid_role: "Choose a valid role.",
   invalid_permissions: "One or more selected permissions aren't valid.",
+  invalid_tag: "Tags can only use lowercase letters, numbers, hyphens and underscores (up to 32 characters).",
+  invalid_tags: "That list of tags isn't valid.",
+  too_many_tags: "That's too many tags for one link.",
+  no_tags: "Enter at least one tag.",
+  unknown_owner: "That user doesn't exist — pick someone from the list.",
 };
 
 // `overrides` lets one call site's copy win over the shared map for a code

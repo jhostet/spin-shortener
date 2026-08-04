@@ -567,7 +567,8 @@ details summary:focus-visible:not([role]) {
  * not data, so they explicitly opt back out of the mono rule their
  * parent cell applies. */
 .slug-kind-badge,
-.lock-badge {
+.lock-badge,
+.tag-chip {
   display: inline-block;
   margin-left: 0.35em;
   font-family: var(--pico-font-family-sans-serif, sans-serif);
@@ -579,7 +580,8 @@ details summary:focus-visible:not([role]) {
  * states on nav/buttons/links — a resting-fill use on a static status
  * label was a rule violation (and fell short of AA text contrast). */
 .slug-kind-badge,
-.lock-badge {
+.lock-badge,
+.tag-chip {
   color: var(--ss-slate-500);
 }
 
