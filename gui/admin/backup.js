@@ -174,6 +174,94 @@ document.getElementById("restore-btn").addEventListener("click", async () => {
   updateRestoreButtonState();
 });
 
+// Check id -> {title, meaning}, following BACKUP_ERROR_MESSAGES's precedent
+// above: kept local because these strings matter only on this page. Falls
+// back to the raw check id below for an id this map doesn't know, so a check
+// added server-side without a label here renders as itself, not "undefined".
+const CONSISTENCY_CHECK_LABELS = {
+  unindexed_link: { title: "Links missing from the index", meaning: "A link record exists but isn't listed in the all-links index, so it's invisible to the dashboard even though it still resolves." },
+  missing_link_record: { title: "Index entries with no link", meaning: "The all-links index names a slug that has no backing record. Harmless — the dashboard already skips it." },
+  unindexed_owner_link: { title: "Links missing from their owner's index", meaning: "A link's owner record doesn't list it, so it's invisible on that owner's dashboard and deleting the owner would silently orphan it." },
+  owner_index_mismatch: { title: "Links indexed under the wrong owner", meaning: "A link is listed under one owner's index but its record names a different owner, so that owner can't edit or delete it." },
+  orphan_owner_index_entry: { title: "Owner index entries with no link", meaning: "An owner's index names a slug that has no backing record. Harmless — the dashboard already skips it." },
+  unknown_link_owner: { title: "Links owned by a deleted account", meaning: "A link's record names an owner with no user record, so nobody can edit it and its owner can never be contacted." },
+  dangling_owner_index: { title: "Owner indexes for deleted accounts", meaning: "An owner index still lists links for a username with no user record. If that username is ever recreated, it would inherit these links." },
+  unindexed_user: { title: "Users missing from the username index", meaning: "A user record exists but isn't listed in the usernames index, so the account can sign in but is invisible to user administration." },
+  missing_user_record: { title: "Username index entries with no user", meaning: "The usernames index names a user with no backing record. Harmless — recreating that username resolves it." },
+  orphan_session: { title: "Sessions for deleted accounts", meaning: "A session names a username with no user record. Inert for now, but it would resolve again if that username were ever recreated." },
+  unreadable_value: { title: "Unreadable values", meaning: "A key's value couldn't be parsed into its expected shape. It's excluded from every other check, which can mask other findings — fix or remove it and run again." },
+  unrecognized_key: { title: "Unrecognized keys", meaning: "A key matches none of the known shapes for this store. It may be junk, or a new key type that this check needs to be taught about." },
+};
+
+function consistencyCheckLabel(checkId) {
+  return CONSISTENCY_CHECK_LABELS[checkId] || { title: checkId, meaning: "" };
+}
+
+function renderConsistencyFindings(findings) {
+  if (!findings.length) return "";
+  const items = findings
+    .map((f) => `<li>${Object.entries(f).map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(String(v))}`).join(" · ")}</li>`)
+    .join("");
+  return `<ul>${items}</ul>`;
+}
+
+function renderConsistencyCheck(check, { showSkippedNote } = {}) {
+  const { title, meaning } = consistencyCheckLabel(check.check);
+  const heading = showSkippedNote
+    ? `<h3>${escapeHtml(title)}</h3>`
+    : `<h3>${escapeHtml(title)} — ${check.count}</h3>`;
+  const meaningHtml = meaning ? `<p>${escapeHtml(meaning)}</p>` : "";
+  if (showSkippedNote) {
+    return `${heading}${meaningHtml}<p>Not checked — an index key this check depends on was unreadable.</p>`;
+  }
+  const truncatedHtml = check.truncated
+    ? `<p>Showing the first ${check.max_findings_per_check} of ${check.count}.</p>`
+    : "";
+  return `${heading}${meaningHtml}${renderConsistencyFindings(check.findings)}${truncatedHtml}`;
+}
+
+function renderConsistencyReport(report) {
+  const resultEl = document.getElementById("consistency-result");
+
+  if (report.ok) {
+    const totalKeys = Object.values(report.scanned || {}).reduce((sum, s) => sum + (s.keys || 0), 0);
+    resultEl.innerHTML = `<p class="form-success">No inconsistencies found — ${totalKeys} keys scanned across the links and users stores.</p>`;
+    return;
+  }
+
+  const needsAttention = report.checks.filter((c) => c.severity === "warning" && c.count > 0 && !c.skipped);
+  const informational = report.checks.filter((c) => c.severity === "info" && c.count > 0 && !c.skipped);
+  const notChecked = report.checks.filter((c) => c.skipped);
+
+  const sections = [];
+  if (needsAttention.length) {
+    sections.push(`<h2>Needs attention</h2>${needsAttention.map((c) => renderConsistencyCheck({ ...c, max_findings_per_check: report.max_findings_per_check })).join("")}`);
+  }
+  if (informational.length) {
+    sections.push(`<h2>Informational</h2>${informational.map((c) => renderConsistencyCheck({ ...c, max_findings_per_check: report.max_findings_per_check })).join("")}`);
+  }
+  if (notChecked.length) {
+    sections.push(`<h2>Not checked</h2>${notChecked.map((c) => renderConsistencyCheck(c, { showSkippedNote: true })).join("")}`);
+  }
+
+  resultEl.innerHTML = sections.join("");
+}
+
+document.getElementById("consistency-btn").addEventListener("click", async () => {
+  const errorEl = document.getElementById("consistency-error");
+  const resultEl = document.getElementById("consistency-result");
+  errorEl.textContent = "";
+  resultEl.innerHTML = "";
+
+  const { ok, data } = await api.get("/admin/consistency");
+  if (!ok) {
+    errorEl.textContent = friendlyError(data, "Could not run the consistency check.", BACKUP_ERROR_MESSAGES);
+    return;
+  }
+
+  renderConsistencyReport(data);
+});
+
 initHeader({
   dashboardHref: "../dashboard.html",
   pageLabel: "Backup and restore",
