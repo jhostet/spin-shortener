@@ -808,6 +808,28 @@ async def test_bulk_action_reassign_requires_users_manage_permission():
     assert record["owner"] == "alice"
 
 
+async def test_bulk_action_reassign_without_permission_cannot_distinguish_a_real_owner_from_a_fake_one():
+    """The permission check must run BEFORE the owner lookup. If it ran after,
+    a caller without users.manage would get 400 unknown_owner for a name that
+    does not exist and 403 forbidden for one that does — enumerating the very
+    username list GET /api/users gates on this same permission."""
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    users_store = FakeStore()
+    await _seed_user(users_store, "bob")
+
+    real = await bulk.handle_bulk_action(
+        store, users_store, _principal(username="alice"),
+        _action_request({"slugs": [slug], "action": "reassign", "owner": "bob"}),
+    )
+    fake = await bulk.handle_bulk_action(
+        store, users_store, _principal(username="alice"),
+        _action_request({"slugs": [slug], "action": "reassign", "owner": "nobody-here"}),
+    )
+    assert real.status == fake.status == 403
+    assert real.body == fake.body
+
+
 async def test_bulk_action_reassign_disabled_user_is_an_acceptable_target():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")

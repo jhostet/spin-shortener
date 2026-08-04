@@ -279,13 +279,18 @@ async def handle_bulk_action(store, users_store, principal, request):
 
     new_owner: str | None = None
     if action == "reassign":
+        # Permission BEFORE resolving the owner, deliberately: the reverse
+        # order lets a caller without users.manage tell "no such user"
+        # (400 unknown_owner) from "user exists" (403 forbidden) and so
+        # enumerate the very username list GET /api/users gates on this
+        # same permission.
+        if not principal.has_permission("users.manage"):
+            return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
         new_owner = payload.get("owner")
         if not isinstance(new_owner, str) or not new_owner:
             return json_response(400, {"error": "invalid_owner"})
         if await auth.get_user(users_store, new_owner) is None:
             return json_response(400, {"error": "unknown_owner", "owner": new_owner})
-        if not principal.has_permission("users.manage"):
-            return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
 
     tag_list: list[str] | None = None
     if action in ("tag", "untag"):

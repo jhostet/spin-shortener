@@ -187,6 +187,28 @@ SPIN_VARIABLE_COOKIE_SECURE=false \
 
 Plan: `docs/plans/multi-domain-display.md` (also records the rejected per-link `domain` field and `Host`-header enforcement designs, and why).
 
+## Link tags and ownership
+
+Links carry free-form tags, and a `users.manage` holder can reassign a link's owner. Plan: `docs/plans/link-tags-and-ownership.md`.
+
+**Tags live only inside the `slug:<slug>` record, as a `tags` array — there is no `tag:` index and no `_meta:tags` registry.** Vocabulary rules are in `api/tags.py`: lowercase, `^[a-z0-9][a-z0-9_-]*$`, 1–32 chars, **max 10 per link**, stored normalized, de-duplicated and sorted. The character set is deliberately narrower than the slug's (no uppercase) so that `Sale` and `sale` can never become two tags; the 10-per-link cap exists because tags render as chips inside the links table's existing Short-link cell, and a row with dozens of them would wreck the column.
+
+**Why no index.** The dashboard already holds every link in `allLinks` (`GET /api/links` has no pagination), so filtering and autocomplete are pure client-side work over data already in memory. A `tag:<tag>` index would have bought nothing for that and cost a two-index read-modify-write on every single-link `PATCH` — up to 20 of them at the 10-tag cap, with no compare-and-swap available anywhere in Spin's KV. It would also have created a new KV key type, which obliges a matching `api/backup.py` change (`INDEX_KEYS`, `restore_write_order`). **If either an index or a registry is ever added, that `backup.py` change is mandatory, not optional** — a new key type that `backup.py` doesn't know about is silently dropped on restore. A test in `api/tests/test_backup.py` pins that today's tags round-trip needs no such change.
+
+**The cost of that choice:** tag suggestions are ownership-scoped. A user without `links.view_all` is only ever offered tags they have personally used, because the suggestion list is derived from the links they can see. Filtering still works correctly on everything they can see.
+
+**`links.tag` gates bulk tag/untag only.** Setting tags on a single link — at create, or via `PATCH /api/links/{slug}` — needs only the edit rights that link already required. The permission exists for `POST /api/links/bulk-action` with `action` of `tag` or `untag`, which still applies the per-row `can_edit` check on top. `PATCH {"tags": [...]}` is a **full replacement**, not a merge; omitting the key entirely leaves existing tags untouched.
+
+**Owner reassignment is `action: "reassign"` on the same bulk endpoint, gated on `users.manage` alone.** It deliberately **skips the per-row `can_edit` check** every other bulk action applies. That is the point of the feature: the motivating case is an employee leaving, whose links the operator by definition cannot edit. It is not a weaker bar than an `admin` role check either — `api/users.py`'s `handle_update` already lets a `users.manage` holder promote themselves to admin.
+
+- **The permission check runs before the owner lookup, and must stay that way.** Reversed, a caller without `users.manage` gets `400 unknown_owner` for a name that doesn't exist and `403 forbidden` for one that does — enumerating the username list that `GET /api/users` gates behind that same permission. `test_bulk_action_reassign_without_permission_cannot_distinguish_a_real_owner_from_a_fake_one` is the guard.
+- **Write ordering: records first, then the new owner's index, then the old owners' — and `all_links` is never read or written.** A reassignment doesn't change which links exist. An interruption mid-move therefore leaves a slug listed under *both* owners: visible, harmless, and self-correcting, because `links.move_slugs_between_owners` is idempotent. The reverse ordering would make the link vanish from both dashboards while still resolving at `/r/<slug>` — the failure nobody notices. A test asserts `all_links` is byte-identical across a reassignment.
+- A **disabled** user is an acceptable reassignment target (parking links on a deactivated account is a legitimate move); a nonexistent one is not.
+
+**`redirect` is untouched.** `linkgate.Link` has no `Tags` field and gains none — Go's `encoding/json` ignores unknown fields unless a decoder opts into `DisallowUnknownFields`, so the new field costs the hot path nothing. `redirect/linkgate/link_test.go` pins both halves of that.
+
+**Bulk tag, untag and reassign share the 50-slug `MAX_BULK_ROWS` cap** with the existing actions, and are all-or-nothing like them: if adding a tag would push any one link past 10, nothing is written and every offending slug is reported. The dashboard disables all six bulk buttons past the cap and tells the user to narrow the filter, since a tag filter is the easy way to select 200 links at once.
+
 ## KV backup and restore
 
 `GET /api/admin/backup` downloads a JSON snapshot of the `links`, `users` and `analytics` stores; `POST /api/admin/restore` replaces them from one. Both live in `api/backup.py` (pure logic, zero `spin_sdk` imports) and are routed on exact paths from `api/app.py`. The GUI is `gui/admin/backup.html` + `backup.js`. Plan: `docs/plans/kv-backup-restore.md`.
