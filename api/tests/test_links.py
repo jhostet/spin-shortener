@@ -577,6 +577,91 @@ async def test_update_bumps_updated_at():
     assert updated["created_at"] == original["created_at"]
 
 
+# --- Tags on create/update/public shape ---
+
+
+async def test_create_with_tags_normalizes_sorts_and_dedupes():
+    store = FakeStore()
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x", "tags": ["Q4", " sale "]}))
+    assert resp.status == 201
+    body = json.loads(resp.body)
+    assert body["tags"] == ["q4", "sale"]
+
+
+async def test_create_with_no_tags_key_stores_empty_list():
+    store = FakeStore()
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}))
+    assert resp.status == 201
+    body = json.loads(resp.body)
+    assert body["tags"] == []
+
+
+async def test_create_with_invalid_tag_rejected():
+    store = FakeStore()
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x", "tags": ["Bad Tag"]}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_tag"
+
+
+async def test_legacy_record_with_no_tags_key_serializes_empty_list():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    record = json.loads(await store.get(f"slug:{slug}"))
+    del record["tags"]
+    await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+
+    resp = await links.handle_get(store, _principal(username="alice"), slug)
+    assert resp.status == 200
+    assert json.loads(resp.body)["tags"] == []
+
+
+async def test_patch_tags_empty_list_clears_them():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    slug = await _make_link(store, owner="alice")
+    await links.handle_update(store, owner, slug, _request({"tags": ["sale"]}))
+
+    resp = await links.handle_update(store, owner, slug, _request({"tags": []}))
+    assert resp.status == 200
+    assert json.loads(resp.body)["tags"] == []
+
+
+async def test_patch_tags_null_rejected():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    slug = await _make_link(store, owner="alice")
+    resp = await links.handle_update(store, owner, slug, _request({"tags": None}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_tags"
+
+
+async def test_patch_tags_invalid_tag_rejected():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    slug = await _make_link(store, owner="alice")
+    resp = await links.handle_update(store, owner, slug, _request({"tags": ["Bad Tag"]}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_tag"
+
+
+async def test_patch_omitting_tags_leaves_existing_list_untouched():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    slug = await _make_link(store, owner="alice", tags=["sale"])
+    resp = await links.handle_update(store, owner, slug, _request({"status": "disabled"}))
+    assert resp.status == 200
+    assert json.loads(resp.body)["tags"] == ["sale"]
+
+
+async def test_patch_tags_full_replacement_not_merge():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    slug = await _make_link(store, owner="alice", tags=["sale", "q4"])
+    resp = await links.handle_update(store, owner, slug, _request({"tags": ["promo"]}))
+    assert resp.status == 200
+    assert json.loads(resp.body)["tags"] == ["promo"]
+
+
 # --- Batched index writers (add_slugs_to_indexes / remove_slugs_from_indexes) ---
 
 

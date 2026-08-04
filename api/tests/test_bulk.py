@@ -3,6 +3,7 @@ import json
 import auth
 import bulk
 import links
+import tags
 from responses import Request
 from tests.fakes import FakeStore
 
@@ -299,6 +300,43 @@ async def test_bulk_create_batch_password_and_window_applied_to_every_row():
         assert auth.verify_password("longenough", record["password_hash"])
 
 
+async def test_bulk_create_batch_tags_applied_to_every_row():
+    store = FakeStore()
+    text = "foo,https://example.com/a\nbar,https://example.com/b\nbaz,https://example.com/c\n"
+    payload = {"text": text, "tags": ["SALE"]}
+    principal = _principal(permissions=["links.create_custom_slug"])
+    resp = await bulk.handle_bulk_create(store, principal, _request(payload))
+    assert resp.status == 201
+    for slug in ("foo", "bar", "baz"):
+        record = json.loads(await store.get(f"slug:{slug}"))
+        assert record["tags"] == ["sale"]
+
+
+async def test_bulk_create_no_tags_key_gives_every_record_empty_list():
+    store = FakeStore()
+    text = "foo,https://example.com/a\nbar,https://example.com/b\n"
+    principal = _principal(permissions=["links.create_custom_slug"])
+    resp = await bulk.handle_bulk_create(store, principal, _request({"text": text}))
+    assert resp.status == 201
+    for slug in ("foo", "bar"):
+        record = json.loads(await store.get(f"slug:{slug}"))
+        assert record["tags"] == []
+
+
+async def test_bulk_create_invalid_batch_tag_creates_nothing():
+    store = FakeStore()
+    await links.handle_create(store, _principal(), _request_for_links({"target_url": "https://example.com/pre"}))
+    before = {key: value for key, value in store._data.items()}
+
+    text = "foo,https://example.com/a\n"
+    resp = await bulk.handle_bulk_create(store, _principal(), _request({"text": text, "tags": ["Bad Tag"]}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_tag"
+
+    after = {key: value for key, value in store._data.items()}
+    assert after == before
+
+
 async def test_bulk_create_invalid_batch_password_rejected_before_any_write():
     store = FakeStore()
     text = "foo,https://example.com/a\n"
@@ -577,3 +615,149 @@ async def test_bulk_action_delete_writes_indexes_exactly_once_per_owner(monkeypa
     assert set_calls.count("all_links") == 1
     assert set_calls.count("owner_links:alice") == 1
     assert set_calls.count("owner_links:bob") == 1
+
+
+# --- handle_bulk_action: tag / untag ---
+
+
+async def test_bulk_action_reassign_is_a_known_action_but_not_implemented_yet():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    resp = await bulk.handle_bulk_action(
+        store, _principal(username="alice"),
+        _action_request({"slugs": [slug], "action": "reassign", "owner": "bob"}),
+    )
+    assert resp.status == 501
+    # And, crucially, the delete branch must not have run.
+    assert await store.exists(f"slug:{slug}") is True
+
+
+async def test_bulk_action_tag_requires_links_tag_permission():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    resp = await bulk.handle_bulk_action(
+        store, _principal(username="alice"),
+        _action_request({"slugs": [slug], "action": "tag", "tags": ["sale"]}),
+    )
+    assert resp.status == 403
+    assert json.loads(resp.body) == {"error": "forbidden", "required_permission": "links.tag"}
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["tags"] == []
+
+
+async def test_bulk_action_tag_no_tags_rejected():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    tagger = _principal(username="alice", permissions=["links.tag"])
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": []}),
+    )
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "no_tags"
+
+
+async def test_bulk_action_tag_invalid_tag_rejected():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    tagger = _principal(username="alice", permissions=["links.tag"])
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["Bad Tag"]}),
+    )
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_tag"
+
+
+async def test_bulk_action_tag_holder_without_edit_all_forbidden_on_others_link_and_writes_nothing():
+    store = FakeStore()
+    alice_slug = await _make_link(store, owner="alice")
+    tagger = _principal(username="bob", permissions=["links.tag"])
+    before = {key: value for key, value in store._data.items()}
+
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [alice_slug], "action": "tag", "tags": ["sale"]}),
+    )
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{"slug": alice_slug, "error": "forbidden"}]
+
+    after = {key: value for key, value in store._data.items()}
+    assert after == before
+
+
+async def test_bulk_action_tag_success_normalizes_bumps_updated_at_and_carries_tags():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    tagger = _principal(username="alice", permissions=["links.tag"])
+    before = json.loads(await store.get(f"slug:{slug}"))
+
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["Q4", "SALE"]}),
+    )
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body == {"ok": True, "action": "tag", "count": 1, "tags": ["q4", "sale"]}
+
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["tags"] == ["q4", "sale"]
+    assert record["updated_at"] >= before["updated_at"]
+
+
+async def test_bulk_action_tag_re_tagging_produces_no_duplicate():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice", tags=["sale"])
+    tagger = _principal(username="alice", permissions=["links.tag"])
+
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["sale"]}),
+    )
+    assert resp.status == 200
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["tags"] == ["sale"]
+
+
+async def test_bulk_action_untag_absent_tag_is_a_no_op_returning_200():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice", tags=["sale"])
+    tagger = _principal(username="alice", permissions=["links.tag"])
+
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [slug], "action": "untag", "tags": ["nope"]}),
+    )
+    assert resp.status == 200
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["tags"] == ["sale"]
+
+
+async def test_bulk_action_untag_removes_tag():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice", tags=["sale", "q4"])
+    tagger = _principal(username="alice", permissions=["links.tag"])
+
+    resp = await bulk.handle_bulk_action(
+        store, tagger, _action_request({"slugs": [slug], "action": "untag", "tags": ["q4"]}),
+    )
+    assert resp.status == 200
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["tags"] == ["sale"]
+
+
+async def test_bulk_action_tag_cap_violation_on_one_slug_leaves_store_byte_identical():
+    store = FakeStore()
+    nine_tags = [f"tag{i}" for i in range(9)]
+    over_cap_slug = await _make_link(store, owner="alice", tags=nine_tags)
+    fine_slug = await _make_link(store, owner="alice")
+    tagger = _principal(username="alice", permissions=["links.tag"])
+    before = {key: value for key, value in store._data.items()}
+
+    resp = await bulk.handle_bulk_action(
+        store, tagger,
+        _action_request({"slugs": [over_cap_slug, fine_slug], "action": "tag", "tags": ["one-more", "two-more"]}),
+    )
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{"slug": over_cap_slug, "error": "too_many_tags", "max_tags": tags.MAX_TAGS_PER_LINK}]
+
+    after = {key: value for key, value in store._data.items()}
+    assert after == before

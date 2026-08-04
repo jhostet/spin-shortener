@@ -11,12 +11,18 @@ from dataclasses import dataclass
 
 import auth
 import links
+import tags
 from responses import iso_now, json_response
 
 MAX_BULK_ROWS = 50
 MAX_BULK_BODY_BYTES = 262_144
 
 ACTION_STATUSES = {"enable": "active", "disable": "disabled"}  # values ⊆ links.LINK_STATUSES
+
+# "reassign" is a member so a request naming it gets a clean 400/403 rather
+# than falling into the delete branch below, but the actual owner-move logic
+# lands in a later task (see TASKS.md's "Add the reassign bulk action").
+BULK_ACTIONS = {"delete", "enable", "disable", "tag", "untag", "reassign"}
 
 # None of these strings can ever be a valid destination (a destination must
 # start with a scheme, per format rule 6), so dropping a first row whose
@@ -178,6 +184,10 @@ async def handle_bulk_create(store, principal, request):
     if start_at is not None and end_at is not None and start_at >= end_at:
         return json_response(400, {"error": "invalid_window_range"})
 
+    tag_list, tag_error = tags.parse_tags(payload.get("tags"))
+    if tag_error:
+        return json_response(400, tag_error)
+
     rows = parse_bulk_text(text)
     if not rows:
         return json_response(400, {"error": "no_rows"})
@@ -232,6 +242,7 @@ async def handle_bulk_create(store, principal, request):
             "status": "active",
             "start_at": start_at,
             "end_at": end_at,
+            "tags": tag_list,
             "created_at": now,
             "updated_at": now,
         }
@@ -253,7 +264,7 @@ async def handle_bulk_action(store, principal, request):
         return json_response(400, {"error": "invalid_json"})
 
     action = payload.get("action")
-    if action not in ({"delete"} | ACTION_STATUSES.keys()):
+    if action not in BULK_ACTIONS:
         return json_response(400, {"error": "invalid_action"})
 
     slugs = payload.get("slugs")
@@ -265,6 +276,20 @@ async def handle_bulk_action(store, principal, request):
 
     if len(slugs) > MAX_BULK_ROWS:
         return json_response(400, {"error": "too_many_rows", "max_rows": MAX_BULK_ROWS, "row_count": len(slugs)})
+
+    if action == "reassign":
+        # Owner-move logic lands in a later task; see TASKS.md.
+        return json_response(501, {"error": "not_implemented"})
+
+    tag_list: list[str] | None = None
+    if action in ("tag", "untag"):
+        if not principal.has_permission("links.tag"):
+            return json_response(403, {"error": "forbidden", "required_permission": "links.tag"})
+        tag_list, tag_error = tags.parse_tags(payload.get("tags"), allow_none=False)
+        if tag_error:
+            return json_response(400, tag_error)
+        if not tag_list:
+            return json_response(400, {"error": "no_tags"})
 
     row_errors = []
     records: dict[str, dict] = {}
@@ -278,6 +303,11 @@ async def handle_bulk_action(store, principal, request):
             continue
         records[slug] = record
 
+    if action == "tag":
+        for slug, record in records.items():
+            if len(tags.apply_tags(record.get("tags", []), tag_list)) > tags.MAX_TAGS_PER_LINK:
+                row_errors.append({"slug": slug, "error": "too_many_tags", "max_tags": tags.MAX_TAGS_PER_LINK})
+
     if row_errors:
         return json_response(400, {"error": "bulk_validation_failed", "row_errors": row_errors})
 
@@ -288,6 +318,15 @@ async def handle_bulk_action(store, principal, request):
             record["status"] = new_status
             record["updated_at"] = now
             await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+    elif action in ("tag", "untag"):
+        now = iso_now()
+        for slug, record in records.items():
+            if action == "tag":
+                record["tags"] = tags.apply_tags(record.get("tags", []), tag_list)
+            else:
+                record["tags"] = tags.remove_tags(record.get("tags", []), tag_list)
+            record["updated_at"] = now
+            await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
     else:  # delete
         slugs_by_owner: dict[str, list[str]] = {}
         for slug, record in records.items():
@@ -295,4 +334,7 @@ async def handle_bulk_action(store, principal, request):
             slugs_by_owner.setdefault(record["owner"], []).append(slug)
         await links.remove_slugs_from_indexes(store, slugs_by_owner)
 
-    return json_response(200, {"ok": True, "action": action, "count": len(slugs)})
+    result = {"ok": True, "action": action, "count": len(slugs)}
+    if action in ("tag", "untag"):
+        result["tags"] = tag_list
+    return json_response(200, result)

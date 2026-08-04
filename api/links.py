@@ -9,6 +9,7 @@ import string
 from urllib.parse import urlparse
 
 import auth
+import tags
 from auth import Principal
 from responses import iso_now, json_response, parse_iso8601_utc, to_iso8601_utc
 
@@ -114,6 +115,7 @@ def public_link(record: dict) -> dict:
     """Link record with `password_hash` replaced by a boolean flag before it's ever serialized to a client."""
     public = {k: v for k, v in record.items() if k != "password_hash"}
     public["password_protected"] = bool(record.get("password_hash"))
+    public["tags"] = record.get("tags", [])
     return public
 
 
@@ -176,6 +178,10 @@ async def handle_create(store, principal: Principal, request):
     if start_at is not None and end_at is not None and start_at >= end_at:
         return json_response(400, {"error": "invalid_window_range"})
 
+    tag_list, tag_error = tags.parse_tags(payload.get("tags"))
+    if tag_error:
+        return json_response(400, tag_error)
+
     now = iso_now()
     record = {
         "slug": slug,
@@ -186,6 +192,7 @@ async def handle_create(store, principal: Principal, request):
         "status": "active",
         "start_at": start_at,
         "end_at": end_at,
+        "tags": tag_list,
         "created_at": now,
         "updated_at": now,
     }
@@ -216,7 +223,7 @@ async def handle_get(store, principal: Principal, slug: str):
     return json_response(200, public_link(record))
 
 
-UPDATABLE_FIELDS = {"target_url", "status", "start_at", "end_at"}
+UPDATABLE_FIELDS = {"target_url", "status", "start_at", "end_at", "tags"}
 
 
 async def handle_update(store, principal: Principal, slug: str, request):
@@ -267,6 +274,12 @@ async def handle_update(store, principal: Principal, slug: str, request):
 
     record["start_at"] = merged_start
     record["end_at"] = merged_end
+
+    if "tags" in payload:
+        tag_list, tag_error = tags.parse_tags(payload["tags"], allow_none=False)
+        if tag_error:
+            return json_response(400, tag_error)
+        record["tags"] = tag_list
 
     record["updated_at"] = iso_now()
     await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))

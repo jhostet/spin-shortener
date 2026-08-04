@@ -5,6 +5,7 @@ from typing import Optional
 import pytest
 
 import auth
+import users
 from responses import Request
 from tests.fakes import FakeStore
 
@@ -255,3 +256,11 @@ async def test_add_and_remove_username():
 
     await auth.remove_username(store, "doesnotexist")  # no-op, no error
     assert await auth.list_usernames(store) == ["bob"]
+
+
+def test_links_tag_is_a_known_permission():
+    assert users._validate_permissions(["links.tag"]) is None
+
+
+def test_links_tag_typo_rejected():
+    assert users._validate_permissions(["links.tags"]) == "invalid_permissions"

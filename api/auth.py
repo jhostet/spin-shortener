@@ -26,7 +26,9 @@ USERNAMES_INDEX_KEY = "_meta:usernames"
 # The fixed permission vocabulary maintained in code, per the pluggable-auth
 # design — reject anything outside this set rather than silently accepting
 # typos that would never actually grant anything.
-KNOWN_PERMISSIONS = frozenset({"links.create_custom_slug", "links.view_all", "links.edit_all", "users.manage"})
+KNOWN_PERMISSIONS = frozenset(
+    {"links.create_custom_slug", "links.view_all", "links.edit_all", "links.tag", "users.manage"}
+)
 
 _SHA256_DIGEST_SIZE = 32
 
