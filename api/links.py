@@ -38,7 +38,10 @@ async def allocate_random_slug(store, taken: set[str]) -> str:
     raise RuntimeError("failed to allocate a unique slug")
 
 
-async def _owned_slugs(store, username: str) -> list[str]:
+async def owned_slugs(store, username: str) -> list[str]:
+    """Shared (not module-private) — users.py's handle_delete reads it to
+    decide whether a user still owns links before allowing their deletion,
+    the same reason can_view/can_edit below are public."""
     raw = await store.get(f"owner_links:{username}")
     return json.loads(raw) if raw else []
 
@@ -60,7 +63,7 @@ async def add_slugs_to_indexes(store, owner: str, slugs: list[str]) -> None:
             all_slugs.append(slug)
     await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(all_slugs).encode("utf-8"))
 
-    owned = await _owned_slugs(store, owner)
+    owned = await owned_slugs(store, owner)
     for slug in slugs:
         if slug not in owned:
             owned.append(slug)
@@ -78,7 +81,7 @@ async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]])
 
     for owner, slugs in slugs_by_owner.items():
         to_remove = set(slugs)
-        owned = await _owned_slugs(store, owner)
+        owned = await owned_slugs(store, owner)
         owned = [slug for slug in owned if slug not in to_remove]
         await store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8"))
 
@@ -104,7 +107,7 @@ async def move_slugs_between_owners(
     """
     all_slugs = [slug for slugs in slugs_by_old_owner.values() for slug in slugs]
 
-    owned_new = await _owned_slugs(store, new_owner)
+    owned_new = await owned_slugs(store, new_owner)
     for slug in all_slugs:
         if slug not in owned_new:
             owned_new.append(slug)
@@ -114,7 +117,7 @@ async def move_slugs_between_owners(
         if old_owner == new_owner:
             continue
         to_remove = set(slugs)
-        owned_old = await _owned_slugs(store, old_owner)
+        owned_old = await owned_slugs(store, old_owner)
         owned_old = [slug for slug in owned_old if slug not in to_remove]
         await store.set(f"owner_links:{old_owner}", json.dumps(owned_old).encode("utf-8"))
 
@@ -241,7 +244,7 @@ async def handle_list(store, principal: Principal):
     if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
         slugs = await _all_slugs(store)
     else:
-        slugs = await _owned_slugs(store, principal.username)
+        slugs = await owned_slugs(store, principal.username)
     records = []
     for slug in slugs:
         record = await get_link(store, slug)

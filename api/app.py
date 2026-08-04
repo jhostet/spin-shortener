@@ -171,7 +171,8 @@ class HttpHandler(Handler):
                 return await users.handle_get(users_store, result, username)
             if method == "PATCH":
                 return await users.handle_update(users_store, result, username, request, configured_domains)
-            return await users.handle_delete(users_store, result, username)
+            links_store = await key_value.open("links")
+            return await users.handle_delete(users_store, links_store, result, username, _kv_keys)
 
         if path == "/api/admin/backup" and method == "GET":
             result = await _require_session(users_store, request)

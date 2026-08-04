@@ -23,6 +23,14 @@ SESSION_TTL_SECONDS = 8 * 60 * 60
 BOOTSTRAPPED_KEY = "_meta:bootstrapped"
 USERNAMES_INDEX_KEY = "_meta:usernames"
 
+# Used only by delete_sessions_for_user below. The three existing
+# f"session:{token}" literals (create_session, resolve_session,
+# delete_session) are deliberately left as-is — rewriting them is a
+# mechanical tidy-up with no behavioural gain. api/backup.py:43 carries its
+# own identical SESSION_PREFIX by the same duplication convention its
+# `BOOTSTRAPPED_KEY  # == auth.BOOTSTRAPPED_KEY` line documents.
+SESSION_PREFIX = "session:"
+
 # The fixed permission vocabulary maintained in code, per the pluggable-auth
 # design — reject anything outside this set rather than silently accepting
 # typos that would never actually grant anything.
@@ -228,6 +236,36 @@ async def delete_session(store, request: Request) -> None:
     token = parse_cookies(cookie_header).get("session")
     if token:
         await store.delete(f"session:{token}")
+
+
+async def delete_sessions_for_user(store, username: str, list_keys) -> int:
+    """Delete every session:<token> in `store` whose record names `username`.
+    Returns the number deleted.
+
+    `list_keys` is the same callable api/app.py passes to backup.handle_export
+    (the get-keys drain), taken as a parameter so this module stays
+    host-importable with zero spin_sdk imports.
+
+    A session value that has vanished between the key listing and the read,
+    or that is not valid JSON, is skipped rather than raised on: this runs
+    inside user deletion, and a single malformed session record must never
+    turn a delete into a 500.
+    """
+    deleted = 0
+    for key in await list_keys(store):
+        if not key.startswith(SESSION_PREFIX):
+            continue
+        raw = await store.get(key)
+        if raw is None:
+            continue
+        try:
+            session = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if session.get("username") == username:
+            await store.delete(key)
+            deleted += 1
+    return deleted
 
 
 def check_csrf(request: Request, principal: Principal) -> bool:

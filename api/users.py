@@ -7,6 +7,7 @@ import json
 from typing import Optional
 
 import auth
+import links
 from auth import Principal
 from responses import iso_now, json_response
 
@@ -172,7 +173,7 @@ async def handle_update(store, principal: Principal, username: str, request, con
     return json_response(200, _public_user(user))
 
 
-async def handle_delete(store, principal: Principal, username: str):
+async def handle_delete(store, links_store, principal: Principal, username: str, list_keys):
     if not principal.has_permission("users.manage"):
         return _forbidden()
 
@@ -182,6 +183,21 @@ async def handle_delete(store, principal: Principal, username: str):
     if username == principal.username:
         return json_response(400, {"error": "cannot_delete_self"})
 
+    owned = await links.owned_slugs(links_store, username)
+    if owned:
+        return json_response(409, {"error": "user_owns_links", "username": username, "link_count": len(owned)})
+
+    # Cross-store write order (see docs/plans/user-deletion-link-ownership.md,
+    # "Write ordering and what an interruption leaves"): links store first,
+    # then sessions, then the user record, then the usernames index. Spin KV
+    # has no transactions and no compare-and-swap, so this order is chosen so
+    # that every interruption point leaves the *stronger* invariant — a crash
+    # after this point never leaves a live session for a nonexistent user,
+    # and never leaves the user deleted with a dangling owner_links: key that
+    # a retry could no longer reach (handle_delete would 404 on the missing
+    # user record).
+    await links_store.delete(f"owner_links:{username}")
+    await auth.delete_sessions_for_user(store, username, list_keys)
     await store.delete(f"user:{username}")
     await auth.remove_username(store, username)
     return json_response(200, {"ok": True})

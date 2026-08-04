@@ -236,7 +236,7 @@ async def test_bulk_create_success_shared_created_at_and_public_shape():
 
     all_slugs = await links._all_slugs(store)
     assert set(all_slugs) == slugs
-    assert set(await links._owned_slugs(store, "alice")) == slugs
+    assert set(await links.owned_slugs(store, "alice")) == slugs
 
 
 async def test_bulk_create_body_too_large_rejected():
@@ -562,7 +562,7 @@ async def test_bulk_action_enable_disable_round_trip():
         assert record["status"] == "disabled"
 
     # Indexes are untouched by enable/disable.
-    assert set(await links._owned_slugs(store, "alice")) == {slug1, slug2}
+    assert set(await links.owned_slugs(store, "alice")) == {slug1, slug2}
 
     resp2 = await bulk.handle_bulk_action(
         store, FakeStore(), _principal(username="alice"), _action_request({"slugs": [slug1, slug2], "action": "enable"}),
@@ -588,8 +588,8 @@ async def test_bulk_action_delete_cross_owner_by_edit_all_updates_both_owner_ind
 
     assert await store.exists(f"slug:{alice_slug}") is False
     assert await store.exists(f"slug:{bob_slug}") is False
-    assert alice_slug not in await links._owned_slugs(store, "alice")
-    assert bob_slug not in await links._owned_slugs(store, "bob")
+    assert alice_slug not in await links.owned_slugs(store, "alice")
+    assert bob_slug not in await links.owned_slugs(store, "bob")
     assert await links._all_slugs(store) == []
 
 
@@ -882,8 +882,8 @@ async def test_bulk_action_reassign_success_updates_owner_and_indexes_all_links_
 
     record = json.loads(await store.get(f"slug:{alice_slug}"))
     assert record["owner"] == "bob"
-    assert alice_slug in await links._owned_slugs(store, "bob")
-    assert alice_slug not in await links._owned_slugs(store, "alice")
+    assert alice_slug in await links.owned_slugs(store, "bob")
+    assert alice_slug not in await links.owned_slugs(store, "alice")
     assert await store.get(links.ALL_SLUGS_INDEX_KEY) == all_links_before
 
 
@@ -903,6 +903,6 @@ async def test_bulk_action_reassign_two_old_owners_updates_both_old_indexes_and_
     body = json.loads(resp.body)
     assert body == {"ok": True, "action": "reassign", "count": 2, "owner": "carol"}
 
-    assert set(await links._owned_slugs(store, "carol")) == {alice_slug, bob_slug}
-    assert await links._owned_slugs(store, "alice") == []
-    assert await links._owned_slugs(store, "bob") == []
+    assert set(await links.owned_slugs(store, "carol")) == {alice_slug, bob_slug}
+    assert await links.owned_slugs(store, "alice") == []
+    assert await links.owned_slugs(store, "bob") == []

@@ -3,9 +3,10 @@ import json
 import pytest
 
 import auth
+import links
 import users
 from responses import Request
-from tests.fakes import FakeStore
+from tests.fakes import FakeStore, fake_list_keys
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -57,7 +58,8 @@ async def test_update_requires_users_manage():
 
 async def test_delete_requires_users_manage():
     store = FakeStore()
-    resp = await users.handle_delete(store, _principal(role="user", permissions=[]), "alice")
+    links_store = FakeStore()
+    resp = await users.handle_delete(store, links_store, _principal(role="user", permissions=[]), "alice", fake_list_keys)
     assert resp.status == 403
 
 
@@ -225,8 +227,9 @@ async def test_update_partial_leaves_other_fields_untouched():
 
 async def test_delete_another_user():
     store = FakeStore()
+    links_store = FakeStore()
     await _make_user(store, username="alice")
-    resp = await users.handle_delete(store, _principal(username="admin"), "alice")
+    resp = await users.handle_delete(store, links_store, _principal(username="admin"), "alice", fake_list_keys)
     assert resp.status == 200
     assert await auth.get_user(store, "alice") is None
     assert "alice" not in await auth.list_usernames(store)
@@ -234,16 +237,75 @@ async def test_delete_another_user():
 
 async def test_delete_not_found():
     store = FakeStore()
-    resp = await users.handle_delete(store, _principal(), "doesnotexist")
+    links_store = FakeStore()
+    resp = await users.handle_delete(store, links_store, _principal(), "doesnotexist", fake_list_keys)
     assert resp.status == 404
 
 
 async def test_delete_cannot_delete_self():
     store = FakeStore()
+    links_store = FakeStore()
     await _make_user(store, username="admin", password="longenough2")
-    resp = await users.handle_delete(store, _principal(username="admin"), "admin")
+    resp = await users.handle_delete(store, links_store, _principal(username="admin"), "admin", fake_list_keys)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "cannot_delete_self"
+
+
+async def test_delete_refuses_when_user_owns_links():
+    store = FakeStore()
+    links_store = FakeStore()
+    await _make_user(store, username="carol")
+    await links.add_slugs_to_indexes(links_store, "carol", ["carol-private"])
+
+    users_before = dict(store._data)
+    links_before = dict(links_store._data)
+
+    resp = await users.handle_delete(store, links_store, _principal(username="admin"), "carol", fake_list_keys)
+
+    assert resp.status == 409
+    body = json.loads(resp.body)
+    assert body == {"error": "user_owns_links", "username": "carol", "link_count": 1}
+    # Nothing written to either store on the refusal path.
+    assert store._data == users_before
+    assert links_store._data == links_before
+
+
+async def test_delete_with_empty_owner_links_key_removes_it():
+    store = FakeStore()
+    links_store = FakeStore()
+    await _make_user(store, username="carol")
+    await links_store.set("owner_links:carol", json.dumps([]).encode("utf-8"))
+
+    resp = await users.handle_delete(store, links_store, _principal(username="admin"), "carol", fake_list_keys)
+
+    assert resp.status == 200
+    assert await links_store.exists("owner_links:carol") is False
+
+
+async def test_delete_with_no_owner_links_key_deletes_cleanly():
+    store = FakeStore()
+    links_store = FakeStore()
+    await _make_user(store, username="carol")
+
+    resp = await users.handle_delete(store, links_store, _principal(username="admin"), "carol", fake_list_keys)
+
+    assert resp.status == 200
+    assert await auth.get_user(store, "carol") is None
+
+
+async def test_delete_purges_the_users_sessions_but_not_others():
+    store = FakeStore()
+    links_store = FakeStore()
+    await _make_user(store, username="carol")
+    await _make_user(store, username="dave", password="longenough2")
+    carol_token, _ = await auth.create_session(store, "carol", "local")
+    dave_token, _ = await auth.create_session(store, "dave", "local")
+
+    resp = await users.handle_delete(store, links_store, _principal(username="admin"), "carol", fake_list_keys)
+
+    assert resp.status == 200
+    assert await store.exists(f"session:{carol_token}") is False
+    assert await store.exists(f"session:{dave_token}") is True
 
 
 # --- assigned_domains ---

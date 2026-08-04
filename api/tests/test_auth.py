@@ -7,7 +7,7 @@ import pytest
 import auth
 import users
 from responses import Request
-from tests.fakes import FakeStore
+from tests.fakes import FakeStore, fake_list_keys
 
 
 def _fake_request(cookie: Optional[str] = None, csrf_header: Optional[str] = None, method: str = "GET") -> Request:
@@ -185,6 +185,42 @@ async def test_delete_session_removes_record():
     store = FakeStore()
     token, _ = await auth.create_session(store, "alice", "local")
     await auth.delete_session(store, _fake_request(cookie=f"session={token}"))
+    assert await store.exists(f"session:{token}") is False
+
+
+async def test_delete_sessions_for_user_deletes_only_that_users_sessions():
+    store = FakeStore()
+    token1, _ = await auth.create_session(store, "carol", "local")
+    token2, _ = await auth.create_session(store, "carol", "local")
+    token3, _ = await auth.create_session(store, "dave", "local")
+    await auth.put_user(store, {
+        "username": "dave", "password_hash": "x", "role": "user",
+        "permissions": [], "provider": "local", "disabled": False,
+    })
+
+    deleted = await auth.delete_sessions_for_user(store, "carol", fake_list_keys)
+
+    assert deleted == 2
+    assert await store.exists(f"session:{token1}") is False
+    assert await store.exists(f"session:{token2}") is False
+    assert await store.exists(f"session:{token3}") is True
+    assert await auth.resolve_session(store, _fake_request(cookie=f"session={token3}")) is not None
+
+
+async def test_delete_sessions_for_user_no_sessions_returns_zero():
+    store = FakeStore()
+    assert await auth.delete_sessions_for_user(store, "carol", fake_list_keys) == 0
+
+
+async def test_delete_sessions_for_user_skips_malformed_session_value():
+    store = FakeStore()
+    await store.set("session:bogus", b"not json")
+    token, _ = await auth.create_session(store, "carol", "local")
+
+    deleted = await auth.delete_sessions_for_user(store, "carol", fake_list_keys)
+
+    assert deleted == 1
+    assert await store.exists("session:bogus") is True
     assert await store.exists(f"session:{token}") is False
 
 

@@ -248,7 +248,7 @@ async def test_delete_owner_succeeds_and_removes_index():
     resp = await links.handle_delete(store, owner, slug)
     assert resp.status == 200
     assert await store.exists(f"slug:{slug}") is False
-    assert slug not in await links._owned_slugs(store, "alice")
+    assert slug not in await links.owned_slugs(store, "alice")
     assert slug not in await links._all_slugs(store)
 
 
@@ -270,7 +270,7 @@ async def test_delete_edit_all_permission_can_delete_others_links():
     resp = await links.handle_delete(store, editor, slug)
     assert resp.status == 200
     assert await store.exists(f"slug:{slug}") is False
-    assert slug not in await links._owned_slugs(store, "alice")
+    assert slug not in await links.owned_slugs(store, "alice")
 
 
 async def test_delete_view_all_permission_alone_still_forbidden():
@@ -669,7 +669,7 @@ async def test_add_slugs_to_indexes_writes_all_links_and_owner_once():
     store = FakeStore()
     await links.add_slugs_to_indexes(store, "alice", ["s1", "s2", "s3"])
     assert await links._all_slugs(store) == ["s1", "s2", "s3"]
-    assert await links._owned_slugs(store, "alice") == ["s1", "s2", "s3"]
+    assert await links.owned_slugs(store, "alice") == ["s1", "s2", "s3"]
 
 
 async def test_add_slugs_to_indexes_skips_already_present_and_preserves_order():
@@ -677,7 +677,7 @@ async def test_add_slugs_to_indexes_skips_already_present_and_preserves_order():
     await links.add_slugs_to_indexes(store, "alice", ["s1"])
     await links.add_slugs_to_indexes(store, "alice", ["s1", "s2"])
     assert await links._all_slugs(store) == ["s1", "s2"]
-    assert await links._owned_slugs(store, "alice") == ["s1", "s2"]
+    assert await links.owned_slugs(store, "alice") == ["s1", "s2"]
 
 
 async def test_remove_slugs_from_indexes_multi_owner():
@@ -688,8 +688,8 @@ async def test_remove_slugs_from_indexes_multi_owner():
     await links.remove_slugs_from_indexes(store, {"alice": ["a1"], "bob": ["b1"]})
 
     assert await links._all_slugs(store) == ["a2"]
-    assert await links._owned_slugs(store, "alice") == ["a2"]
-    assert await links._owned_slugs(store, "bob") == []
+    assert await links.owned_slugs(store, "alice") == ["a2"]
+    assert await links.owned_slugs(store, "bob") == []
 
 
 async def test_move_slugs_between_owners_all_links_byte_identical():
@@ -709,7 +709,7 @@ async def test_move_slugs_between_owners_same_owner_guard_leaves_slug_present():
 
     await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "alice")
 
-    assert await links._owned_slugs(store, "alice") == ["a1"]
+    assert await links.owned_slugs(store, "alice") == ["a1"]
 
 
 async def test_move_slugs_between_owners_no_duplicate_when_already_in_new_owner_index():
@@ -719,8 +719,8 @@ async def test_move_slugs_between_owners_no_duplicate_when_already_in_new_owner_
 
     await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob")
 
-    assert await links._owned_slugs(store, "bob") == ["a1"]
-    assert await links._owned_slugs(store, "alice") == []
+    assert await links.owned_slugs(store, "bob") == ["a1"]
+    assert await links.owned_slugs(store, "alice") == []
 
 
 async def test_move_slugs_between_owners_idempotent():
@@ -734,8 +734,8 @@ async def test_move_slugs_between_owners_idempotent():
     twice = {key: value for key, value in store._data.items()}
 
     assert once == twice
-    assert await links._owned_slugs(store, "bob") == ["a1", "a2"]
-    assert await links._owned_slugs(store, "alice") == []
+    assert await links.owned_slugs(store, "bob") == ["a1", "a2"]
+    assert await links.owned_slugs(store, "alice") == []
 
 
 async def test_move_slugs_between_owners_two_old_owners_one_write_each(monkeypatch):
@@ -758,9 +758,9 @@ async def test_move_slugs_between_owners_two_old_owners_one_write_each(monkeypat
     assert set_calls.count("owner_links:alice") == 1
     assert set_calls.count("owner_links:bob") == 1
     assert "all_links" not in set_calls
-    assert await links._owned_slugs(store, "carol") == ["a1", "b1"]
-    assert await links._owned_slugs(store, "alice") == []
-    assert await links._owned_slugs(store, "bob") == []
+    assert await links.owned_slugs(store, "carol") == ["a1", "b1"]
+    assert await links.owned_slugs(store, "alice") == []
+    assert await links.owned_slugs(store, "bob") == []
 
 
 async def test_index_write_once_property_for_bulk_style_batch(monkeypatch):
