@@ -231,6 +231,26 @@ Both scenarios are pinned by `api/tests/test_user_deletion.py` rather than merel
 - The dashboard's `#owner-filter` is **derived from the `owner` field on the loaded records, not from `owner_links:`**, so it is ownership-scoped for free and additionally surfaces links whose owner no longer exists. **That makes it the repair path** for any deployment that orphaned links before this gate existed; those owners render with a `— deleted account` marker reusing the existing `status-disabled` treatment (no new token).
 - `?owner=` is **consumed once**. A reload after a bulk action keeps whatever filter the operator has since chosen instead of snapping back to the URL.
 
+## Destination URL policy
+
+Admin-managed rules on what a link may point at, enforced at authoring time. Pure logic in `api/urlpolicy.py`; the admin page is `gui/admin/url-policy.html`, reached by an in-body anchor on `admin/users.html` (the nav is full). Plan: `docs/plans/destination-url-policy.md`.
+
+**Why it exists:** a short link *launders* its destination. A recipient sees `go.example.com/r/promo` and cannot tell where it leads, so a bad destination borrows the organization's credibility. Before this, `links.is_valid_target_url` accepted any `http`/`https` URL with a netloc, and any account could shorten anything.
+
+**Rules live in one `_meta:url_policy` key in the `links` store.** An absent key means everything is allowed, so no deployment changes behaviour on upgrade and nothing needs a migration. **No rules are seeded** — a list shipped in the repo needs a deploy to change and carries false-positive risk, the same reasoning that retired the banned-word slug list.
+
+**Precedence is one sentence: a deny rule always wins, then an allow rule or a `default_action` of `allow`, otherwise blocked.** This was chosen over "most specific match wins" for one reason — **a misunderstood specificity rule fails open, and deny-wins fails closed.** Do not "improve" it into specificity ordering.
+
+**Matching covers a host and every subdomain of it**, via `host == rule or host.endswith("." + rule)`. The dot is load-bearing: a bare `endswith("example.com")` would also match `notexample.com` and silently mis-scope every rule. Verified live in both directions — under a deny rule for `example.com`, `evil.example.com` and `a.b.example.com` are blocked while `notexample.com` and `myexample.com` are not; and under an allow-list with `default_action: "deny"`, the classic bypasses `example.com.attacker.net` and `user@example.com.evil.net` are both blocked (the host comes from `urlparse(...).hostname`, so userinfo can't spoof it).
+
+**Enforced at all three authoring paths — `links.handle_create`, `links.handle_update` and `bulk.handle_bulk_create`.** A policy enforced in two of three places is not enforced, and `api/tests/test_url_policy_enforcement.py` exists to prove all three reject the same destination and write nothing. **`validate_bulk_rows` takes the policy as a required fourth parameter with no default** — deliberately, because a default is exactly how the bulk path would stay silently open. Rejections carry `host` and `reason` so the GUI can name what caught the link rather than saying "not allowed".
+
+**Existing links that violate a newly-added rule are reported, never mutated.** `GET /api/admin/url-policy/violations` lists them; remediation is the operator's existing bulk Disable/Delete. Nothing is retroactively protected until a human acts — that is the accepted trade, taken so that a config edit can never become an unpreviewable bulk mutation with no compare-and-swap and no undo. It is the same posture restore and the consistency check already hold. **Violations are deliberately *not* a thirteenth consistency check:** `consistency.py` is scoped to structural drift, a policy finding would pin `ok: false` on a structurally flawless store, and its "re-run to confirm" and "never repairs" framings are both wrong for policy.
+
+**`redirect` is untouched.** Enforcement is at authoring time; the hot path keeps its single KV read per click and never consults the policy. A link created before a rule existed keeps resolving.
+
+**`_meta:url_policy` carries both obligations a new KV key type now imposes** (see "KV consistency check"): `consistency.py` recognises its shape, and `backup.py` round-trips it — verified byte-identically, because otherwise restoring a backup would silently wipe an operator's policy.
+
 ## KV consistency check
 
 `GET /api/admin/consistency` walks the `links` and `users` stores and reports where the indexes have drifted from the records they describe. **It reports; it never repairs** — there is no `?fix=`, no repair endpoint, and the walk performs no writes at all. Gated on `users.manage`. Pure logic in `api/consistency.py` (zero WASI SDK imports, `store` objects and the `list_keys` callable passed in, `api/backup.py` as the model); the GUI is a third article on `gui/admin/backup.html`. Plan: `docs/plans/kv-consistency-check.md`.
