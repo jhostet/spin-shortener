@@ -53,6 +53,7 @@ const api = {
   get: (path) => apiCall(path),
   post: (path, body) => apiCall(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
   patch: (path, body) => apiCall(path, { method: "PATCH", body: body !== undefined ? JSON.stringify(body) : undefined }),
+  put: (path, body) => apiCall(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined }),
   delete: (path) => apiCall(path, { method: "DELETE" }),
 };
 
@@ -169,6 +170,7 @@ const ERROR_MESSAGES = {
   no_tags: "Enter at least one tag.",
   unknown_owner: "That user doesn't exist — pick someone from the list.",
   user_owns_links: "That user still owns links — reassign or delete them first.",
+  destination_not_allowed: "That destination isn't allowed by this site's URL policy.",
 };
 
 // `overrides` lets one call site's copy win over the shared map for a code

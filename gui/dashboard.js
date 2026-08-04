@@ -479,7 +479,8 @@ async function handleEditFormSubmit(form) {
 
   const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, status, tags: tagList });
   if (!ok) {
-    errorEl.textContent = friendlyError(data, "Could not update link.");
+    const msg = friendlyError(data, "Could not update link.");
+    errorEl.textContent = data && data.host ? `${msg} (${data.host})` : msg;
     return;
   }
 
@@ -745,6 +746,7 @@ const BULK_ROW_MESSAGES = {
   duplicate_slug_in_submission: "This short link appears earlier in your list.",
   custom_slug_forbidden: "You don't have permission to choose your own short links — leave the first column blank.",
   invalid_target_url: "Not a valid destination URL (include https://). If this is a header row, delete it.",
+  destination_not_allowed: "This destination isn't allowed by the site's URL policy.",
 };
 
 // Mirrors api/bulk.py's MAX_BULK_BODY_BYTES so a large file can be rejected
@@ -889,9 +891,10 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 
   const { ok, data } = await api.post("/links", payload);
   if (!ok) {
-    errorEl.textContent = friendlyError(data, "Could not create link.", {
+    const msg = friendlyError(data, "Could not create link.", {
       invalid_password: "Link passwords must be at least 4 characters.",
     });
+    errorEl.textContent = data && data.host ? `${msg} (${data.host})` : msg;
     return;
   }
   document.getElementById("target-url").value = "";

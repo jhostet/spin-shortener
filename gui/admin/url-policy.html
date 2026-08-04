@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spin-shortener — Destination URL policy</title>
+  <script src="../theme-init.js"></script>
+  <link rel="stylesheet" href="../vendor/pico.min.css" />
+  <link rel="stylesheet" href="../theme.css" />
+</head>
+<body>
+  <header id="app-header" class="container"></header>
+
+  <main class="container">
+    <h1>Destination URL policy</h1>
+    <p id="forbidden-notice" class="form-error" role="alert" hidden>
+      You don't have permission to manage the destination URL policy.
+    </p>
+
+    <div id="admin-content">
+      <article>
+        <h2>How destinations are checked</h2>
+        <p>
+          Every link's destination is checked against this policy when it's
+          created, and again whenever its destination is changed. Precedence
+          is always the same: <strong>a deny rule always wins; otherwise an
+          allow rule (or a default of Allow) lets it through; otherwise it's
+          blocked.</strong>
+        </p>
+        <p>
+          A rule matches its host and <strong>every subdomain of it</strong>,
+          nothing else. A rule for <code>example.com</code> also covers
+          <code>shop.example.com</code> and <code>evil.example.com</code> —
+          but not <code>notexample.com</code>. Scheme, port and path are never
+          part of a rule; only the host is checked.
+        </p>
+        <p>
+          Two sharp edges worth knowing: an allow rule for a shared-hosting
+          domain (like <code>github.io</code> or <code>s3.amazonaws.com</code>)
+          allows everyone on it, not just the subdomain you meant — the fix is
+          a deny rule for the specific subdomain, which wins. And an exception
+          can't be carved out of a denied tree — a deny rule beats every allow
+          rule beneath it, so if you need "block this domain except for one
+          subdomain," switch the default to Block and enumerate what's allowed
+          instead.
+        </p>
+      </article>
+
+      <article>
+        <h2>Rules</h2>
+        <p>
+          <label for="default-action">Default action
+            <select id="default-action">
+              <option value="allow">Allow — only listed hosts are blocked</option>
+              <option value="deny">Block — only listed hosts are allowed</option>
+            </select>
+          </label>
+        </p>
+        <p id="default-action-summary"></p>
+
+        <figure>
+          <table id="rules-table">
+            <thead>
+              <tr>
+                <th>Host</th>
+                <th>Action</th>
+                <th>Note</th>
+                <th>Added</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="rules-table-body">
+              <tr id="rules-empty-row"><td colspan="5">No rules yet.</td></tr>
+            </tbody>
+          </table>
+        </figure>
+
+        <div class="grid">
+          <label for="rule-host">Host
+            <input type="text" id="rule-host" placeholder="example.com" autocomplete="off" />
+          </label>
+          <label for="rule-action">Action
+            <select id="rule-action">
+              <option value="deny">Block</option>
+              <option value="allow">Allow</option>
+            </select>
+          </label>
+          <label for="rule-note">Note (optional)
+            <input type="text" id="rule-note" autocomplete="off" />
+          </label>
+        </div>
+        <button type="button" id="rule-add" class="outline">Add rule</button>
+
+        <p id="policy-error" class="form-error" role="alert"></p>
+        <p id="policy-success" class="form-success" aria-live="polite" hidden></p>
+        <button type="button" id="policy-save">Save policy</button>
+      </article>
+
+      <article>
+        <h2>Existing links that don't match</h2>
+        <p>
+          <strong>Nothing here has been changed or disabled — these links
+          still work.</strong> This is a read-only report of every live link
+          whose destination the current policy would refuse if it were
+          created today. To act on it, use the dashboard's bulk
+          <strong>Disable</strong> or <strong>Delete</strong> on the links you
+          select there.
+        </p>
+        <button type="button" id="violations-btn" class="outline">Run check</button>
+        <p id="violations-error" class="form-error" role="alert"></p>
+        <div id="violations-result" aria-live="polite"></div>
+      </article>
+    </div>
+  </main>
+
+  <script src="../app.js"></script>
+  <script src="url-policy.js"></script>
+</body>
+</html>
