@@ -209,6 +209,28 @@ Links carry free-form tags, and a `users.manage` holder can reassign a link's ow
 
 **Bulk tag, untag and reassign share the 50-slug `MAX_BULK_ROWS` cap** with the existing actions, and are all-or-nothing like them: if adding a tag would push any one link past 10, nothing is written and every offending slug is reported. The dashboard disables all six bulk buttons past the cap and tells the user to narrow the filter, since a tag filter is the easy way to select 200 links at once.
 
+## User deletion and link ownership
+
+**`DELETE /api/users/{username}` refuses with `409 {"error": "user_owns_links", "username", "link_count"}` while the user still owns links**, writing nothing to either store. The operator disposes of the links first — reassign or delete, via the bulk actions above — and then deletes the account. Plan: `docs/plans/user-deletion-link-ownership.md`.
+
+**This exists because deleting a user used to leave two things behind, both of which were reproduced against a running app before the fix.**
+
+1. **Link inheritance.** The link records kept `owner: "<deleted-username>"` and `owner_links:<deleted-username>` survived in the `links` store. **There is no user identity anywhere beyond the username string** — `links.can_edit` is `record["owner"] == principal.username` and `handle_list` reads `owner_links:<principal.username>` — so recreating the username handed the new account every link the old one owned, editable and repointable, while the short URL kept resolving for everyone who already had it.
+2. **Session revival, the worse one.** `auth.resolve_session` builds the `Principal` from the **current** `user:` record and keys only on the username stored inside the session, and deletion never purged `session:*`. A deleted user's cookie correctly 401'd *while the username was absent* — and then came back to life the moment the name was recreated, carrying **the new account's role and permissions**. A plain user's revoked cookie was observed returning as an admin's, without its holder ever learning the new password. Deleting a user was never actually revoking their sessions; it was making them temporarily unresolvable.
+
+Both scenarios are pinned by `api/tests/test_user_deletion.py` rather than merely fixed, and both are mutation-verified: removing the 409 gate fails the first, removing the session purge fails the second.
+
+**There is deliberately no tombstone or reserved-username list.** Purging sessions at deletion is what makes username reuse *safe*, which is a better property than making it forbidden — a reserved list would grow forever, would need its own admin UI to ever release a name, and would still not have fixed the session bug. `auth.delete_sessions_for_user(store, username, list_keys)` takes the key-listing callable as a parameter, the same way `backup.py` does, so `auth.py` stays free of `spin_sdk` imports and host-testable.
+
+**Cross-store write ordering on the success path** (deletion now touches both the `links` and `users` stores, with no transaction and no compare-and-swap): `owner_links:` → sessions → `user:` → `_meta:usernames`. Every interruption point leaves the stronger invariant. In particular the reverse order is wrong twice over: it could leave a live session for a nonexistent user, and it could leave the user record deleted with a dangling `owner_links:` key that **a retry can no longer reach**, because `handle_delete` would then 404 on the missing user before getting to the cleanup.
+
+**`links.owned_slugs` is public** (it lost its underscore when this landed) because `users.py` reads it to make the 409 decision — the same "shared, not module-private" convention `can_view`/`can_edit` already carry.
+
+**The GUI turns the refusal into an action.** `gui/admin/users.html` names the username and count, and offers a link to `dashboard.html?owner=<username>` **only when the viewer holds admin/`links.view_all`/`links.edit_all`** — an operator with `users.manage` alone would land on an empty dashboard, so they get the missing permission named instead of a dead link. That is accepted rather than fixed: such an operator can already self-promote through `handle_update`.
+
+- The dashboard's `#owner-filter` is **derived from the `owner` field on the loaded records, not from `owner_links:`**, so it is ownership-scoped for free and additionally surfaces links whose owner no longer exists. **That makes it the repair path** for any deployment that orphaned links before this gate existed; those owners render with a `— deleted account` marker reusing the existing `status-disabled` treatment (no new token).
+- `?owner=` is **consumed once**. A reload after a bulk action keeps whatever filter the operator has since chosen instead of snapping back to the URL.
+
 ## KV backup and restore
 
 `GET /api/admin/backup` downloads a JSON snapshot of the `links`, `users` and `analytics` stores; `POST /api/admin/restore` replaces them from one. Both live in `api/backup.py` (pure logic, zero `spin_sdk` imports) and are routed on exact paths from `api/app.py`. The GUI is `gui/admin/backup.html` + `backup.js`. Plan: `docs/plans/kv-backup-restore.md`.
