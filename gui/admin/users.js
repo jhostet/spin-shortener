@@ -65,13 +65,32 @@ function renderNewDomainsFieldset() {
   `;
 }
 
-function editRowHtml(user) {
-  const checkboxes = ALL_PERMISSIONS.map((perm) => `
+// One source for both permission fieldsets. The create form used to hardcode
+// its checkboxes in users.html while the edit form generated them from
+// ALL_PERMISSIONS — so the two drifted, and links.tag shipped grantable by
+// editing a user but not by creating one. Same shape as domainCheckboxesHtml
+// above, for the same reason.
+function permissionCheckboxesHtml(className, selected) {
+  return ALL_PERMISSIONS.map((perm) => `
     <label>
-      <input type="checkbox" class="edit-permission" value="${escapeHtml(perm)}" ${user.permissions.includes(perm) ? "checked" : ""} />
+      <input type="checkbox" class="${className}" value="${escapeHtml(perm)}" ${selected.includes(perm) ? "checked" : ""} />
       ${escapeHtml(PERMISSION_LABELS[perm] || perm)}
     </label>
   `).join("");
+}
+
+// Appends rather than replacing innerHTML: the <legend> is a long-lived node
+// captured once at the bottom of this file and handed to
+// updatePermissionsFieldset on every role change, so regenerating the
+// fieldset wholesale would leave that reference pointing at a detached node.
+function renderNewPermissionsFieldset() {
+  document
+    .getElementById("new-permissions-fieldset")
+    .insertAdjacentHTML("beforeend", permissionCheckboxesHtml("new-permission", []));
+}
+
+function editRowHtml(user) {
+  const checkboxes = permissionCheckboxesHtml("edit-permission", user.permissions);
 
   return `
     <tr class="edit-row" data-username="${escapeHtml(user.username)}">
@@ -308,6 +327,8 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   successEl.hidden = false;
   loadUsers();
 });
+
+renderNewPermissionsFieldset();
 
 const newRoleSelect = document.getElementById("new-role");
 const newPermissionsFieldset = document.getElementById("new-permissions-fieldset");

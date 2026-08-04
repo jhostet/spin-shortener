@@ -36,11 +36,10 @@
               </select>
             </label>
             <fieldset id="new-permissions-fieldset">
+              <!-- Checkboxes are appended by users.js from ALL_PERMISSIONS,
+                   the same list the edit form uses. They were hardcoded here
+                   once and drifted out of sync with it. -->
               <legend id="new-permissions-legend">Permissions (for role "user")</legend>
-              <label><input type="checkbox" class="new-permission" value="links.create_custom_slug" /> Create custom slugs</label>
-              <label><input type="checkbox" class="new-permission" value="links.view_all" /> View all links</label>
-              <label><input type="checkbox" class="new-permission" value="links.edit_all" /> Edit all links</label>
-              <label><input type="checkbox" class="new-permission" value="users.manage" /> Manage users</label>
             </fieldset>
             <fieldset id="new-domains-fieldset" hidden></fieldset>
           </div>
