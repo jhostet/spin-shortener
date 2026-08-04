@@ -460,42 +460,42 @@ def _action_request(payload):
 
 async def test_bulk_action_invalid_action():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": ["a"], "action": "bogus"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": ["a"], "action": "bogus"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_action"
 
 
 async def test_bulk_action_missing_action():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": ["a"]}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": ["a"]}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_action"
 
 
 async def test_bulk_action_no_slugs_empty_list():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": [], "action": "delete"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": [], "action": "delete"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_slugs"
 
 
 async def test_bulk_action_no_slugs_not_a_list():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": "a", "action": "delete"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": "a", "action": "delete"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_slugs"
 
 
 async def test_bulk_action_no_slugs_non_string_member():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": ["a", 1], "action": "delete"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": ["a", 1], "action": "delete"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_slugs"
 
 
 async def test_bulk_action_duplicate_slug_rejected():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": ["a", "a"], "action": "delete"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": ["a", "a"], "action": "delete"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "duplicate_slug"
 
@@ -503,7 +503,7 @@ async def test_bulk_action_duplicate_slug_rejected():
 async def test_bulk_action_too_many_slugs_carries_both_numbers():
     store = FakeStore()
     slugs = [f"s{i}" for i in range(bulk.MAX_BULK_ROWS + 3)]
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": slugs, "action": "delete"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": slugs, "action": "delete"}))
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body["error"] == "too_many_rows"
@@ -513,7 +513,7 @@ async def test_bulk_action_too_many_slugs_carries_both_numbers():
 
 async def test_bulk_action_not_found_row_error():
     store = FakeStore()
-    resp = await bulk.handle_bulk_action(store, _principal(), _action_request({"slugs": ["missing"], "action": "delete"}))
+    resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": ["missing"], "action": "delete"}))
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body["error"] == "bulk_validation_failed"
@@ -524,7 +524,7 @@ async def test_bulk_action_forbidden_row_error():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
     resp = await bulk.handle_bulk_action(
-        store, _principal(username="bob"), _action_request({"slugs": [slug], "action": "delete"}),
+        store, FakeStore(), _principal(username="bob"), _action_request({"slugs": [slug], "action": "delete"}),
     )
     assert resp.status == 400
     body = json.loads(resp.body)
@@ -538,7 +538,7 @@ async def test_bulk_action_all_or_nothing_leaves_store_unchanged():
     before = {key: value for key, value in store._data.items()}
 
     resp = await bulk.handle_bulk_action(
-        store, _principal(username="alice"),
+        store, FakeStore(), _principal(username="alice"),
         _action_request({"slugs": [good_slug, "missing"], "action": "delete"}),
     )
     assert resp.status == 400
@@ -552,7 +552,7 @@ async def test_bulk_action_enable_disable_round_trip():
     slug2 = await _make_link(store, owner="alice")
 
     resp = await bulk.handle_bulk_action(
-        store, _principal(username="alice"), _action_request({"slugs": [slug1, slug2], "action": "disable"}),
+        store, FakeStore(), _principal(username="alice"), _action_request({"slugs": [slug1, slug2], "action": "disable"}),
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -565,7 +565,7 @@ async def test_bulk_action_enable_disable_round_trip():
     assert set(await links._owned_slugs(store, "alice")) == {slug1, slug2}
 
     resp2 = await bulk.handle_bulk_action(
-        store, _principal(username="alice"), _action_request({"slugs": [slug1, slug2], "action": "enable"}),
+        store, FakeStore(), _principal(username="alice"), _action_request({"slugs": [slug1, slug2], "action": "enable"}),
     )
     assert resp2.status == 200
     for slug in (slug1, slug2):
@@ -580,7 +580,7 @@ async def test_bulk_action_delete_cross_owner_by_edit_all_updates_both_owner_ind
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
     resp = await bulk.handle_bulk_action(
-        store, editor, _action_request({"slugs": [alice_slug, bob_slug], "action": "delete"}),
+        store, FakeStore(), editor, _action_request({"slugs": [alice_slug, bob_slug], "action": "delete"}),
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -609,7 +609,7 @@ async def test_bulk_action_delete_writes_indexes_exactly_once_per_owner(monkeypa
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
     resp = await bulk.handle_bulk_action(
-        store, editor, _action_request({"slugs": alice_slugs + bob_slugs, "action": "delete"}),
+        store, FakeStore(), editor, _action_request({"slugs": alice_slugs + bob_slugs, "action": "delete"}),
     )
     assert resp.status == 200
     assert set_calls.count("all_links") == 1
@@ -620,23 +620,11 @@ async def test_bulk_action_delete_writes_indexes_exactly_once_per_owner(monkeypa
 # --- handle_bulk_action: tag / untag ---
 
 
-async def test_bulk_action_reassign_is_a_known_action_but_not_implemented_yet():
-    store = FakeStore()
-    slug = await _make_link(store, owner="alice")
-    resp = await bulk.handle_bulk_action(
-        store, _principal(username="alice"),
-        _action_request({"slugs": [slug], "action": "reassign", "owner": "bob"}),
-    )
-    assert resp.status == 501
-    # And, crucially, the delete branch must not have run.
-    assert await store.exists(f"slug:{slug}") is True
-
-
 async def test_bulk_action_tag_requires_links_tag_permission():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
     resp = await bulk.handle_bulk_action(
-        store, _principal(username="alice"),
+        store, FakeStore(), _principal(username="alice"),
         _action_request({"slugs": [slug], "action": "tag", "tags": ["sale"]}),
     )
     assert resp.status == 403
@@ -650,7 +638,7 @@ async def test_bulk_action_tag_no_tags_rejected():
     slug = await _make_link(store, owner="alice")
     tagger = _principal(username="alice", permissions=["links.tag"])
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": []}),
+        store, FakeStore(), tagger, _action_request({"slugs": [slug], "action": "tag", "tags": []}),
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_tags"
@@ -661,7 +649,7 @@ async def test_bulk_action_tag_invalid_tag_rejected():
     slug = await _make_link(store, owner="alice")
     tagger = _principal(username="alice", permissions=["links.tag"])
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["Bad Tag"]}),
+        store, FakeStore(), tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["Bad Tag"]}),
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_tag"
@@ -674,7 +662,7 @@ async def test_bulk_action_tag_holder_without_edit_all_forbidden_on_others_link_
     before = {key: value for key, value in store._data.items()}
 
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [alice_slug], "action": "tag", "tags": ["sale"]}),
+        store, FakeStore(), tagger, _action_request({"slugs": [alice_slug], "action": "tag", "tags": ["sale"]}),
     )
     assert resp.status == 400
     body = json.loads(resp.body)
@@ -692,7 +680,7 @@ async def test_bulk_action_tag_success_normalizes_bumps_updated_at_and_carries_t
     before = json.loads(await store.get(f"slug:{slug}"))
 
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["Q4", "SALE"]}),
+        store, FakeStore(), tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["Q4", "SALE"]}),
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -709,7 +697,7 @@ async def test_bulk_action_tag_re_tagging_produces_no_duplicate():
     tagger = _principal(username="alice", permissions=["links.tag"])
 
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["sale"]}),
+        store, FakeStore(), tagger, _action_request({"slugs": [slug], "action": "tag", "tags": ["sale"]}),
     )
     assert resp.status == 200
     record = json.loads(await store.get(f"slug:{slug}"))
@@ -722,7 +710,7 @@ async def test_bulk_action_untag_absent_tag_is_a_no_op_returning_200():
     tagger = _principal(username="alice", permissions=["links.tag"])
 
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [slug], "action": "untag", "tags": ["nope"]}),
+        store, FakeStore(), tagger, _action_request({"slugs": [slug], "action": "untag", "tags": ["nope"]}),
     )
     assert resp.status == 200
     record = json.loads(await store.get(f"slug:{slug}"))
@@ -735,7 +723,7 @@ async def test_bulk_action_untag_removes_tag():
     tagger = _principal(username="alice", permissions=["links.tag"])
 
     resp = await bulk.handle_bulk_action(
-        store, tagger, _action_request({"slugs": [slug], "action": "untag", "tags": ["q4"]}),
+        store, FakeStore(), tagger, _action_request({"slugs": [slug], "action": "untag", "tags": ["q4"]}),
     )
     assert resp.status == 200
     record = json.loads(await store.get(f"slug:{slug}"))
@@ -751,7 +739,7 @@ async def test_bulk_action_tag_cap_violation_on_one_slug_leaves_store_byte_ident
     before = {key: value for key, value in store._data.items()}
 
     resp = await bulk.handle_bulk_action(
-        store, tagger,
+        store, FakeStore(), tagger,
         _action_request({"slugs": [over_cap_slug, fine_slug], "action": "tag", "tags": ["one-more", "two-more"]}),
     )
     assert resp.status == 400
@@ -761,3 +749,138 @@ async def test_bulk_action_tag_cap_violation_on_one_slug_leaves_store_byte_ident
 
     after = {key: value for key, value in store._data.items()}
     assert after == before
+
+
+# --- handle_bulk_action: reassign ---
+
+
+async def _seed_user(users_store, username, disabled=False):
+    await auth.put_user(users_store, {
+        "username": username,
+        "password_hash": None,
+        "role": "user",
+        "permissions": [],
+        "disabled": disabled,
+        "provider": "local",
+    })
+
+
+async def test_bulk_action_reassign_requires_owner_field():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    manager = _principal(username="mgr", permissions=["users.manage"])
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), manager, _action_request({"slugs": [slug], "action": "reassign"}),
+    )
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_owner"
+
+
+async def test_bulk_action_reassign_unknown_owner_writes_nothing():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    before = {key: value for key, value in store._data.items()}
+    manager = _principal(username="mgr", permissions=["users.manage"])
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), manager, _action_request({"slugs": [slug], "action": "reassign", "owner": "ghost"}),
+    )
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body == {"error": "unknown_owner", "owner": "ghost"}
+    after = {key: value for key, value in store._data.items()}
+    assert after == before
+
+
+async def test_bulk_action_reassign_requires_users_manage_permission():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    users_store = FakeStore()
+    await _seed_user(users_store, "bob")
+
+    resp = await bulk.handle_bulk_action(
+        store, users_store, _principal(username="alice"),
+        _action_request({"slugs": [slug], "action": "reassign", "owner": "bob"}),
+    )
+    assert resp.status == 403
+    assert json.loads(resp.body) == {"error": "forbidden", "required_permission": "users.manage"}
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["owner"] == "alice"
+
+
+async def test_bulk_action_reassign_disabled_user_is_an_acceptable_target():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    users_store = FakeStore()
+    await _seed_user(users_store, "bob", disabled=True)
+    manager = _principal(username="mgr", permissions=["users.manage"])
+
+    resp = await bulk.handle_bulk_action(
+        store, users_store, manager, _action_request({"slugs": [slug], "action": "reassign", "owner": "bob"}),
+    )
+    assert resp.status == 200
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["owner"] == "bob"
+
+
+async def test_bulk_action_reassign_skips_per_row_can_edit_but_keeps_not_found():
+    store = FakeStore()
+    alice_slug = await _make_link(store, owner="alice")
+    users_store = FakeStore()
+    await _seed_user(users_store, "bob")
+    manager = _principal(username="mgr", permissions=["users.manage"])  # no links.edit_all
+
+    resp = await bulk.handle_bulk_action(
+        store, users_store, manager,
+        _action_request({"slugs": [alice_slug, "missing"], "action": "reassign", "owner": "bob"}),
+    )
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body == {"error": "bulk_validation_failed", "row_errors": [{"slug": "missing", "error": "not_found"}]}
+    # Nothing written — this is still all-or-nothing.
+    record = json.loads(await store.get(f"slug:{alice_slug}"))
+    assert record["owner"] == "alice"
+
+
+async def test_bulk_action_reassign_success_updates_owner_and_indexes_all_links_unchanged():
+    store = FakeStore()
+    alice_slug = await _make_link(store, owner="alice")
+    users_store = FakeStore()
+    await _seed_user(users_store, "bob")
+    manager = _principal(username="mgr", permissions=["users.manage"])
+    all_links_before = await store.get(links.ALL_SLUGS_INDEX_KEY)
+
+    resp = await bulk.handle_bulk_action(
+        store, users_store, manager,
+        _action_request({"slugs": [alice_slug], "action": "reassign", "owner": "bob"}),
+    )
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body == {"ok": True, "action": "reassign", "count": 1, "owner": "bob"}
+
+    record = json.loads(await store.get(f"slug:{alice_slug}"))
+    assert record["owner"] == "bob"
+    assert alice_slug in await links._owned_slugs(store, "bob")
+    assert alice_slug not in await links._owned_slugs(store, "alice")
+    assert await store.get(links.ALL_SLUGS_INDEX_KEY) == all_links_before
+
+
+async def test_bulk_action_reassign_two_old_owners_updates_both_old_indexes_and_new_one():
+    store = FakeStore()
+    alice_slug = await _make_link(store, owner="alice")
+    bob_slug = await _make_link(store, owner="bob")
+    users_store = FakeStore()
+    await _seed_user(users_store, "carol")
+    manager = _principal(username="mgr", permissions=["users.manage"])
+
+    resp = await bulk.handle_bulk_action(
+        store, users_store, manager,
+        _action_request({"slugs": [alice_slug, bob_slug], "action": "reassign", "owner": "carol"}),
+    )
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body == {"ok": True, "action": "reassign", "count": 2, "owner": "carol"}
+
+    assert set(await links._owned_slugs(store, "carol")) == {alice_slug, bob_slug}
+    assert await links._owned_slugs(store, "alice") == []
+    assert await links._owned_slugs(store, "bob") == []

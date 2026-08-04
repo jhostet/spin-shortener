@@ -257,7 +257,7 @@ async def handle_bulk_create(store, principal, request):
     })
 
 
-async def handle_bulk_action(store, principal, request):
+async def handle_bulk_action(store, users_store, principal, request):
     try:
         payload = json.loads(request.body or b"{}")
     except json.JSONDecodeError:
@@ -277,9 +277,15 @@ async def handle_bulk_action(store, principal, request):
     if len(slugs) > MAX_BULK_ROWS:
         return json_response(400, {"error": "too_many_rows", "max_rows": MAX_BULK_ROWS, "row_count": len(slugs)})
 
+    new_owner: str | None = None
     if action == "reassign":
-        # Owner-move logic lands in a later task; see TASKS.md.
-        return json_response(501, {"error": "not_implemented"})
+        new_owner = payload.get("owner")
+        if not isinstance(new_owner, str) or not new_owner:
+            return json_response(400, {"error": "invalid_owner"})
+        if await auth.get_user(users_store, new_owner) is None:
+            return json_response(400, {"error": "unknown_owner", "owner": new_owner})
+        if not principal.has_permission("users.manage"):
+            return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
 
     tag_list: list[str] | None = None
     if action in ("tag", "untag"):
@@ -298,7 +304,12 @@ async def handle_bulk_action(store, principal, request):
         if record is None:
             row_errors.append({"slug": slug, "error": "not_found"})
             continue
-        if not links.can_edit(principal, record):
+        # Reassignment deliberately skips the per-row can_edit check — it is
+        # gated on users.manage alone (see docs/plans/link-tags-and-ownership.md,
+        # "Trade-offs" #7). Requiring can_edit here would break the departed-
+        # employee case this feature exists for, and buys no real security
+        # since a users.manage holder can already self-promote to admin.
+        if action != "reassign" and not links.can_edit(principal, record):
             row_errors.append({"slug": slug, "error": "forbidden"})
             continue
         records[slug] = record
@@ -327,6 +338,17 @@ async def handle_bulk_action(store, principal, request):
                 record["tags"] = tags.remove_tags(record.get("tags", []), tag_list)
             record["updated_at"] = now
             await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+    elif action == "reassign":
+        # Records first, then the owner indexes — an interruption here leaves
+        # a duplicate (visible in both dashboards), never a disappearance.
+        now = iso_now()
+        slugs_by_old_owner: dict[str, list[str]] = {}
+        for slug, record in records.items():
+            slugs_by_old_owner.setdefault(record["owner"], []).append(slug)
+            record["owner"] = new_owner
+            record["updated_at"] = now
+            await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+        await links.move_slugs_between_owners(store, slugs_by_old_owner, new_owner)
     else:  # delete
         slugs_by_owner: dict[str, list[str]] = {}
         for slug, record in records.items():
@@ -337,4 +359,6 @@ async def handle_bulk_action(store, principal, request):
     result = {"ok": True, "action": action, "count": len(slugs)}
     if action in ("tag", "untag"):
         result["tags"] = tag_list
+    elif action == "reassign":
+        result["owner"] = new_owner
     return json_response(200, result)

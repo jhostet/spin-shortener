@@ -692,6 +692,77 @@ async def test_remove_slugs_from_indexes_multi_owner():
     assert await links._owned_slugs(store, "bob") == []
 
 
+async def test_move_slugs_between_owners_all_links_byte_identical():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
+    before = await store.get(links.ALL_SLUGS_INDEX_KEY)
+
+    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob")
+
+    after = await store.get(links.ALL_SLUGS_INDEX_KEY)
+    assert after == before
+
+
+async def test_move_slugs_between_owners_same_owner_guard_leaves_slug_present():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1"])
+
+    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "alice")
+
+    assert await links._owned_slugs(store, "alice") == ["a1"]
+
+
+async def test_move_slugs_between_owners_no_duplicate_when_already_in_new_owner_index():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1"])
+    await links.add_slugs_to_indexes(store, "bob", ["a1"])
+
+    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob")
+
+    assert await links._owned_slugs(store, "bob") == ["a1"]
+    assert await links._owned_slugs(store, "alice") == []
+
+
+async def test_move_slugs_between_owners_idempotent():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
+
+    await links.move_slugs_between_owners(store, {"alice": ["a1", "a2"]}, "bob")
+    once = {key: value for key, value in store._data.items()}
+
+    await links.move_slugs_between_owners(store, {"alice": ["a1", "a2"]}, "bob")
+    twice = {key: value for key, value in store._data.items()}
+
+    assert once == twice
+    assert await links._owned_slugs(store, "bob") == ["a1", "a2"]
+    assert await links._owned_slugs(store, "alice") == []
+
+
+async def test_move_slugs_between_owners_two_old_owners_one_write_each(monkeypatch):
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1"])
+    await links.add_slugs_to_indexes(store, "bob", ["b1"])
+
+    set_calls = []
+    original_set = store.set
+
+    async def counting_set(key, value):
+        set_calls.append(key)
+        await original_set(key, value)
+
+    monkeypatch.setattr(store, "set", counting_set)
+
+    await links.move_slugs_between_owners(store, {"alice": ["a1"], "bob": ["b1"]}, "carol")
+
+    assert set_calls.count("owner_links:carol") == 1
+    assert set_calls.count("owner_links:alice") == 1
+    assert set_calls.count("owner_links:bob") == 1
+    assert "all_links" not in set_calls
+    assert await links._owned_slugs(store, "carol") == ["a1", "b1"]
+    assert await links._owned_slugs(store, "alice") == []
+    assert await links._owned_slugs(store, "bob") == []
+
+
 async def test_index_write_once_property_for_bulk_style_batch(monkeypatch):
     # Proves the design property the whole feature exists for: adding N slugs
     # in one call does exactly one set() on all_links and one per distinct

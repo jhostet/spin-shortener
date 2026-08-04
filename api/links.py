@@ -83,6 +83,42 @@ async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]])
         await store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8"))
 
 
+async def move_slugs_between_owners(
+    store, slugs_by_old_owner: dict[str, list[str]], new_owner: str
+) -> None:
+    """Reassignment's index half. One read+write of `owner_links:<new_owner>`,
+    plus one per distinct old owner — the same one-read-one-write-per-index
+    shape as add_slugs_to_indexes/remove_slugs_from_indexes, because Spin KV
+    has no compare-and-swap and a per-slug read-modify-write would multiply
+    the race window by N.
+
+    Deliberately never reads or writes `all_links`: a reassignment does not
+    change all_links membership, and calling remove_slugs_from_indexes here
+    would strip the slugs from it entirely.
+
+    Adds to the new owner FIRST, then removes from each old owner, and skips
+    any old owner equal to new_owner (without that guard a same-owner
+    "reassignment" would remove the slugs from the index it just added them
+    to). Both halves are idempotent, so re-running with the same arguments
+    converges rather than compounding.
+    """
+    all_slugs = [slug for slugs in slugs_by_old_owner.values() for slug in slugs]
+
+    owned_new = await _owned_slugs(store, new_owner)
+    for slug in all_slugs:
+        if slug not in owned_new:
+            owned_new.append(slug)
+    await store.set(f"owner_links:{new_owner}", json.dumps(owned_new).encode("utf-8"))
+
+    for old_owner, slugs in slugs_by_old_owner.items():
+        if old_owner == new_owner:
+            continue
+        to_remove = set(slugs)
+        owned_old = await _owned_slugs(store, old_owner)
+        owned_old = [slug for slug in owned_old if slug not in to_remove]
+        await store.set(f"owner_links:{old_owner}", json.dumps(owned_old).encode("utf-8"))
+
+
 async def get_link(store, slug: str) -> dict | None:
     raw = await store.get(f"slug:{slug}")
     return json.loads(raw) if raw else None

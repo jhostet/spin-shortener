@@ -105,6 +105,31 @@ def test_is_excluded_key_ordinary_links_key_not_excluded():
     assert backup.is_excluded_key("links", "_meta:bootstrapped") is False
 
 
+# --- Link tags and owner reassignment: no new KV key type, so backup.py
+# needs no code change — these tests prove the existing machinery already
+# round-trips both. See docs/plans/link-tags-and-ownership.md's "Prove tags
+# and reassignment round-trip through backup and restore" task.
+
+
+def test_slug_record_with_tags_round_trips_byte_identical():
+    tagged_value = json.dumps({
+        "slug": "abc",
+        "target_url": "https://example.com",
+        "owner": "alice",
+        "tags": ["q4", "sale"],
+    }).encode("utf-8")
+    entries = {"links": {"slug:abc": tagged_value}}
+    doc = backup.build_backup(entries, created_at="x", created_by="admin", fidelity="full")
+
+    decoded_entries_by_store, error = backup.validate_backup(doc)
+    assert error is None
+    assert decoded_entries_by_store["links"]["slug:abc"] == tagged_value
+
+
+def test_is_excluded_key_slug_key_still_not_excluded():
+    assert backup.is_excluded_key("links", "slug:x") is False
+
+
 # --- build_backup ---
 
 
@@ -312,6 +337,18 @@ def test_restore_write_order_users_usernames_index_last():
 def test_restore_write_order_analytics_has_no_index_keys():
     keys = ["count:abc", "events:abc:0"]
     assert backup.restore_write_order("analytics", keys) == keys
+
+
+def test_restore_write_order_reassigned_links_slugs_before_both_owner_indexes_and_all_links():
+    """A links store carrying two owner_links: indexes (the shape a
+    reassignment leaves behind) plus tagged slug: records must still order
+    every slug: write before every owner_links:/all_links write."""
+    keys = ["owner_links:alice", "owner_links:bob", "all_links", "slug:abc", "slug:def"]
+    ordered = backup.restore_write_order("links", keys)
+    assert ordered == ["slug:abc", "slug:def", "owner_links:alice", "owner_links:bob", "all_links"]
+    assert ordered.index("slug:abc") < ordered.index("owner_links:alice")
+    assert ordered.index("slug:def") < ordered.index("owner_links:bob")
+    assert ordered.index("slug:abc") < ordered.index("all_links")
 
 
 # --- handle_export ---
@@ -534,6 +571,44 @@ async def test_handle_restore_write_order_slug_before_all_links_user_before_user
     )
     assert resp.status == 200
     assert write_order.index("slug:abc") < write_order.index("all_links")
+
+
+async def test_handle_restore_tags_and_reassigned_owner_indexes_slugs_write_before_indexes():
+    """Integration-level counterpart to the pure restore_write_order test
+    above: a real handle_restore round trip of a links store shaped like the
+    aftermath of a reassignment (two owner_links: indexes, all_links, and
+    two tagged slug: records) writes every slug: key before every
+    owner_links:/all_links key, and the tags survive intact."""
+    write_order: list[str] = []
+
+    class RecordingStore(FakeStore):
+        async def set(self, key, value):
+            write_order.append(key)
+            await super().set(key, value)
+
+    links_store = FakeStore({
+        "slug:abc": json.dumps({"slug": "abc", "owner": "bob", "tags": ["q4", "sale"]}).encode(),
+        "slug:def": json.dumps({"slug": "def", "owner": "bob", "tags": []}).encode(),
+        "owner_links:alice": b"[]",
+        "owner_links:bob": b'["abc", "def"]',
+        "all_links": b'["abc", "def"]',
+    })
+    doc = await _export_doc({"links": links_store})
+
+    recording_store = RecordingStore()
+    resp = await backup.handle_restore(
+        {"links": recording_store}, _principal(),
+        _restore_request({"confirm": "REPLACE", "backup": doc}),
+        fake_list_keys, 30,
+    )
+    assert resp.status == 200
+    assert write_order.index("slug:abc") < write_order.index("owner_links:alice")
+    assert write_order.index("slug:abc") < write_order.index("owner_links:bob")
+    assert write_order.index("slug:abc") < write_order.index("all_links")
+    assert write_order.index("slug:def") < write_order.index("owner_links:bob")
+
+    restored_abc = json.loads(await recording_store.get("slug:abc"))
+    assert restored_abc["tags"] == ["q4", "sale"]
 
 
 async def test_handle_restore_all_or_nothing_each_failure_leaves_stores_byte_identical():

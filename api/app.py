@@ -104,7 +104,7 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             links_store = await key_value.open("links")
-            return await bulk.handle_bulk_action(links_store, result, request)
+            return await bulk.handle_bulk_action(links_store, users_store, result, request)
 
         if path.startswith("/api/links/") and path.endswith("/password") and method == "POST":
             slug = path.removeprefix("/api/links/").removesuffix("/password")

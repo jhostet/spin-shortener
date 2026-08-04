@@ -58,3 +58,23 @@ func TestParseLink_MalformedJSON(t *testing.T) {
 		t.Fatal("expected an error for malformed JSON, got nil")
 	}
 }
+
+// TestParseLinkIgnoresUnknownTagsField guards the redirect hot path against
+// the link-tags feature: Go's encoding/json ignores unknown object keys by
+// default (ParseLink uses plain json.Unmarshal, not a Decoder with
+// DisallowUnknownFields), so a record carrying a "tags" array must still
+// parse cleanly. linkgate.Link deliberately gains no Tags field — the hot
+// path never reads tags, and this test is what stops someone "helpfully"
+// adding one (see docs/plans/link-tags-and-ownership.md, "Redirect (Go)
+// changes").
+func TestParseLinkIgnoresUnknownTagsField(t *testing.T) {
+	raw := []byte(`{"slug":"abc","target_url":"https://example.com",` +
+		`"owner":"alice","status":"active","tags":["sale","q4"]}`)
+	l, err := ParseLink(raw)
+	if err != nil {
+		t.Fatalf("ParseLink returned an error for a record with tags: %v", err)
+	}
+	if l.Slug != "abc" || l.TargetURL != "https://example.com" || l.Status != "active" {
+		t.Fatalf("known fields did not survive: %+v", l)
+	}
+}
