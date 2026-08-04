@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import auth
 import links
 import tags
+import urlpolicy
 from responses import iso_now, json_response
 
 MAX_BULK_ROWS = 50
@@ -119,9 +120,15 @@ def validate_bulk_rows(
     rows: list[BulkRow],
     existing_slugs: set[str],
     can_custom_slug: bool,
+    policy: dict,
 ) -> list[dict]:
     """One {"line", "slug", "error"[, "first_line"]} dict per bad row, in line
-    order. Empty list means the whole submission is valid."""
+    order. Empty list means the whole submission is valid.
+
+    `policy` is a REQUIRED fourth parameter, no default — a `policy=None`
+    default meaning "no policy" is exactly how the destination URL policy's
+    third enforcement path (this one) would stay silently open forever. See
+    docs/plans/destination-url-policy.md."""
     errors: list[dict] = []
     seen_slugs: dict[str, int] = {}
 
@@ -132,6 +139,18 @@ def validate_bulk_rows(
             error_code = "missing_target_url" if row.slug else "invalid_target_url"
         elif not links.is_valid_target_url(row.target_url):
             error_code = "invalid_target_url"
+
+        if error_code is None:
+            verdict = urlpolicy.evaluate(row.target_url, policy)
+            if not verdict["allowed"]:
+                errors.append({
+                    "line": row.line,
+                    "slug": row.slug,
+                    "error": "destination_not_allowed",
+                    "host": verdict["host"],
+                    "reason": verdict["reason"],
+                })
+                continue
 
         if error_code is None and row.slug:
             if not links.is_valid_custom_slug(row.slug):
@@ -195,7 +214,8 @@ async def handle_bulk_create(store, principal, request):
         return json_response(400, {"error": "too_many_rows", "max_rows": MAX_BULK_ROWS, "row_count": len(rows)})
 
     existing = set(await links._all_slugs(store))
-    row_errors = validate_bulk_rows(rows, existing, principal.has_permission("links.create_custom_slug"))
+    policy = await urlpolicy.load_policy(store)
+    row_errors = validate_bulk_rows(rows, existing, principal.has_permission("links.create_custom_slug"), policy)
 
     # Index-drift confirmation: `all_links` is an index, not the truth. If it
     # has ever drifted (an interrupted write, a KV-explorer edit), trusting it

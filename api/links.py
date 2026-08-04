@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import auth
 import tags
+import urlpolicy
 from auth import Principal
 from responses import iso_now, json_response, parse_iso8601_utc, to_iso8601_utc
 
@@ -187,6 +188,16 @@ async def handle_create(store, principal: Principal, request):
     if not isinstance(target_url, str) or not is_valid_target_url(target_url):
         return json_response(400, {"error": "invalid_target_url"})
 
+    policy = await urlpolicy.load_policy(store)
+    verdict = urlpolicy.evaluate(target_url, policy)
+    if not verdict["allowed"]:
+        return json_response(400, {
+            "error": "destination_not_allowed",
+            "host": verdict["host"],
+            "reason": verdict["reason"],
+            "matched_rule": verdict["matched_rule"],
+        })
+
     custom_slug = payload.get("custom_slug")
     if custom_slug is not None:
         if not principal.has_permission("links.create_custom_slug"):
@@ -284,6 +295,15 @@ async def handle_update(store, principal: Principal, slug: str, request):
         target_url = payload["target_url"]
         if not isinstance(target_url, str) or not is_valid_target_url(target_url):
             return json_response(400, {"error": "invalid_target_url"})
+        policy = await urlpolicy.load_policy(store)
+        verdict = urlpolicy.evaluate(target_url, policy)
+        if not verdict["allowed"]:
+            return json_response(400, {
+                "error": "destination_not_allowed",
+                "host": verdict["host"],
+                "reason": verdict["reason"],
+                "matched_rule": verdict["matched_rule"],
+            })
         record["target_url"] = target_url
 
     if "status" in payload:

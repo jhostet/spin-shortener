@@ -32,6 +32,7 @@ USERNAMES_INDEX_KEY = "_meta:usernames"  # == auth.USERNAMES_INDEX_KEY
 BOOTSTRAPPED_KEY = "_meta:bootstrapped"  # == auth.BOOTSTRAPPED_KEY
 SLUG_PREFIX = "slug:"
 OWNER_LINKS_PREFIX = "owner_links:"  # == backup.OWNER_LINKS_PREFIX
+URL_POLICY_KEY = "_meta:url_policy"  # == urlpolicy.POLICY_KEY
 USER_PREFIX = "user:"  # == backup.USER_PREFIX
 SESSION_PREFIX = "session:"  # == auth.SESSION_PREFIX
 
@@ -80,6 +81,24 @@ def _parse_link_record(raw: bytes | None) -> dict | None:
     if not isinstance(owner, str):
         return None
     return {"owner": owner}
+
+
+def _parse_policy(raw: bytes) -> dict | None:
+    """`None` if `raw` doesn't parse as a minimally-shaped policy document.
+    Mirrors `urlpolicy._parse_policy` exactly (duplicated rather than
+    imported, since this module reads only far enough to classify the value
+    as readable/unreadable — no field of it feeds any of the twelve checks)."""
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    if value.get("default_action") not in ("allow", "deny"):
+        return None
+    if not isinstance(value.get("rules"), list):
+        return None
+    return value
 
 
 def _parse_session_username(raw: bytes | None) -> str | None:
@@ -167,6 +186,13 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
                 unreadable_owners.add(username)
             elif parsed is not None:
                 owner_index[username] = parsed
+        elif key == URL_POLICY_KEY:
+            # Known shape. Parsed only far enough to report a corrupted
+            # policy as unreadable_value — no new check id, and no field of
+            # it is needed by any of the twelve.
+            raw = await links_store.get(key)
+            if raw is not None and _parse_policy(raw) is None:
+                unreadable.append({"store": "links", "key": key})
         else:
             unrecognized.append({"store": "links", "key": key})
 

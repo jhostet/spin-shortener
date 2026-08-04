@@ -238,6 +238,26 @@ async def test_unrecognized_key_in_users_store():
     assert by_id["unrecognized_key"]["findings"] == [{"store": "users", "key": "junk"}]
 
 
+# --- _meta:url_policy: a known shape, not an unrecognized key ---
+
+
+async def test_url_policy_key_present_and_valid_is_not_unrecognized_or_unreadable():
+    checks, _ = await _analyze(
+        links_data={consistency.URL_POLICY_KEY: _j({"default_action": "allow", "rules": []})}
+    )
+    by_id = _by_id(checks)
+    assert by_id["unrecognized_key"]["count"] == 0
+    assert by_id["unreadable_value"]["count"] == 0
+
+
+async def test_url_policy_key_corrupted_reports_unreadable_value():
+    checks, _ = await _analyze(links_data={consistency.URL_POLICY_KEY: b"not json"})
+    by_id = _by_id(checks)
+    assert by_id["unrecognized_key"]["count"] == 0
+    assert by_id["unreadable_value"]["count"] == 1
+    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": consistency.URL_POLICY_KEY}]
+
+
 # --- Skip rules ---
 
 

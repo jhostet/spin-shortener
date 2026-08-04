@@ -12,6 +12,7 @@ import consistency
 import domains
 import links
 import qr
+import urlpolicy
 import users
 from responses import Request, Response, json_response
 
@@ -211,6 +212,22 @@ class HttpHandler(Handler):
             return await consistency.handle_consistency(
                 {"links": links_store, "users": users_store}, result, _kv_keys,
             )
+
+        if path == "/api/admin/url-policy/violations" and method == "GET":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            return await urlpolicy.handle_violations(links_store, result, _kv_keys)
+
+        if path == "/api/admin/url-policy" and method in ("GET", "PUT"):
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            links_store = await key_value.open("links")
+            if method == "GET":
+                return await urlpolicy.handle_get_policy(links_store, result)
+            return await urlpolicy.handle_put_policy(links_store, result, request)
 
         return json_response(404, {"error": "not_found"})
 

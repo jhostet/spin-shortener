@@ -4,8 +4,17 @@ import pytest
 
 import auth
 import links
+import urlpolicy
 from responses import Request
 from tests.fakes import FakeStore
+
+
+async def _set_policy(store, default_action, rules):
+    policy, error = urlpolicy.parse_policy_document(
+        {"default_action": default_action, "rules": rules}, now="2026-08-04T00:00:00Z", actor="admin",
+    )
+    assert error is None
+    await urlpolicy.save_policy(store, policy)
 
 
 def _principal(username="alice", role="user", permissions=None):
@@ -783,3 +792,91 @@ async def test_index_write_once_property_for_bulk_style_batch(monkeypatch):
     assert set_calls.count("all_links") == 1
     assert set_calls.count("owner_links:alice") == 1
     assert len(set_calls) == 2
+
+
+# --- Destination URL policy enforcement ---
+
+
+async def test_create_succeeds_unchanged_when_no_policy_key_exists():
+    store = FakeStore()
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    assert resp.status == 201
+
+
+async def test_create_rejects_destination_denied_by_policy():
+    store = FakeStore()
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body == {
+        "error": "destination_not_allowed",
+        "host": "evil.example",
+        "reason": "denied_by_rule",
+        "matched_rule": "evil.example",
+    }
+
+
+async def test_create_rejection_consumes_no_slug():
+    store = FakeStore()
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+
+    resp = await links.handle_create(
+        store, _principal(permissions=["links.create_custom_slug"]),
+        _request({"target_url": "https://evil.example/x", "custom_slug": "my-slug"}),
+    )
+    assert resp.status == 400
+    assert await store.exists("slug:my-slug") is False
+    assert await links._all_slugs(store) == []
+
+
+async def test_update_rejects_destination_denied_by_policy():
+    store = FakeStore()
+    create_resp = await links.handle_create(store, _principal(), _request({"target_url": "https://ok.example/x"}))
+    slug = json.loads(create_resp.body)["slug"]
+
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+
+    resp = await links.handle_update(
+        store, _principal(), slug, _request({"target_url": "https://evil.example/x"}),
+    )
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "destination_not_allowed"
+    assert body["host"] == "evil.example"
+
+    unchanged = await links.get_link(store, slug)
+    assert unchanged["target_url"] == "https://ok.example/x"
+
+
+async def test_update_legacy_violator_stays_editable_via_status_patch():
+    """The load-bearing guarantee the whole retroactive design rests on: a
+    link whose stored target_url already violates the CURRENT policy must
+    stay editable for every field except target_url, so the operator's
+    remediation path (bulk disable) is never blocked by the very enforcement
+    that motivates it."""
+    store = FakeStore()
+    create_resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    slug = json.loads(create_resp.body)["slug"]
+
+    # Policy is added AFTER the link already exists — the link is now a
+    # legacy violator, but PATCH must never re-check a target_url it isn't
+    # changing.
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+
+    resp = await links.handle_update(store, _principal(), slug, _request({"status": "disabled"}))
+    assert resp.status == 200
+    assert json.loads(resp.body)["status"] == "disabled"
+
+
+async def test_update_legacy_violator_stays_editable_via_tags_patch():
+    store = FakeStore()
+    create_resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    slug = json.loads(create_resp.body)["slug"]
+
+    await _set_policy(store, "deny", [])  # default-deny, no allow rule for anything
+
+    resp = await links.handle_update(store, _principal(), slug, _request({"tags": ["q4"]}))
+    assert resp.status == 200
+    assert json.loads(resp.body)["tags"] == ["q4"]

@@ -351,6 +351,46 @@ def test_restore_write_order_reassigned_links_slugs_before_both_owner_indexes_an
     assert ordered.index("slug:abc") < ordered.index("all_links")
 
 
+# --- _meta:url_policy: no new logic needed, only a pinning test ---
+#
+# is_excluded_key is users-only (False for every links-store key), and
+# restore_write_order already classifies any links-store key that is not
+# "all_links" and does not start with "owner_links:" as a non-index key,
+# written first — which is correct for a record. See
+# docs/plans/destination-url-policy.md's "The two mandatory key-type
+# obligations", and the identical finding link-tags-and-ownership.md made
+# for "tags" above.
+
+
+def test_restore_write_order_url_policy_key_is_non_index_before_all_links():
+    keys = ["all_links", "_meta:url_policy", "slug:abc", "owner_links:admin"]
+    ordered = backup.restore_write_order("links", keys)
+    assert ordered.index("_meta:url_policy") < ordered.index("all_links")
+    assert ordered.index("_meta:url_policy") < ordered.index("owner_links:admin")
+
+
+def test_url_policy_value_round_trips_byte_identical_through_backup_and_restore():
+    """Full build_backup -> validate_backup round trip byte-for-byte, the
+    same shape test_build_backup_non_utf8_value_round_trips_byte_identical
+    already pins for an ordinary analytics value."""
+    policy_value = json.dumps({
+        "version": 1,
+        "default_action": "deny",
+        "rules": [{"host": "evil.example", "action": "deny", "note": "reported phishing",
+                   "created_at": "2026-08-04T10:00:00Z", "created_by": "alice"}],
+        "updated_at": "2026-08-04T10:00:00Z",
+        "updated_by": "alice",
+    }).encode("utf-8")
+    entries = {"links": {"_meta:url_policy": policy_value}}
+    doc = backup.build_backup(entries, created_at="x", created_by="admin", fidelity="full")
+
+    assert "_meta:url_policy" in doc["stores"]["links"]
+
+    decoded_entries_by_store, error = backup.validate_backup(doc)
+    assert error is None
+    assert decoded_entries_by_store["links"]["_meta:url_policy"] == policy_value
+
+
 # --- handle_export ---
 
 

@@ -4,12 +4,21 @@ import auth
 import bulk
 import links
 import tags
+import urlpolicy
 from responses import Request
 from tests.fakes import FakeStore
 
 
 def _principal(username="alice", role="user", permissions=None):
     return auth.Principal(username=username, role=role, permissions=permissions or [], csrf_token="x")
+
+
+async def _set_policy(store, default_action, rules):
+    policy, error = urlpolicy.parse_policy_document(
+        {"default_action": default_action, "rules": rules}, now="2026-08-04T00:00:00Z", actor="admin",
+    )
+    assert error is None
+    await urlpolicy.save_policy(store, policy)
 
 
 def _request(payload=None, body=None):
@@ -138,31 +147,31 @@ def _row(line, slug, target_url):
 
 def test_validate_all_valid_rows_returns_no_errors():
     rows = [_row(1, "foo", "https://example.com/a"), _row(2, None, "https://example.com/b")]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == []
 
 
 def test_validate_invalid_target_url():
     rows = [_row(1, None, "not-a-url")]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == [{"line": 1, "slug": None, "error": "invalid_target_url"}]
 
 
 def test_validate_missing_target_url():
     rows = [_row(1, "bad-row", "")]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == [{"line": 1, "slug": "bad-row", "error": "missing_target_url"}]
 
 
 def test_validate_invalid_custom_slug():
     rows = [_row(1, "no", "https://example.com/a")]  # too short
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == [{"line": 1, "slug": "no", "error": "invalid_custom_slug"}]
 
 
 def test_validate_custom_slug_forbidden():
     rows = [_row(1, "custom-slug", "https://example.com/a")]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=False)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=False, policy=urlpolicy.EMPTY_POLICY)
     assert errors == [{"line": 1, "slug": "custom-slug", "error": "custom_slug_forbidden"}]
 
 
@@ -172,14 +181,14 @@ def test_validate_custom_slug_forbidden_mixed_submission_flags_every_slugged_row
         _row(2, None, "https://example.com/b"),
         _row(3, "custom-b", "https://example.com/c"),
     ]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=False)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=False, policy=urlpolicy.EMPTY_POLICY)
     assert [e["line"] for e in errors] == [1, 3]
     assert all(e["error"] == "custom_slug_forbidden" for e in errors)
 
 
 def test_validate_slug_taken():
     rows = [_row(1, "taken-slug", "https://example.com/a")]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs={"taken-slug"}, can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs={"taken-slug"}, can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == [{"line": 1, "slug": "taken-slug", "error": "slug_taken"}]
 
 
@@ -188,7 +197,7 @@ def test_validate_duplicate_slug_in_submission_carries_first_line():
         _row(1, "dup", "https://a.com"),
         _row(2, "dup", "https://b.com"),
     ]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == [{"line": 2, "slug": "dup", "error": "duplicate_slug_in_submission", "first_line": 1}]
 
 
@@ -197,7 +206,7 @@ def test_validate_case_sensitive_duplicate_detection():
         _row(1, "Sale", "https://a.com"),
         _row(2, "sale", "https://b.com"),
     ]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs=set(), can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert errors == []
 
 
@@ -205,7 +214,7 @@ def test_validate_one_error_per_row_in_precedence_order():
     # A row with both an invalid slug and a taken-slug condition should only
     # report the higher-precedence invalid_custom_slug.
     rows = [_row(1, "no", "https://example.com/a")]
-    errors = bulk.validate_bulk_rows(rows, existing_slugs={"no"}, can_custom_slug=True)
+    errors = bulk.validate_bulk_rows(rows, existing_slugs={"no"}, can_custom_slug=True, policy=urlpolicy.EMPTY_POLICY)
     assert len(errors) == 1
     assert errors[0]["error"] == "invalid_custom_slug"
 
@@ -387,6 +396,51 @@ async def test_bulk_create_slug_taken_reported_with_line_number():
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body["row_errors"] == [{"line": 2, "slug": "existing-slug", "error": "slug_taken"}]
+
+
+# --- Destination URL policy enforcement ---
+
+
+async def test_bulk_create_one_violating_row_writes_nothing():
+    """Bulk stays all-or-nothing: one violating row means nothing is
+    written and every problem is reported, never a partial result."""
+    store = FakeStore()
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+    before = dict(store._data)
+
+    text = "good-one,https://example.com/a\nbad-one,https://evil.example/b\n"
+    resp = await bulk.handle_bulk_create(
+        store, _principal(permissions=["links.create_custom_slug"]), _request({"text": text}),
+    )
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [
+        {"line": 2, "slug": "bad-one", "error": "destination_not_allowed", "host": "evil.example", "reason": "denied_by_rule"},
+    ]
+
+    after = dict(store._data)
+    assert after == before
+    assert await store.exists("slug:good-one") is False
+    assert await store.exists("slug:bad-one") is False
+
+
+async def test_bulk_create_rejects_the_same_destination_the_single_link_path_rejects():
+    store = FakeStore()
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+
+    single_resp = await links.handle_create(
+        store, _principal(), _request_for_links({"target_url": "https://evil.example/x"}),
+    )
+    assert single_resp.status == 400
+    assert json.loads(single_resp.body)["error"] == "destination_not_allowed"
+
+    bulk_resp = await bulk.handle_bulk_create(
+        store, _principal(), _request({"text": "https://evil.example/x\n"}),
+    )
+    assert bulk_resp.status == 400
+    body = json.loads(bulk_resp.body)
+    assert body["row_errors"][0]["error"] == "destination_not_allowed"
 
 
 async def test_bulk_create_index_drift_confirmation_catches_stale_all_links():
