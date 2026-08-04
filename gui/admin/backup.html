@@ -21,8 +21,11 @@
       <article>
         <h2>Download a backup</h2>
         <p>
-          Downloads a JSON file of the selected stores. Passwords, password
-          hashes and sign-in sessions are never included.
+          Downloads a JSON file of the selected stores. Account password hashes
+          and sign-in sessions are never included, so restored users must be
+          given a new password. <strong>Link passwords are included</strong>
+          (hashed) so that restoring keeps protected links protected — treat the
+          file as sensitive and store it somewhere access-controlled.
         </p>
         <fieldset id="export-stores-fieldset">
           <legend>Include</legend>
