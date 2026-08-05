@@ -18,7 +18,10 @@ type promptData struct {
 
 func renderPasswordPrompt(w http.ResponseWriter, status int, slug, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	// Cache-Control: no-store moved to setSecurityHeaders in main.go, which
+	// now covers every response this component sends (302s and 404s
+	// included), not just this prompt page.
+	//
 	// Stricter than the GUI pages' CSP, and now the strictest in the app:
 	// prompt.html has zero <script> tags (confirmed — it's a bare form), so
 	// script-src stays 'none' outright rather than the GUI's 'self'. This is

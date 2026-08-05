@@ -34,14 +34,26 @@ def test_committed_manifest_has_no_dev_only_components():
     )
 
 
-def test_kv_explorer_fragment_grants_only_links_and_analytics():
+def test_kv_explorer_fragment_grants_the_single_default_store():
+    """Since docs/plans/kv-store-consolidation.md, the app's three named KV
+    stores (links, users, analytics) are collapsed onto Spin's single
+    auto-provisioned "default" store, key-prefixed by api/kvprefix.py and
+    redirect/linkgate/keys.go — required because Akamai Functions allows only
+    the "default" label. There is no longer any store-level separation for
+    the KV explorer fragment to respect: granting "default" grants every key,
+    users:user:* PBKDF2 hashes and users:session:* tokens included, with full
+    CRUD. This is a deliberate, accepted local-dev-only exposure (the user
+    explicitly chose it over inventing a config seam to preserve the old
+    withhold) — acceptable only because this fragment is never part of a
+    deployed manifest, which the sibling
+    test_committed_manifest_has_no_dev_only_components test above enforces.
+    """
     composed = tomllib.loads(SPIN_TOML.read_text() + KV_EXPLORER_FRAGMENT.read_text())
 
     assert "kv-explorer" in composed["component"]
     kv_explorer = composed["component"]["kv-explorer"]
 
-    assert kv_explorer["key_value_stores"] == ["links", "analytics"]
-    assert "users" not in kv_explorer["key_value_stores"]
+    assert kv_explorer["key_value_stores"] == ["default"]
     assert kv_explorer["allowed_outbound_hosts"] == []
 
     routes = [

@@ -1,16 +1,20 @@
-# Local development runtime config for the `links`, `users`, and `analytics`
-# KV stores declared in spin.toml. Spin does NOT auto-provision named (non-"default")
-# key-value stores; each one must be mapped to a backing provider explicitly.
+# Local development runtime config for Spin's single auto-provisioned
+# "default" key-value store, onto which the app's three logical namespaces
+# (links, users, analytics) are prefix-mapped by api/kvprefix.py and
+# redirect/linkgate/keys.go — see docs/plans/kv-store-consolidation.md.
+#
+# `--runtime-config-file runtime-config.toml` is now OPTIONAL locally: Spin
+# auto-provisions "default" with no runtime config at all. This file is kept
+# anyway so every documented command and `dev/kv-explorer-up.sh` keep working
+# unchanged, and so the local backing provider stays explicit rather than
+# implicit.
 #
 # `type = "spin"` is Spin's built-in sqlite-backed local store, fine for dev.
-# A production/Akamai deployment will need an equivalent config mapping these
-# same store names to Akamai's KV provider instead (see TASKS.md Phase 4).
+#
+# Akamai Functions IGNORES runtime configuration entirely ("Runtime
+# configuration is also unavailable" — techdocs.akamai.com/akamai-functions/
+# docs/quotas-and-limits) and auto-provisions its own "default" store, so
+# this file has no deployment role at all.
 
-[key_value_store.links]
-type = "spin"
-
-[key_value_store.users]
-type = "spin"
-
-[key_value_store.analytics]
+[key_value_store.default]
 type = "spin"

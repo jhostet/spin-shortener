@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,12 +38,29 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+	// Never cached, anywhere, by anything. Resolution re-reads KV on every
+	// request by design: the status check, the [start_at, end_at) window, a
+	// repointed destination, a deleted slug and the destination-policy
+	// remediation path (bulk Disable -> 404) are all only correct if no layer
+	// is serving a remembered answer. This covers the 404s as well as the
+	// 302s — a cached "not yet active" 404 means the link never starts
+	// working when its window opens.
+	//
+	// The 302 in handleRedirectGet/handleRedirectPost is load-bearing and
+	// must never become a 301 or 308: Akamai edge servers do not cache 302
+	// or 307 by default, but they DO cache 301 and 308 by default
+	// (techdocs.akamai.com/property-mgr/docs/cache-http-redirects). This
+	// header is defence-in-depth for browsers and intermediate proxies —
+	// Akamai does not honour origin Cache-Control by default, so at the edge
+	// the 302 status is the actual control.
+	h.Set("Cache-Control", "no-store")
 }
 
 func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 
-	store, err := kv.Open("links")
+	store, err := kv.Open("default")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -71,7 +87,7 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 
-	store, err := kv.Open("links")
+	store, err := kv.Open("default")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -108,7 +124,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 // propagated, since a failure to record a click must never block the
 // redirect itself.
 func recordAnalytics(slug string, r *http.Request) {
-	store, err := kv.Open("analytics")
+	store, err := kv.Open("default")
 	if err != nil {
 		return
 	}
@@ -117,7 +133,7 @@ func recordAnalytics(slug string, r *http.Request) {
 	retentionDays := intVariable("analytics_day_retention_days", 90)
 	day := now.UTC().Format("2006-01-02")
 
-	countKey := "count:" + slug
+	countKey := linkgate.CountKey(slug)
 	raw, _ := store.Get(countKey)
 	if updated, err := linkgate.UpdateCount(raw, day, retentionDays); err == nil {
 		_ = store.Set(countKey, updated)
@@ -125,7 +141,7 @@ func recordAnalytics(slug string, r *http.Request) {
 
 	numSlots := intVariable("analytics_event_slots", 30)
 	slot := linkgate.EventSlot(now, numSlots)
-	eventKey := fmt.Sprintf("events:%s:%d", slug, slot)
+	eventKey := linkgate.EventKey(slug, slot)
 	event := linkgate.FormatEvent(now.UnixMilli(), r.Referer(), linkgate.ClassifyUserAgent(r.UserAgent()))
 	_ = store.Set(eventKey, []byte(event))
 }
@@ -145,12 +161,13 @@ func intVariable(name string, fallback int) int {
 // lookupLink fetches and decodes the link record for slug, returning ok=false
 // if the key is absent or the stored value can't be parsed.
 func lookupLink(store *kv.Store, slug string) (linkgate.Link, bool) {
-	exists, err := store.Exists("slug:" + slug)
+	key := linkgate.LinkKey(slug)
+	exists, err := store.Exists(key)
 	if err != nil || !exists {
 		return linkgate.Link{}, false
 	}
 
-	raw, err := store.Get("slug:" + slug)
+	raw, err := store.Get(key)
 	if err != nil {
 		return linkgate.Link{}, false
 	}

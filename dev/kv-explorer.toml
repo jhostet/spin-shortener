@@ -14,12 +14,17 @@
 # bad local test data is half its value — but a stray click destroys local
 # data.
 #
-# `users` is deliberately NOT listed: it holds PBKDF2 password hashes and live
-# session tokens, so read access alone enables impersonation and write access
-# forges a session or replaces a hash. The store name comes from the request
-# path (/api/stores/:store) and is handed straight to kv.OpenStore, so this
-# list is the only thing that denies it — and it denies it at the host, not in
-# the UI.
+# With the stores consolidated onto Spin's single "default" label (required
+# by Akamai Functions), there is no longer any store-level separation to
+# withhold: granting "default" grants every key, users:user:* PBKDF2 hashes
+# and users:session:* tokens included, with full CRUD. This is a deliberate,
+# accepted local-dev exposure, not an oversight. It is acceptable only because
+# this fragment is never part of a deployed manifest — the committed
+# spin.toml has four components and no explorer, and
+# gui-pages/tests/test_manifest_components.py fails CI if that ever stops
+# being true. Anyone who runs dev/kv-explorer-up.sh can read and forge local
+# credentials; treat a local run as untrusted, and never point it at data you
+# care about. See docs/plans/kv-store-consolidation.md.
 #
 # Its UI loads jQuery, Bootstrap, Popper, Font Awesome and Google Fonts from
 # cdnjs/jsdelivr/Google, and contains inline script and style. Accepted and
@@ -39,7 +44,7 @@ source = { url = "https://github.com/fermyon/spin-kv-explorer/releases/download/
 # component's source makes no outbound request of any kind, so it needs
 # nothing — the same [] the redirect component uses.
 allowed_outbound_hosts = []
-key_value_stores = ["links", "analytics"]
+key_value_stores = ["default"]
 
 [component.kv-explorer.variables]
 kv_credentials = "{{ kv_explorer_user }}:{{ kv_explorer_password }}"

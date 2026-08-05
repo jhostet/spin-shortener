@@ -21,7 +21,7 @@ component = "redirect"
 [component.redirect]
 source = "redirect/main.wasm"
 allowed_outbound_hosts = []
-key_value_stores = ["links", "analytics"]
+key_value_stores = ["default"]
 [component.redirect.variables]
 analytics_event_slots = "{{ analytics_event_slots }}"
 analytics_day_retention_days = "{{ analytics_day_retention_days }}"
@@ -36,7 +36,7 @@ component = "api"
 
 [component.api]
 source = "api/app.wasm"
-key_value_stores = ["links", "users", "analytics"]
+key_value_stores = ["default"]
 [component.api.variables]
 admin_bootstrap_username = "{{ admin_bootstrap_username }}"
 admin_bootstrap_password = "{{ admin_bootstrap_password }}"

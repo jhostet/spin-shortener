@@ -10,6 +10,7 @@ import backup
 import bulk
 import consistency
 import domains
+import kvprefix
 import links
 import qr
 import urlpolicy
@@ -56,7 +57,12 @@ class HttpHandler(Handler):
         query = parse_qs(parsed_uri.query)
         method = request.method
 
-        users_store = await key_value.open("users")
+        physical_store = await key_value.open(kvprefix.PHYSICAL_STORE)
+        stores = kvprefix.open_views(physical_store)
+        links_store = stores["links"]
+        users_store = stores["users"]
+        analytics_store = stores["analytics"]
+        list_keys = kvprefix.scoped_list_keys(_kv_keys)
         admin_username = await variables.get("admin_bootstrap_username")
         admin_password = await variables.get("admin_bootstrap_password")
         await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
@@ -89,7 +95,6 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             if method == "GET":
                 return await links.handle_list(links_store, result)
             return await links.handle_create(links_store, result, request)
@@ -98,14 +103,12 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             return await bulk.handle_bulk_create(links_store, result, request)
 
         if path == "/api/links/bulk-action" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             return await bulk.handle_bulk_action(links_store, users_store, result, request)
 
         if path.startswith("/api/links/") and path.endswith("/password") and method == "POST":
@@ -115,7 +118,6 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             return await links.handle_set_password(links_store, result, slug, request)
 
         if path.startswith("/api/links/") and path.endswith("/analytics") and method == "GET":
@@ -125,8 +127,6 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
-            analytics_store = await key_value.open("analytics")
             num_event_slots = int(await variables.get("analytics_event_slots"))
             return await analytics.handle_analytics(links_store, analytics_store, result, slug, num_event_slots)
 
@@ -137,7 +137,6 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             return await qr.handle_qr(links_store, result, slug, query, configured_domains)
 
         if path.startswith("/api/links/") and method in ("GET", "PATCH", "DELETE"):
@@ -147,7 +146,6 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             if method == "GET":
                 return await links.handle_get(links_store, result, slug)
             if method == "PATCH":
@@ -173,58 +171,52 @@ class HttpHandler(Handler):
                 return await users.handle_get(users_store, result, username)
             if method == "PATCH":
                 return await users.handle_update(users_store, result, username, request, configured_domains)
-            links_store = await key_value.open("links")
-            return await users.handle_delete(users_store, links_store, result, username, _kv_keys)
+            return await users.handle_delete(users_store, links_store, result, username, list_keys)
 
         if path == "/api/admin/backup" and method == "GET":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
-            analytics_store = await key_value.open("analytics")
             num_event_slots = int(await variables.get("analytics_event_slots"))
             return await backup.handle_export(
                 {"links": links_store, "users": users_store, "analytics": analytics_store},
-                result, query, _kv_keys, num_event_slots,
+                result, query, list_keys, num_event_slots,
             )
 
         if path == "/api/admin/restore" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
-            analytics_store = await key_value.open("analytics")
             num_event_slots = int(await variables.get("analytics_event_slots"))
             return await backup.handle_restore(
                 {"links": links_store, "users": users_store, "analytics": analytics_store},
-                result, request, _kv_keys, num_event_slots,
+                result, request, list_keys, num_event_slots,
             )
 
         if path == "/api/admin/consistency" and method == "GET":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
-            # The analytics store is deliberately NOT opened: orphan analytics
-            # are normal (links.handle_delete never removes them), so a check
-            # over them would fire on healthy state forever. See
+            # The analytics view is deliberately NOT handed to
+            # handle_consistency, even though the physical store backing it is
+            # already open: orphan analytics keys are normal
+            # (links.handle_delete never removes them), so a check over them
+            # would fire on healthy state forever. See
             # docs/plans/kv-consistency-check.md's rejected alternatives.
             return await consistency.handle_consistency(
-                {"links": links_store, "users": users_store}, result, _kv_keys,
+                {"links": links_store, "users": users_store}, result, list_keys,
             )
 
         if path == "/api/admin/url-policy/violations" and method == "GET":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
-            return await urlpolicy.handle_violations(links_store, result, _kv_keys)
+            return await urlpolicy.handle_violations(links_store, result, list_keys)
 
         if path == "/api/admin/url-policy" and method in ("GET", "PUT"):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            links_store = await key_value.open("links")
             if method == "GET":
                 return await urlpolicy.handle_get_policy(links_store, result)
             return await urlpolicy.handle_put_policy(links_store, result, request)
