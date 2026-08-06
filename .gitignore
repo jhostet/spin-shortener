@@ -4,3 +4,4 @@ main.wasm
 docs/plans/*-scratch.md
 .playwright-mcp/
 spin-dev.toml
+.spin-aka/
