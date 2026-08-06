@@ -1,4 +1,6 @@
 import json
+import sys
+import time
 from urllib.parse import parse_qs, urlparse
 
 from spin_sdk import key_value, variables
@@ -12,10 +14,31 @@ import consistency
 import domains
 import kvprefix
 import links
+import obs
 import qr
 import urlpolicy
 import users
-from responses import Request, Response, json_response
+from responses import Request, Response, get_header, json_response
+
+# --- Toggleable structured logging (docs/plans/toggleable-logging.md) ---
+#
+# Both variables are read once and cached for the lifetime of the Wasm
+# instance, exactly like redirect/main.go's sync.Once-guarded accessor —
+# sound because a Spin variable cannot change without a redeploy (Akamai
+# has no "update a variable" command) or a restart (locally), both of which
+# produce a fresh instance. _obs_log_level is the cache sentinel: None means
+# "not yet read", so it is checked, never _obs_debug_token (which is a
+# legitimate "" when unset).
+_obs_log_level: str | None = None
+_obs_debug_token: str = ""
+
+
+async def _obs_config() -> tuple[str, str]:
+    global _obs_log_level, _obs_debug_token
+    if _obs_log_level is None:
+        _obs_log_level = obs.parse_log_level(await variables.get("log_level"))
+        _obs_debug_token = await variables.get("log_debug_token")
+    return _obs_log_level, _obs_debug_token
 
 
 async def _kv_keys(store) -> list[str]:
@@ -52,17 +75,69 @@ async def _require_session(store, request: Request):
 
 class HttpHandler(Handler):
     async def handle_request(self, request: Request) -> Response:
+        """Thin wrapper around _dispatch: builds the per-request collector
+        (only when tracing is actually active — never a shared/module-level
+        collector, which would silently interleave concurrent requests'
+        operations, since Handler.handle() dispatches each request through
+        componentize_py_async_support.spawn), measures wall time, and
+        always emits exactly one log line — including on the exception path,
+        which is the only evidence anyone will have of a handler that raised.
+        """
+        log_level, debug_token = await _obs_config()
+        provided_token = get_header(request.headers, "X-SS-Debug") or ""
+        traced = obs.token_matches(debug_token, provided_token)
+        summary = log_level == "summary"
+        collector = obs.Collector() if (traced or summary) else None
+
+        start_ns = time.monotonic_ns()
+        err = False
+        try:
+            response = await self._dispatch(request, collector)
+        except Exception:
+            err = True
+            response = json_response(500, {"error": "internal_error"})
+        dur_ns = time.monotonic_ns() - start_ns
+
+        if traced:
+            # Server-Timing only for a valid token, never merely because
+            # log_level=summary — a baseline-logging deployment must not
+            # hand internal timing data to every visitor.
+            response.headers["server-timing"] = obs.render_server_timing(dur_ns, collector)
+            # The response now varies on a request header while this
+            # component sets no Cache-Control at all, so a heuristically
+            # caching intermediary could otherwise serve one visitor's
+            # timing data to another.
+            response.headers["vary"] = "X-SS-Debug"
+
+        if collector is not None:
+            parsed_uri = urlparse(request.uri)
+            fields = [
+                ("comp", "api"),
+                ("route", obs.route_template(parsed_uri.path)),
+                ("method", request.method),
+                ("status", str(response.status)),
+            ]
+            if err:
+                fields.append(("err", "1"))
+            print(obs.render_log_line(fields, dur_ns, collector), file=sys.stderr)
+
+        return response
+
+    async def _dispatch(self, request: Request, collector) -> Response:
         parsed_uri = urlparse(request.uri)
         path = parsed_uri.path
         query = parse_qs(parsed_uri.query)
         method = request.method
 
+        start_ns = time.monotonic_ns()
         physical_store = await key_value.open(kvprefix.PHYSICAL_STORE)
-        stores = kvprefix.open_views(physical_store)
+        if collector is not None:
+            collector.record("open", "-", time.monotonic_ns() - start_ns, 0)
+        stores = kvprefix.open_views(physical_store, collector)
         links_store = stores["links"]
         users_store = stores["users"]
         analytics_store = stores["analytics"]
-        list_keys = kvprefix.scoped_list_keys(_kv_keys)
+        list_keys = kvprefix.scoped_list_keys(_kv_keys, collector)
         admin_username = await variables.get("admin_bootstrap_username")
         admin_password = await variables.get("admin_bootstrap_password")
         await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
