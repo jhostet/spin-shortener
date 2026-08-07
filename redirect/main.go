@@ -81,6 +81,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	h.Set("X-SS-Version", appVersion())
 
 	// Never cached, anywhere, by anything. Resolution re-reads KV on every
 	// request by design: the status check, the [start_at, end_at) window, a
@@ -130,6 +131,30 @@ func obsConfig() (logLevel, debugToken string) {
 	})
 	return obsLogLevel, obsDebugToken
 }
+
+// appVersion returns the operator-supplied build identifier emitted as
+// X-SS-Version, cached for the instance's lifetime for the same reason the
+// logging variables are: a Spin variable cannot change without a redeploy.
+//
+// This exists because a deploy propagates more slowly than `spin aka app
+// deploy` waits before declaring failure, so "is the new build serving yet?"
+// had to be answered by probing for a behavioural difference — which is
+// circular when the behaviour you are trying to measure IS the change.
+func appVersion() string {
+	versionOnce.Do(func() {
+		v, err := variables.Get("app_version")
+		if err != nil || v == "" {
+			v = "unknown"
+		}
+		appVersionValue = v
+	})
+	return appVersionValue
+}
+
+var (
+	versionOnce     sync.Once
+	appVersionValue string
+)
 
 // collectorContextKey is an unexported key type so no other package can
 // collide with it. The collector is attached to the request context only

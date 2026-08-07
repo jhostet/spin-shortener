@@ -41,6 +41,19 @@ async def _obs_config() -> tuple[str, str]:
     return _obs_log_level, _obs_debug_token
 
 
+# Cached like the logging variables above, for the same reason: a Spin variable
+# cannot change without a redeploy. None means "not yet read"; "unknown" is the
+# legitimate value when no operator supplied one.
+_app_version: str | None = None
+
+
+async def _app_version_value() -> str:
+    global _app_version
+    if _app_version is None:
+        _app_version = await variables.get("app_version") or "unknown"
+    return _app_version
+
+
 async def _kv_keys(store) -> list[str]:
     """Drain the (stream, future) pair spin:key-value/key-value@3.0.0's
     get-keys returns into a plain list. Isolated here so backup.py can take a
@@ -97,6 +110,11 @@ class HttpHandler(Handler):
             err = True
             response = json_response(500, {"error": "internal_error"})
         dur_ns = time.monotonic_ns() - start_ns
+
+        # Unconditional, unlike Server-Timing: the whole point is to answer
+        # "which build is serving?" from a plain curl, including on the
+        # exception path, without needing the debug token.
+        response.headers["x-ss-version"] = await _app_version_value()
 
         if traced:
             # Server-Timing only for a valid token, never merely because
