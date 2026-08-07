@@ -1,6 +1,17 @@
 # Toggleable structured logging, with KV timing as the first consumer
 
-**Status:** planned 2026-08-06, reviewed by the planner agent the same day. Not implemented.
+**Status:** planned 2026-08-06, reviewed by the planner agent the same day, implemented and deployed the same day.
+
+> **SUPERSEDED IN ONE RESPECT — read before acting on this plan's op counts.** This plan repeatedly states that a
+> successful redirect is **7 KV operations** and that keeping `lookupLink`'s `Exists` probe is deliberate. That was
+> correct while the instrument was being built, and for the reason given: the profile had to hold still so any
+> regression was attributable to the logging rather than to a simultaneous optimisation. Once the build was deployed
+> and traced, the probe measured **21.7 ms on Akamai** — ~19% of the redirect's KV time — and it was removed the same
+> day. **A successful redirect is now 6 operations** (2 `open`, 2 `get`, 2 `set`); a miss stays at **2** (`open` +
+> `get`), since `open` counts and the change swapped `exists` for `get` rather than shedding one. The plan's other
+> deferral held up under measurement and stands: `recordAnalytics` keeps its own `kv.Open`, which is ~0.2% on Akamai
+> rather than the 8–20% the local numbers suggested. The body below is left unedited as the record of what was decided
+> and why.
 **Scope:** `redirect` (Go) and `api` (Python). `gui-pages` and `gui` are out of scope.
 **First consumer:** per-request KV operation timing.
 

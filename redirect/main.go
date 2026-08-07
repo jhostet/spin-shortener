@@ -369,15 +369,25 @@ func intVariable(name string, fallback int) int {
 // linkgate.KVStore interface rather than *kv.Store directly, so it can be
 // handed either a raw store (collector nil, off path) or a
 // linkgate.TimedStore (collector present) with no branching here.
+//
+// Deliberately ONE KV data operation, not two. The Exists probe this used to
+// do ahead of the Get was pure overhead: the SDK's Get returns
+// ([]byte(""), nil) for a missing key — an empty slice with NO error, see
+// spin-go-sdk/v3 kv.Store.Get — so an absent key is already distinguishable
+// without asking first. A stored link record is always JSON and can never be
+// zero-length, so len(raw) == 0 means absent and nothing else. The empty
+// check is explicit rather than left to ParseLink's json.Unmarshal failing,
+// so absence is a stated condition rather than a side effect of a decoder.
+//
+// Measured on the deployed Akamai app 2026-08-06: that probe cost 21.7 ms,
+// ~19% of the redirect's total KV time, because Akamai charges per data
+// operation (~20 ms each) and barely at all per store handle (~154 µs).
+// Locally the same probe measured 13–18 µs and was correctly judged not worth
+// removing — the local numbers do not transfer. See CLAUDE.md's Akamai
+// section for the full per-operation table.
 func lookupLink(store linkgate.KVStore, slug string) (linkgate.Link, bool) {
-	key := linkgate.LinkKey(slug)
-	exists, err := store.Exists(key)
-	if err != nil || !exists {
-		return linkgate.Link{}, false
-	}
-
-	raw, err := store.Get(key)
-	if err != nil {
+	raw, err := store.Get(linkgate.LinkKey(slug))
+	if err != nil || len(raw) == 0 {
 		return linkgate.Link{}, false
 	}
 
