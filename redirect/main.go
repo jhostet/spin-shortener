@@ -272,8 +272,7 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recordAnalytics(slug, r, collector)
-	http.Redirect(w, r, l.TargetURL, http.StatusFound)
+	sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
 }
 
 // handleRedirectPost re-fetches the link fresh from KV — never trusting a
@@ -296,8 +295,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if l.PasswordHash == "" {
-		recordAnalytics(slug, r, collector)
-		http.Redirect(w, r, l.TargetURL, http.StatusFound)
+		sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
 		return
 	}
 
@@ -311,8 +309,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recordAnalytics(slug, r, collector)
-	http.Redirect(w, r, l.TargetURL, http.StatusFound)
+	sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
 }
 
 // recordAnalytics updates the click counter and writes one recent-events
@@ -326,6 +323,43 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 // 8-20% win) but would also change the very baseline this instrument is
 // built to measure against, so it stays deferred pending real Akamai
 // timing evidence (see TASKS.md's Future work).
+// sendRedirectThenRecord issues the 302 and only then records the click.
+//
+// The ordering is the entire point. recordAnalytics is ~78% of this
+// component's KV time (1 get + 2 sets, measured on the deployed Akamai app
+// 2026-08-06) and a visitor has no stake in it, so it runs after the response
+// has been handed to the host rather than before. The Spin Go SDK makes that
+// possible: wasiHandle passes the response to the host as soon as the first
+// Write calls send(), without waiting for the handler to return (see
+// spin-go-sdk/v3 http/http.go) — so the redirect is already travelling while
+// the analytics writes are still in flight.
+//
+// The courtesy body is deliberately dropped and Content-Length: 0 set
+// explicitly. http.Redirect writes a small `<a href=...>Found</a>.` body with
+// NO Content-Length, which leaves a client unable to tell the message is
+// complete until the body stream closes — and that only happens when the
+// handler returns, which would hand back exactly the latency this reordering
+// exists to remove. A 302 needs no body; every client acts on Location.
+//
+// The empty Write is load-bearing, not redundant: Write is what calls send().
+// WriteHeader alone only records the status int (see
+// convertor_outgoing_response.go), so without it nothing reaches the host
+// until the handler returns and the reordering buys nothing.
+//
+// NOTE: when a request is traced with X-SS-Debug, bufferingWriter holds the
+// response until the handler returns so Server-Timing can be attached. That
+// is correct for tracing but it defeats this optimisation, so a traced
+// request does NOT show the improvement. Measure it untraced.
+func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target string, collector *linkgate.Collector) {
+	h := w.Header()
+	h.Set("Location", target)
+	h.Set("Content-Length", "0")
+	w.WriteHeader(http.StatusFound)
+	_, _ = w.Write([]byte{})
+
+	recordAnalytics(slug, r, collector)
+}
+
 func recordAnalytics(slug string, r *http.Request, collector *linkgate.Collector) {
 	store, err := openTimedStore(collector)
 	if err != nil {
