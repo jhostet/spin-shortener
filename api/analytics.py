@@ -14,7 +14,7 @@ from responses import json_response, to_iso8601_utc
 # MUST stay equal to redirect/linkgate/keys.go's CountShards — see that file
 # for the full rule. Lowering this silently drops every click that was
 # recorded into a higher shard. api/tests/test_kvprefix.py pins the equality.
-COUNT_SHARDS = 16
+COUNT_SHARDS = 64
 
 
 def _merge_counts(blobs) -> tuple[int, dict[str, int]]:

@@ -16,7 +16,7 @@ func TestCountShardKey(t *testing.T) {
 	}{
 		{"abc", 3, "analytics:count:abc:3"},
 		{"abc", 0, "analytics:count:abc:0"},
-		{"abc", CountShards - 1, "analytics:count:abc:15"},
+		{"abc", CountShards - 1, "analytics:count:abc:63"},
 	}
 	for _, c := range cases {
 		if got := CountShardKey(c.slug, c.shard); got != c.want {

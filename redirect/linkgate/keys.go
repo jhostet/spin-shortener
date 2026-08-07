@@ -22,13 +22,24 @@ func LinkKey(slug string) string { return LinksPrefix + "slug:" + slug }
 // the same failure shape the prefixes above have, so it is pinned the same
 // way, by api/tests/test_kvprefix.py reading this file.
 //
-// 16 is chosen so that even if every click the app can serve (~25/s, set by
-// Akamai's 50 write RPS cap at two writes per click) landed on one slug, each
-// shard would still see only ~1.6/s — inside the band measured lossless on
-// the live app (0% at 1.2/s per key). See docs/plans/click-count-accuracy.md.
+// 64, raised from 16 on 2026-08-07 after measuring the deployed 16-shard
+// build. The original 16 was justified by per-shard RATE (~1.6 clicks/s per
+// shard at the app-wide ceiling, inside a band measured lossless) and that
+// reasoning was WRONG: a rate does not lose an increment, two clicks sharing
+// one shard's read-modify-write window does. In-flight requests are rate x KV
+// latency, and at 250-400ms latency ~20 clicks/s puts 5-8 requests in flight,
+// so collisions over S shards grow as roughly k^2/2S. 16 shards measured 92.5
+// of 100 recorded at 19.9 clicks/s; 4x the shards should cut that loss ~4x.
+//
+// The read cost this imposes — the analytics page sums every shard — is why
+// this was affordable: api/analytics.py issues those reads concurrently, and
+// the host was measured genuinely overlapping them (~16.6-way), so shard count
+// is no longer a linear latency knob on that page. Do not make those reads
+// sequential again without revisiting this number.
 //
 // RAISE ONLY, NEVER LOWER, and change both languages in the same commit.
-const CountShards = 16
+// Lowering silently discards every click already recorded in a higher shard.
+const CountShards = 64
 
 // CountShardKey is the physical key of one shard of a slug's click counter:
 // analytics:count:<slug>:<shard>. The pre-sharding key was
