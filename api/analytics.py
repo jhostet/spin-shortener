@@ -2,6 +2,7 @@
 writes into the `analytics` KV store on every successful click.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -75,17 +76,30 @@ async def handle_analytics(links_store, analytics_store, principal: Principal, s
     if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
 
-    # The legacy unsharded key first — nothing writes it any more, but clicks
-    # recorded before sharding landed still live there, so summing it in is
-    # what makes this a no-migration change.
-    blobs = [await analytics_store.get(f"count:{slug}")]
-    for shard in range(COUNT_SHARDS):
-        blobs.append(await analytics_store.get(f"count:{slug}:{shard}"))
-    total, days = _merge_counts(blobs)
+    # Every read below is independent, so they are issued together rather than
+    # one after another. Sequentially this endpoint costs one KV round trip per
+    # shard plus one per event slot, which is what makes the shard count show up
+    # directly in page latency; concurrently it costs about one round trip in
+    # total, which is what decouples COUNT_SHARDS from how slow this page feels.
+    #
+    # Whether the host actually overlaps them is visible in the logfmt line:
+    # kv_us is the SUM of per-operation durations while dur_us is wall time, so
+    # kv_us >> dur_us means real overlap and kv_us ~= dur_us means the awaits
+    # ran one at a time. Correctness does not depend on the answer.
+    #
+    # The legacy unsharded key goes first — nothing writes it any more, but
+    # clicks recorded before sharding landed still live there, so summing it in
+    # is what makes this a no-migration change.
+    count_keys = [f"count:{slug}"] + [f"count:{slug}:{shard}" for shard in range(COUNT_SHARDS)]
+    event_keys = [f"events:{slug}:{slot}" for slot in range(num_event_slots)]
+
+    fetched = await asyncio.gather(
+        *(analytics_store.get(key) for key in count_keys + event_keys)
+    )
+    total, days = _merge_counts(fetched[:len(count_keys)])
 
     events = []
-    for slot in range(num_event_slots):
-        raw = await analytics_store.get(f"events:{slug}:{slot}")
+    for raw in fetched[len(count_keys):]:
         if raw is None:
             continue
         event = _parse_event(raw)
