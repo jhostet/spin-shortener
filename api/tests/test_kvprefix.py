@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import analytics
 import kvprefix
 from tests.fakes import FakeStore
 
@@ -108,6 +109,23 @@ def test_go_prefix_constants_match_python_store_prefixes():
 
     assert links_match.group(1) == kvprefix.STORE_PREFIXES["links"]
     assert analytics_match.group(1) == kvprefix.STORE_PREFIXES["analytics"]
+
+
+def test_go_count_shards_matches_python_count_shards():
+    """redirect/linkgate/keys.go's CountShards must stay equal to
+    analytics.COUNT_SHARDS. The writer picks a shard in [0, CountShards) and
+    the reader sums [0, COUNT_SHARDS); if the reader's value is LOWER, every
+    click recorded into a higher shard silently disappears from the total,
+    with no error anywhere — the same silent failure shape as the prefixes
+    above, so it is pinned the same way.
+    """
+    keys_go = Path(__file__).resolve().parents[2] / "redirect" / "linkgate" / "keys.go"
+    source = keys_go.read_text()
+
+    shards_match = re.search(r"CountShards\s*=\s*(\d+)", source)
+    assert shards_match, "CountShards constant not found in keys.go"
+
+    assert int(shards_match.group(1)) == analytics.COUNT_SHARDS
 
 
 # --- Toggleable structured logging (docs/plans/toggleable-logging.md) ---

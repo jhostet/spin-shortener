@@ -76,6 +76,10 @@ async def test_analytics_no_clicks_yet_returns_zeros():
     assert body["recent_events"] == []
 
 
+# This test writes the LEGACY unsharded count:{slug} key, which nothing has
+# written since the counter was sharded across CountShards keys. Keep it, and
+# keep its assertions unmodified: it is the migration regression test, and it
+# is what proves clicks recorded before sharding still show up in the total.
 async def test_analytics_reports_count_and_events():
     links_store = FakeStore()
     analytics_store = FakeStore()
@@ -111,6 +115,73 @@ async def test_analytics_skips_malformed_event_entries():
     body = json.loads(resp.body)
     assert len(body["recent_events"]) == 1
     assert body["recent_events"][0]["referrer"] == "https://ref-b.example/"
+
+
+async def test_analytics_sums_counts_across_shards():
+    links_store = FakeStore()
+    analytics_store = FakeStore()
+    slug = await _make_link(links_store)
+
+    await analytics_store.set(f"count:{slug}:0", json.dumps({"total": 4, "days": {"2026-01-01": 3, "2026-01-02": 1}}).encode("utf-8"))
+    await analytics_store.set(f"count:{slug}:7", json.dumps({"total": 2, "days": {"2026-01-02": 2}}).encode("utf-8"))
+    await analytics_store.set(f"count:{slug}:15", json.dumps({"total": 5, "days": {"2026-01-03": 5}}).encode("utf-8"))
+
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["total"] == 11
+    # The same day appearing in two shards adds rather than overwriting.
+    assert body["days"] == {"2026-01-01": 3, "2026-01-02": 3, "2026-01-03": 5}
+
+
+async def test_analytics_sums_the_legacy_key_alongside_shards():
+    # The no-migration guarantee: pre-sharding clicks live in count:{slug} and
+    # post-sharding ones in count:{slug}:{n}, and the total is both.
+    links_store = FakeStore()
+    analytics_store = FakeStore()
+    slug = await _make_link(links_store)
+
+    await analytics_store.set(f"count:{slug}", json.dumps({"total": 100, "days": {"2025-12-31": 100}}).encode("utf-8"))
+    await analytics_store.set(f"count:{slug}:3", json.dumps({"total": 7, "days": {"2025-12-31": 2, "2026-01-01": 5}}).encode("utf-8"))
+
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    body = json.loads(resp.body)
+    assert body["total"] == 107
+    assert body["days"] == {"2025-12-31": 102, "2026-01-01": 5}
+
+
+async def test_analytics_skips_an_unparseable_shard_without_blanking_the_total():
+    # One corrupt shard must cost only its own clicks, never the whole history.
+    links_store = FakeStore()
+    analytics_store = FakeStore()
+    slug = await _make_link(links_store)
+
+    await analytics_store.set(f"count:{slug}:0", json.dumps({"total": 6, "days": {"2026-01-01": 6}}).encode("utf-8"))
+    await analytics_store.set(f"count:{slug}:1", b"{not valid json at all")
+    await analytics_store.set(f"count:{slug}:2", b"[1, 2, 3]")  # valid JSON, wrong shape
+    await analytics_store.set(f"count:{slug}:4", json.dumps({"total": 9, "days": {"2026-01-02": 9}}).encode("utf-8"))
+
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["total"] == 15
+    assert body["days"] == {"2026-01-01": 6, "2026-01-02": 9}
+
+
+async def test_analytics_reads_every_shard_up_to_count_shards():
+    # A click can land in any shard, so the reader must cover the whole range;
+    # a reader that stopped early would silently lose the tail shards.
+    links_store = FakeStore()
+    analytics_store = FakeStore()
+    slug = await _make_link(links_store)
+
+    for shard in range(analytics.COUNT_SHARDS):
+        await analytics_store.set(f"count:{slug}:{shard}", json.dumps({"total": 1, "days": {"2026-01-01": 1}}).encode("utf-8"))
+
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    body = json.loads(resp.body)
+    assert body["total"] == analytics.COUNT_SHARDS
+    assert body["days"] == {"2026-01-01": analytics.COUNT_SHARDS}
 
 
 async def test_analytics_only_reads_configured_number_of_slots():
