@@ -379,12 +379,16 @@ func intVariable(name string, fallback int) int {
 // check is explicit rather than left to ParseLink's json.Unmarshal failing,
 // so absence is a stated condition rather than a side effect of a decoder.
 //
-// Measured on the deployed Akamai app 2026-08-06: that probe cost 21.7 ms,
-// ~19% of the redirect's total KV time, because Akamai charges per data
-// operation (~20 ms each) and barely at all per store handle (~154 µs).
-// Locally the same probe measured 13–18 µs and was correctly judged not worth
-// removing — the local numbers do not transfer. See CLAUDE.md's Akamai
-// section for the full per-operation table.
+// Measured on the deployed Akamai app 2026-08-06: removing this probe saved
+// 5.2 ms of 38.8 ms, or 13.5%, measured like-for-like against the 7-op build
+// in the same latency window. Akamai charges per data operation and barely at
+// all per store handle (~150 µs), so one fewer data op is the whole win.
+// Do NOT read the absolute figure as a constant — the same 7 operations
+// measured 116.7 ms earlier the same day, a 3x regime swing, so per-op cost
+// there ranged 5.5-16.7 ms. The stable statement is "one operation's worth,
+// ~14% of the redirect's KV time". Locally the probe measured 13-18 us and
+// was correctly judged not worth removing; the local numbers do not transfer.
+// See CLAUDE.md's Akamai section.
 func lookupLink(store linkgate.KVStore, slug string) (linkgate.Link, bool) {
 	raw, err := store.Get(linkgate.LinkKey(slug))
 	if err != nil || len(raw) == 0 {
