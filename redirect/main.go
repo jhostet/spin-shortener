@@ -314,11 +314,12 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 
 // sendRedirectThenRecord issues the 302 and only then records the click.
 //
-// Analytics is SPLIT across the response, deliberately, and the split line is
-// load-bearing: the exact half (recordClickCount, a read-modify-write) runs
-// before, the best-effort half (recordClickEvent, a blind overwrite) after.
-// Recording all of it after the response was measured and rejected — it saved
-// ~24 ms but lost 2 of every 10 back-to-back clicks. See recordClickCount.
+// ALL analytics runs after the response. Measured on Akamai 2026-08-06: this
+// moves median TTFB from 98.0 ms to 74.3 ms (~24 ms, untraced, warm
+// connection) at no measurable accuracy cost — a controlled A/B put click
+// recording at 86/100 deferred against 85/100 not deferred. An intermediate
+// "split" arrangement (count before, event after) was built and measured at
+// ~5.5 ms, inside the noise band, and dropped.
 //
 // All analytics is best-effort in the sense that a KV error is swallowed
 // rather than propagated: failing to record a click must never block the
@@ -355,34 +356,36 @@ func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target
 	analytics := err == nil // best-effort: a KV failure must never block the redirect
 	now := time.Now()
 
-	// Exact half, before the response. See recordClickCount.
-	if analytics {
-		recordClickCount(store, slug, now)
-	}
-
 	h := w.Header()
 	h.Set("Location", target)
 	h.Set("Content-Length", "0")
 	w.WriteHeader(http.StatusFound)
 	_, _ = w.Write([]byte{})
 
-	// Best-effort half, after it. See recordClickEvent.
+	// Both halves after the response. Kept as two functions because they have
+	// genuinely different failure modes — see each — even though both are now
+	// deferred.
 	if analytics {
+		recordClickCount(store, slug, now)
 		recordClickEvent(store, slug, r, now)
 	}
 }
 
 // recordClickCount performs the analytics:count read-modify-write.
 //
-// This MUST run before the response is sent and must never be moved after it.
-// It is a read-modify-write and Spin's KV has no compare-and-swap anywhere, so
-// deferring it lets a client's next request overlap its own previous write and
-// silently lose a count. That is not hypothetical: measured on the deployed
-// Akamai app 2026-08-06, deferring it recorded only 8 clicks from 10
-// back-to-back requests, while the same 10 spaced 2s apart recorded all 10 —
-// proving the host does complete post-response work and that the loss is
-// purely overlap. Before that change a single client could never race itself,
-// because its write had already finished by the time it got its response.
+// It runs AFTER the response, and a controlled A/B on the deployed Akamai app
+// (2026-08-06) is why that is safe. Four rounds of 25 rapid requests recorded
+// 85/100 with both halves before the response and 86/100 with this half after
+// it — indistinguishable. An earlier reading of 8/10 twice was taken as proof
+// that deferring lost counts; at the measured ~85% baseline rate, 20 requests
+// should record 17.1 +/- 1.6, so 16 was ordinary noise, not a regression.
+//
+// The ~15% loss is real but PRE-EXISTING and ordering-independent: this is a
+// read-modify-write and Spin's KV has no compare-and-swap, so overlapping
+// clicks lose increments no matter when the write happens. Fixing it needs a
+// different counter shape, not a different order (see TASKS.md Future work).
+// Do not "fix" it by moving this call back before the response — that was
+// measured and it does not help.
 func recordClickCount(store linkgate.KVStore, slug string, now time.Time) {
 	retentionDays := intVariable("analytics_day_retention_days", 90)
 	day := now.UTC().Format("2006-01-02")
