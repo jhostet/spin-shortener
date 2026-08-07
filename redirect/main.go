@@ -312,22 +312,22 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
 }
 
-// recordAnalytics updates the click counter and writes one recent-events
-// slot for slug. Best-effort: any KV error here is swallowed rather than
-// propagated, since a failure to record a click must never block the
-// redirect itself.
-//
-// Opens its own store rather than taking the handler's — this keeps a
-// successful redirect at 7 KV operations (2 opens) exactly as before this
-// plan. Threading the handler's store in would remove one kv.Open (an
-// 8-20% win) but would also change the very baseline this instrument is
-// built to measure against, so it stays deferred pending real Akamai
-// timing evidence (see TASKS.md's Future work).
 // sendRedirectThenRecord issues the 302 and only then records the click.
 //
-// The ordering is the entire point. recordAnalytics is ~78% of this
-// component's KV time (1 get + 2 sets, measured on the deployed Akamai app
-// 2026-08-06) and a visitor has no stake in it, so it runs after the response
+// Analytics is SPLIT across the response, deliberately, and the split line is
+// load-bearing: the exact half (recordClickCount, a read-modify-write) runs
+// before, the best-effort half (recordClickEvent, a blind overwrite) after.
+// Recording all of it after the response was measured and rejected — it saved
+// ~24 ms but lost 2 of every 10 back-to-back clicks. See recordClickCount.
+//
+// All analytics is best-effort in the sense that a KV error is swallowed
+// rather than propagated: failing to record a click must never block the
+// redirect. This opens its own store rather than reusing the handler's,
+// keeping a successful redirect at 6 KV operations (2 opens); threading the
+// handler's store in would remove one kv.Open, which measured ~0.2% on Akamai
+// (~154 µs against ~20 ms per data operation) and is not worth doing.
+//
+// A visitor has no stake in the events write, so it runs after the response
 // has been handed to the host rather than before. The Spin Go SDK makes that
 // possible: wasiHandle passes the response to the host as soon as the first
 // Write calls send(), without waiting for the handler to return (see
@@ -351,22 +351,39 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 // is correct for tracing but it defeats this optimisation, so a traced
 // request does NOT show the improvement. Measure it untraced.
 func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target string, collector *linkgate.Collector) {
+	store, err := openTimedStore(collector)
+	analytics := err == nil // best-effort: a KV failure must never block the redirect
+	now := time.Now()
+
+	// Exact half, before the response. See recordClickCount.
+	if analytics {
+		recordClickCount(store, slug, now)
+	}
+
 	h := w.Header()
 	h.Set("Location", target)
 	h.Set("Content-Length", "0")
 	w.WriteHeader(http.StatusFound)
 	_, _ = w.Write([]byte{})
 
-	recordAnalytics(slug, r, collector)
+	// Best-effort half, after it. See recordClickEvent.
+	if analytics {
+		recordClickEvent(store, slug, r, now)
+	}
 }
 
-func recordAnalytics(slug string, r *http.Request, collector *linkgate.Collector) {
-	store, err := openTimedStore(collector)
-	if err != nil {
-		return
-	}
-
-	now := time.Now()
+// recordClickCount performs the analytics:count read-modify-write.
+//
+// This MUST run before the response is sent and must never be moved after it.
+// It is a read-modify-write and Spin's KV has no compare-and-swap anywhere, so
+// deferring it lets a client's next request overlap its own previous write and
+// silently lose a count. That is not hypothetical: measured on the deployed
+// Akamai app 2026-08-06, deferring it recorded only 8 clicks from 10
+// back-to-back requests, while the same 10 spaced 2s apart recorded all 10 —
+// proving the host does complete post-response work and that the loss is
+// purely overlap. Before that change a single client could never race itself,
+// because its write had already finished by the time it got its response.
+func recordClickCount(store linkgate.KVStore, slug string, now time.Time) {
 	retentionDays := intVariable("analytics_day_retention_days", 90)
 	day := now.UTC().Format("2006-01-02")
 
@@ -375,7 +392,18 @@ func recordAnalytics(slug string, r *http.Request, collector *linkgate.Collector
 	if updated, err := linkgate.UpdateCount(raw, day, retentionDays); err == nil {
 		_ = store.Set(countKey, updated)
 	}
+}
 
+// recordClickEvent writes one recent-events ring-buffer slot.
+//
+// Safe to run AFTER the response, which is the whole point of the split: it is
+// a blind overwrite with no read, so deferring it cannot lose anything the
+// design does not already accept losing. Its slot collisions depend on the
+// timestamp and the slot count (see CLAUDE.md's Analytics section, which
+// documents this log as a best-effort sample), not on when the write happens.
+// now is passed in rather than re-read so the event still carries the click's
+// timestamp, not the post-response one.
+func recordClickEvent(store linkgate.KVStore, slug string, r *http.Request, now time.Time) {
 	numSlots := intVariable("analytics_event_slots", 30)
 	slot := linkgate.EventSlot(now, numSlots)
 	eventKey := linkgate.EventKey(slug, slot)
