@@ -2,6 +2,7 @@ package linkgate
 
 import (
 	"encoding/json"
+	"math/rand/v2"
 	"testing"
 	"time"
 )
@@ -133,4 +134,70 @@ func TestEventSlot_NonPositiveNumSlotsDefaultsToOne(t *testing.T) {
 	if got := EventSlot(time.Now(), -5); got != 0 {
 		t.Errorf("EventSlot with numSlots=-5 = %d, want 0", got)
 	}
+}
+
+func TestShardFor_WithinRange(t *testing.T) {
+	for _, numShards := range []int{2, 4, 16, 64} {
+		for i := 0; i < 1000; i++ {
+			shard := ShardFor(uint64(i)*2246822519, numShards)
+			if shard < 0 || shard >= numShards {
+				t.Fatalf("ShardFor(_, %d) = %d, out of range", numShards, shard)
+			}
+		}
+	}
+}
+
+// A single-shard (or degenerate) configuration must collapse to the one key
+// rather than dividing by zero or returning a negative index.
+func TestShardFor_NonPositiveOrSingleShardIsAlwaysZero(t *testing.T) {
+	for _, numShards := range []int{-5, 0, 1} {
+		for _, entropy := range []uint64{0, 1, 12345, 1 << 63, ^uint64(0)} {
+			if got := ShardFor(entropy, numShards); got != 0 {
+				t.Errorf("ShardFor(%d, %d) = %d, want 0", entropy, numShards, got)
+			}
+		}
+	}
+}
+
+// assertUniformOverShards fails unless every shard is within ±10% of an even
+// share of draws.
+func assertUniformOverShards(t *testing.T, label string, counts []int, draws int) {
+	t.Helper()
+	expected := float64(draws) / float64(len(counts))
+	low, high := expected*0.9, expected*1.1
+	for shard, got := range counts {
+		if float64(got) < low || float64(got) > high {
+			t.Errorf("%s: shard %d got %d draws, want within ±10%% of %.0f (%.0f..%.0f)",
+				label, shard, got, expected, low, high)
+		}
+	}
+}
+
+func TestShardFor_DistributesUniformlyOverRandomEntropy(t *testing.T) {
+	const draws = 100000
+	counts := make([]int, CountShards)
+	// A fixed PCG seed keeps this deterministic: a distribution test that can
+	// flake is a test that gets muted.
+	rng := rand.New(rand.NewPCG(0x5eed, 0xf00d))
+	for i := 0; i < draws; i++ {
+		counts[ShardFor(rng.Uint64(), CountShards)]++
+	}
+	assertUniformOverShards(t, "random entropy", counts, draws)
+}
+
+// The regression that matters. Clicks arriving at a steady cadence produce
+// timestamps in near-perfect arithmetic progression, and that is exactly the
+// input EventSlot's single multiply-then-reduce is documented (CLAUDE.md,
+// "Analytics") to distribute badly against. A counter built on ShardFor must
+// not inherit that defect, so it is pinned rather than assumed.
+func TestShardFor_DistributesUniformlyOverTimestampShapedInput(t *testing.T) {
+	const draws = 100000
+	const oneMilliInNanos = 1_000_000
+	base := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	counts := make([]int, CountShards)
+	for i := 0; i < draws; i++ {
+		counts[ShardFor(uint64(base+int64(i)*oneMilliInNanos), CountShards)]++
+	}
+	assertUniformOverShards(t, "timestamps 1ms apart", counts, draws)
 }

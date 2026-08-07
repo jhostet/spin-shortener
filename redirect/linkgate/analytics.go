@@ -109,3 +109,28 @@ func EventSlot(now time.Time, numSlots int) int {
 	mixed := uint64(now.UnixNano()) * 2654435761
 	return int(mixed % uint64(numSlots))
 }
+
+// ShardFor maps a 64-bit entropy value onto [0, numShards).
+//
+// The value is run through a splitmix64 finalizer before the modulo so the
+// result depends on all 64 input bits. This is deliberately NOT EventSlot's
+// single multiply-then-reduce: that is documented (CLAUDE.md, "Analytics") as
+// distributing badly against real request timing, the cause has never been
+// found, and a counter's correctness must not inherit an unexplained defect.
+func ShardFor(entropy uint64, numShards int) int {
+	if numShards <= 1 {
+		return 0
+	}
+	return int(mix64(entropy) % uint64(numShards))
+}
+
+// mix64 is the splitmix64 finalizer: three xorshift/multiply rounds that
+// avalanche every input bit across the whole output word.
+func mix64(x uint64) uint64 {
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	x ^= x >> 31
+	return x
+}

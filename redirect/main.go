@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"strconv"
@@ -371,7 +372,8 @@ func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target
 	}
 }
 
-// recordClickCount performs the analytics:count read-modify-write.
+// recordClickCount performs the analytics:count read-modify-write, against one
+// of linkgate.CountShards shard keys picked per click.
 //
 // It runs AFTER the response, and a controlled A/B on the deployed Akamai app
 // (2026-08-06) is why that is safe. Four rounds of 25 rapid requests recorded
@@ -380,21 +382,53 @@ func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target
 // that deferring lost counts; at the measured ~85% baseline rate, 20 requests
 // should record 17.1 +/- 1.6, so 16 was ordinary noise, not a regression.
 //
-// The ~15% loss is real but PRE-EXISTING and ordering-independent: this is a
-// read-modify-write and Spin's KV has no compare-and-swap, so overlapping
-// clicks lose increments no matter when the write happens. Fixing it needs a
-// different counter shape, not a different order (see TASKS.md Future work).
-// Do not "fix" it by moving this call back before the response — that was
-// measured and it does not help.
+// TWO INDEPENDENT MECHANISMS LOSE CLICKS HERE, and sharding addresses exactly
+// one of them. Both were measured on the live app on 2026-08-06:
+//
+//   - Per-key contention. This is a read-modify-write and Spin's KV has no
+//     compare-and-swap, so overlapping clicks on ONE key lose increments: 25%
+//     loss at 9.4 clicks/second on a single slug. Spreading the counter over
+//     shard keys is what fixes it — sixteen slugs at the same app-wide write
+//     load lost 0%, which is the measurement that justified this design.
+//     Ordering cannot fix it; that was A/B'd and it does not help.
+//
+//   - The app-wide write cap. Akamai allows 50 KV writes/second per app and a
+//     recorded click costs two (this shard, plus one events slot), so above
+//     ~25 clicks/second ACROSS THE WHOLE SERVICE writes are throttled and the
+//     loss is not something this function can do anything about. Sharding does
+//     not touch it; only writing less per click would.
+//
+// With CountShards=16, a single link taking every click the app can serve sees
+// only ~1.6 clicks/second per shard, well inside the band measured lossless.
+// So below the app-wide ceiling the per-link penalty is gone, and above it the
+// write cap binds regardless. See docs/plans/click-count-accuracy.md.
 func recordClickCount(store linkgate.KVStore, slug string, now time.Time) {
 	retentionDays := intVariable("analytics_day_retention_days", 90)
 	day := now.UTC().Format("2006-01-02")
 
-	countKey := linkgate.CountKey(slug)
+	shard := linkgate.ShardFor(clickEntropy(now), linkgate.CountShards)
+	countKey := linkgate.CountShardKey(slug, shard)
 	raw, _ := store.Get(countKey)
 	if updated, err := linkgate.UpdateCount(raw, day, retentionDays); err == nil {
 		_ = store.Set(countKey, updated)
 	}
+}
+
+// clickEntropy produces the 64-bit value linkgate.ShardFor reduces to a shard
+// index. Two independent sources are XORed deliberately:
+//
+//   - math/rand/v2's global source, which advances on every call and so varies
+//     within one Wasm instance even if its seed does not.
+//   - the raw nanosecond clock, which varies across instances even if WASI's
+//     random_get is stubbed and every instance seeds identically.
+//
+// Each source has a plausible failure mode on this host that the other covers.
+// If the RNG seeded identically per instance AND Akamai created one instance
+// per request — both plausible, neither confirmed — a rand-only shard would
+// send every instance's first click to the same shard, which is worse than not
+// sharding at all.
+func clickEntropy(now time.Time) uint64 {
+	return uint64(now.UnixNano()) ^ rand.Uint64()
 }
 
 // recordClickEvent writes one recent-events ring-buffer slot.
