@@ -223,7 +223,17 @@ The write path (`recordClickCount` in `redirect/main.go`) picks a shard per clic
 
 The measurement that separates them (2026-08-06, live): **1 slug at 9.4 req/s lost 25%, while 16 slugs at 9.2 req/s — the identical app-wide write load — lost 0%.** Same writes per second, one hot key versus sixteen. 16 slugs at 19.7 req/s (39.4 writes/s) also lost 0%.
 
-**Why 16 shards is enough.** At the app-wide ceiling of ~25 clicks/second, even a single link absorbing *every* click the service can serve sees only ~1.6 clicks/second per shard — against 0% loss measured at 1.2/s per key. So below the app-wide ceiling the per-link penalty is gone entirely, and above it M2 binds regardless of shard count. **A single link above ~25 clicks/second is still lossy and sharding will not save it.**
+**How well 16 shards actually work — measured on the deployed build, 2026-08-07.** Sharding removes most of the per-key loss but **does not remove it**:
+
+| rate | writes/s | recorded per 100 | vs. pre-sharding |
+|---|---|---|---|
+| 4.0 | 8.0 | 100 | — |
+| 9.5 | 19.0 | 97, 100, 98 | **75** |
+| 19.9 | 39.8 | 95, 90 | — |
+
+**Residual loss is driven by concurrency, not by per-shard rate, and the original design reasoning got this wrong.** The plan argued 16 shards suffice because at the app-wide ceiling each shard sees only ~1.6 clicks/s, inside a band measured lossless. But a rate does not lose an increment — **two clicks occupying the same shard's read-modify-write window at the same time** does. In-flight requests ≈ rate × KV latency, and KV latency on Akamai runs 250–400 ms, so ~19.9 req/s puts 5–8 requests in flight across 16 shards. Collision probability grows roughly as k²/2S, quadratic in concurrency — which matches the measured 1.7% → 7.5% loss as the rate doubled, and does not match the flat prediction.
+
+**Consequences.** Click totals are essentially exact below ~10 clicks/second app-wide, drift a few percent by ~20/s, and remain lossy above that. **Raising `CountShards` is the available lever** — it is RAISE ONLY with a cross-language guard, so it needs no migration; 16 → 64 should cut residual loss ~4× by the relation above, at the cost of the analytics read going from 50 to 98 `get`s per page view. The redirect hot path stays at 6 KV operations at any shard count. **A single link above ~25 clicks/second is still lossy and sharding will not save it** — that is M2, and only fewer writes per click addresses it.
 
 **Any measurement of counter accuracy must hold `request_rate × 2 < 50 writes/second`, i.e. stay under ~25 requests/second aggregate, or it measures M2 rather than M1.** This is not a hypothetical caution — the gating probe for this very design was first run at 38.5 req/s (77 writes/s), showed 32.5% loss, and was read as a clean failure; re-run under the cap it passed unambiguously. `dev/click-load.sh` prints the implied write rate and warns at 50 precisely so that cannot happen silently again; use it rather than hand-rolled `curl` loops.
 
@@ -455,12 +465,18 @@ The same page: SQLite storage, Redis triggers, wasi-blobstore, wasi-messaging an
 ```bash
 spin plugin install aka
 spin aka login
-spin build
-spin aka deploy \
+spin aka app deploy --app-id <app-id> --build --no-confirm \
   --variable admin_bootstrap_password=<pw> \
   --variable cookie_secure=true \
-  --variable public_base_urls=https://<app-id>.fwf.app
+  --variable public_base_urls=https://<app-id>.fwf.app \
+  --variable log_debug_token=<token-or-omit>
 ```
+
+**Corrected against the real CLI on 2026-08-07 (`aka` plugin 0.7.4) — the previous version of this block did not work.** Three things: the subcommand is `spin aka app deploy`, not `spin aka deploy`; it takes **`--app-id`, not `--app-name`** (unlike `spin aka app status`, which takes `--app-name` and rejects `--app-id`'s positional form — the two subcommands genuinely differ); and it **requires `--no-confirm` in any non-interactive shell**, otherwise it fails with `No terminal available for interactive selection`. Both mistakes fail before anything uploads, so they are safe, just slow. `--build` replaces the separate `spin build`. Find the app id with `spin aka app list` then `spin aka app status --app-name <name>`.
+
+**`spin aka app deploy`'s readiness check times out at 60 seconds and reports `Error: failed to wait for deployment to go live` — this is NOT necessarily a failed deploy.** Observed 2026-08-07: the deploy had in fact succeeded and went live shortly after the CLI gave up, with the new version already recorded in `spin aka app history`. **Do not redeploy on seeing this.** Check the actual state instead: `spin aka app history --app-name <name>` for a new version row, and probe the live app for something only the new build does. Confirming with a request during the propagation window will show the *old* build and is misleading.
+
+**Setting `log_debug_token` at deploy time is the only way to trace the deployed build**, and it cannot be added or changed later without another deploy. Omit the variable to restore the default `""`, which never matches. A deployed build whose token you do not know cannot be traced at all — which is why a "compare against a pre-change trace" verification has to take its baseline locally instead.
 
 Three variables must be set on every deploy: `admin_bootstrap_password` (required secret, no default — seeds the first admin), `cookie_secure=true` (the local-dev `false` override must NOT ship — see "Commands" above), and `public_base_urls` pointing at the real deployed app URL (see "Multi-domain display" above for the silent-fallback-to-`localhost` trap if this is ever renamed or misconfigured on upgrade). Whether a `secret = true` variable like `admin_bootstrap_password` can be supplied through `--variable` is unconfirmed until a deploy is actually attempted.
 
