@@ -196,6 +196,25 @@ async def test_get_edit_all_permission_can_view_others_links():
     assert resp.status == 200
 
 
+async def test_list_skips_a_slug_whose_record_is_missing():
+    """An interrupted bulk delete leaves index entries with no backing record
+    (records are removed before indexes, deliberately). The gathered fetch in
+    handle_list must skip those the same way the sequential loop did, rather
+    than erroring or emitting a null entry — otherwise a crash mid-delete
+    would take the whole dashboard down instead of being invisible."""
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
+
+    slugs = await links.owned_slugs(store, "alice")
+    await store.delete(f"slug:{slugs[0]}")
+
+    resp = await links.handle_list(store, _principal(username="alice"))
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert [link["target_url"] for link in body["links"]] == ["https://example.com/two"]
+
+
 async def test_get_not_found():
     store = FakeStore()
     resp = await links.handle_get(store, _principal(), "doesnotexist")

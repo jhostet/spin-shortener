@@ -2,6 +2,7 @@
 custom slugs and per-link password protection.
 """
 
+import asyncio
 import json
 import re
 import secrets
@@ -256,11 +257,14 @@ async def handle_list(store, principal: Principal):
         slugs = await _all_slugs(store)
     else:
         slugs = await owned_slugs(store, principal.username)
-    records = []
-    for slug in slugs:
-        record = await get_link(store, slug)
-        if record is not None:
-            records.append(public_link(record))
+    # One gathered fetch, not a round trip per link. `GET /api/links` has no
+    # pagination, so the sequential form cost ~23 ms per link against a
+    # deployed store — ~2.4 s at 100 links. The host genuinely overlaps
+    # concurrent KV reads, and reads have wide headroom under Akamai's
+    # 1,000 RPS read cap (writes, capped at 50 RPS, must NOT be gathered).
+    # `gather` preserves input order, so the response stays in index order.
+    fetched = await asyncio.gather(*(get_link(store, slug) for slug in slugs))
+    records = [public_link(record) for record in fetched if record is not None]
     return json_response(200, {"links": records})
 
 
