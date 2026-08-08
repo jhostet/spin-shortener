@@ -602,7 +602,14 @@ details summary:focus-visible:not([role]) {
   font-weight: 600;
 }
 
-/* Status badge — small functional color coding, not decoration. */
+/* Status badge — small functional color coding, not decoration.
+ *
+ * Four states, not two, and they are the RESOLVABILITY of the link, not the
+ * stored `status` field (see resolveLinkState in dashboard.js for why). No new
+ * token is introduced: `scheduled` reuses .not-yet-live's slate and `expired`
+ * reuses .expired's danger red, so the badge and the Starts/Expires cell can
+ * never disagree. The label text carries the distinction on its own, so the
+ * color is reinforcement rather than the only signal. */
 .status-badge {
   font-weight: 600;
   text-transform: capitalize;
@@ -610,8 +617,43 @@ details summary:focus-visible:not([role]) {
 .status-badge.status-active {
   color: var(--ss-ok-500);
 }
-.status-badge.status-disabled {
+.status-badge.status-disabled,
+.status-badge.status-expired {
   color: var(--ss-danger-500);
+}
+.status-badge.status-scheduled {
+  color: var(--ss-slate-500);
+}
+
+/* Static advisory / unsaved-state note — deliberately NOT .form-error.
+ *
+ * Red is reserved for "something just failed". Reusing it for a standing
+ * advisory makes a real failure visually identical to permanent furniture,
+ * which is exactly what happened on backup.html. Same weight and spacing as
+ * .form-error so the two read as one family, in the neutral slate that
+ * .not-yet-live already uses for informational state. */
+.form-note {
+  color: var(--ss-slate-500);
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+/* An unsaved row in the URL policy table.
+ *
+ * The badge is the WHOLE signal — deliberately no row tint. A tint was built
+ * and then measured out: Pico's own selected-row background (#dfe3eb, the
+ * only both-theme token that fit) drops Signal Blue to 4.03:1, under the
+ * 4.5:1 AA minimum, and pulls the outline-secondary Remove button down with
+ * it. That is the same "measured against the wrong assumed background"
+ * mistake this file already records twice. Words over hue also matches the
+ * .expiring-soon/.expired precedent above, where the text suffix carries the
+ * distinction rather than a second color. */
+.pending-badge {
+  color: var(--ss-slate-500);
+  font-weight: 600;
+  font-size: 0.75rem;
+  margin-left: 0.35rem;
+  white-space: nowrap;
 }
 
 /* Form/page error text — a shared class instead of a repeated inline

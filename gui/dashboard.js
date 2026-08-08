@@ -393,7 +393,7 @@ function renderLinksTable() {
       <td>${escapeHtml(link.owner)}${isDeletedOwner(link.owner) ? ' <span class="status-badge status-disabled">deleted account</span>' : ""}</td>
       <td class="destination-cell" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
       <td>${formatDateTime(link.created_at)}</td>
-      <td><span class="status-badge status-${escapeHtml(link.status)}">${escapeHtml(link.status)}</span></td>
+      <td>${statusBadge(link)}</td>
       <td>${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>
       <td>${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
       <td>
@@ -999,6 +999,14 @@ const CSV_COLUMNS = [
   ["Owner", (l) => l.owner],
   ["Destination", (l) => l.target_url],
   ["Created", (l) => l.created_at ?? ""],
+  // Two columns, deliberately. `State` is what the dashboard shows and what
+  // an operator means by "is this link working" (see resolveLinkState);
+  // `Status` stays the raw stored field, because a CSV is also a data export
+  // and silently replacing a stored value with a derived one would be its own
+  // small lie. Exporting only the derived value would have made the file
+  // disagree with nothing; exporting only the stored one is what let the file
+  // disagree with the table it came from.
+  ["State", (l) => resolveLinkState(l)],
   ["Status", (l) => l.status],
   ["Starts", (l) => l.start_at ?? ""],
   ["Expires", (l) => l.end_at ?? ""],

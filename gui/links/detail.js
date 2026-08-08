@@ -5,17 +5,47 @@ function formatDateTime(iso) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
 }
 
+// Hides every content article and leaves one error line plus a way out.
+//
+// Without this the page rendered a confident skeleton of nothing for a link
+// that doesn't exist: every field label with a blank value, a QR <img> whose
+// src 404s (so the browser drew its broken-image icon), two live download
+// buttons that would also 404, "Total clicks: 0", and both tables showing
+// headers with no rows — because the empty-state rows only render inside
+// loadAnalytics()'s success path. These are the states reached from a
+// bookmark, a truncated Slack paste, or a link a colleague deleted, i.e. by
+// people who are already confused. Looking like it worked is the worst
+// available answer. (Impeccable critique, 2026-08-08.)
+function showOnlyError(message) {
+  for (const id of ["link-info", "qr-section", "analytics-section"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  const errorEl = document.getElementById("page-error");
+  errorEl.textContent = message;
+  document.getElementById("detail-dead-end-exit").hidden = false;
+}
+
 async function loadLinkInfo() {
   const { ok, data } = await api.get(`/links/${slug}`);
   if (!ok) {
-    document.getElementById("page-error").textContent = friendlyError(data, "Could not load this link.");
-    return;
+    // A page-local override: app.js's shared not_found copy says "try
+    // refreshing the page", which is true where a stale list is the likely
+    // cause and actively misleading here — refreshing a deleted link can
+    // never help.
+    showOnlyError(friendlyError(data, "Could not load this link.", {
+      not_found: "That short link doesn't exist — it may have been deleted.",
+    }));
+    return false;
   }
 
   document.getElementById("target-url").textContent = data.target_url;
   const statusEl = document.getElementById("status");
-  statusEl.textContent = data.status;
-  statusEl.classList.add(`status-${data.status}`);
+  // Resolvability, not the stored `status` field — same correction as the
+  // dashboard's status badge; see resolveLinkState in dashboard.js.
+  const state = resolveLinkState(data);
+  statusEl.textContent = STATE_LABELS[state] || state;
+  statusEl.classList.add(`status-${state}`);
   document.getElementById("custom-slug-status").textContent = data.custom ? "Yes" : "No";
   const tagList = data.tags ?? [];
   document.getElementById("tags").innerHTML = tagList.length
@@ -35,6 +65,7 @@ async function loadLinkInfo() {
   document.getElementById("detail-edit-link").hidden = !canEdit;
 
   applyShortUrl();
+  return true;
 }
 
 // Sets the heading, the Copy target and the three QR URLs from the currently
@@ -96,7 +127,12 @@ initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Link details", mana
   if (result.ok) currentPrincipal = result.data;
 
   if (!slug) {
-    document.body.textContent = "No link specified.";
+    // Previously `document.body.textContent = "No link specified."`, which
+    // destroyed the nav, the stylesheet association and every route out —
+    // leaving a bare sentence at (0,0) with no landmark, no heading and
+    // nothing to navigate. Keep the shell; use the same dead-end treatment as
+    // a missing link.
+    showOnlyError("No short link was specified.");
   } else {
     document.getElementById("detail-edit-link").href = `../dashboard.html?edit=${encodeURIComponent(slug)}`;
     // Registered once, as today — reads shortUrlFor(slug) at click time
@@ -104,7 +140,13 @@ initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Link details", mana
     // change never needs to (and never does) re-register this listener.
     document.getElementById("detail-copy-btn").addEventListener("click", (evt) => copyToClipboard(shortUrlFor(slug), evt.currentTarget));
     onDomainChange(applyShortUrl);
-    loadLinkInfo();
-    loadAnalytics();
+    // Gated, not fired in parallel: if the link doesn't exist, loadAnalytics
+    // would overwrite the dead-end message with its own error and re-reveal
+    // nothing useful. It also used to be the reason the empty-state rows
+    // never rendered on a failed load — they only exist inside its success
+    // path, so the tables showed bare headers instead.
+    loadLinkInfo().then((found) => {
+      if (found) loadAnalytics();
+    });
   }
 });

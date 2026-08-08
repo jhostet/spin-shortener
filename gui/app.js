@@ -182,6 +182,47 @@ function friendlyError(data, fallback, overrides) {
   return (overrides && overrides[code]) || ERROR_MESSAGES[code] || fallback;
 }
 
+// `status` is a STORED field; "does this link resolve right now" is a COMPUTED
+// one — the redirect component answers it as status AND [start_at, end_at).
+// Rendering the stored field and labelling it the fact is how a link whose
+// window opened in November came to show a green "active" badge while
+// /r/<slug> returned 404 (Impeccable critique, 2026-08-08). The qualifier
+// lived in the Starts cell, which dashboard.css hides below 600px, so on a
+// phone it was not merely invisible — it was absent from the accessibility
+// tree entirely.
+//
+// Mirrors redirect/linkgate.IsWithinWindow: inclusive start, exclusive end.
+// A non-active stored status wins over the window, matching the server's own
+// precedence (a disabled link never resolves, whatever its schedule says).
+//
+// Shared here rather than in dashboard.js because the dashboard table, the
+// CSV export and links/detail.html must never disagree about what a link's
+// state is — three call sites, one definition.
+function resolveLinkState(link) {
+  if (link.status !== "active") return link.status;
+  const now = Date.now();
+  if (link.start_at && new Date(link.start_at).getTime() > now) return "scheduled";
+  if (link.end_at && new Date(link.end_at).getTime() <= now) return "expired";
+  return "active";
+}
+
+const STATE_LABELS = {
+  active: "Active",
+  scheduled: "Scheduled",
+  expired: "Expired",
+  disabled: "Disabled",
+};
+
+// Introduces no new design token: `scheduled` reuses .not-yet-live's slate
+// (informational, not an alarm) and `expired` reuses .expired's danger red,
+// so the badge and the Starts/Expires cell agree by construction. The label
+// text carries the distinction on its own, so color is reinforcement rather
+// than the only signal.
+function statusBadge(link) {
+  const state = resolveLinkState(link);
+  return `<span class="status-badge status-${escapeHtml(state)}">${escapeHtml(STATE_LABELS[state] || state)}</span>`;
+}
+
 // Builds and wires the Auto/Light/Dark control into `container`. Shared
 // rather than living inside initHeader() because login.html has no
 // `#app-header` and never calls initHeader(), yet still needs somewhere to

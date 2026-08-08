@@ -20,6 +20,14 @@
       </div>
     </div>
     <p id="page-error" class="form-error" role="alert"></p>
+    <!-- The way out of a dead end. Revealed only when the page has nothing to
+         show (no such link, or no slug at all) — states reached from a
+         bookmark or a stale paste, where previously the page either rendered a
+         convincing skeleton of nothing or replaced document.body outright,
+         leaving no nav and no route anywhere. -->
+    <p id="detail-dead-end-exit" hidden>
+      <a href="../dashboard.html" role="button" class="outline">Back to dashboard</a>
+    </p>
   </div>
 
   <main class="container">

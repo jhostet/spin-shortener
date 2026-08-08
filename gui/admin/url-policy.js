@@ -30,6 +30,26 @@ function violationReasonLabel(reason) {
 // operator see the whole change before it lands.
 let stagedPolicy = { version: 1, default_action: "allow", rules: [] };
 
+// The saved document, kept alongside the staged one so "is there unsaved
+// work" is answerable. Without this the page had no way to tell a staged
+// change from a saved one and said nothing either way: an admin could flip
+// the default to Block, read a sentence stating everything was now blocked,
+// leave, and have changed nothing. That was this app's only silent
+// data-loss path, and it sat on its only security-policy surface.
+// (Impeccable critique, 2026-08-08.)
+let savedPolicy = { version: 1, default_action: "allow", rules: [] };
+
+function policySnapshot(policy) {
+  return JSON.stringify({
+    default_action: policy.default_action,
+    rules: (policy.rules || []).map((r) => `${r.host}:${r.action}:${r.note || ""}`),
+  });
+}
+
+function isDirty() {
+  return policySnapshot(stagedPolicy) !== policySnapshot(savedPolicy);
+}
+
 function defaultActionSummary(action) {
   return action === "deny"
     ? "Only destinations matched by an explicit Allow rule (or a subdomain of one) are permitted. Everything else is blocked."
@@ -37,8 +57,33 @@ function defaultActionSummary(action) {
 }
 
 function renderDefaultActionSummary() {
+  const summary = defaultActionSummary(document.getElementById("default-action").value);
+  // Present tense only once it is true. While dirty the sentence describes
+  // what saving WOULD do — the old copy asserted the new behaviour the
+  // instant the select changed, which is what made "I already did this"
+  // the natural reading.
+  const dirtyDefault = stagedPolicy.default_action !== savedPolicy.default_action;
   document.getElementById("default-action-summary").textContent =
-    defaultActionSummary(document.getElementById("default-action").value);
+    dirtyDefault ? `Will apply on save: ${summary}` : summary;
+}
+
+// One place that re-derives every unsaved-state affordance, called after any
+// mutation. Keeping it single means a future control cannot add a staged
+// mutation and forget to mark the page dirty.
+function renderDirtyState() {
+  const dirty = isDirty();
+  const saveBtn = document.getElementById("policy-save");
+  const pendingCount =
+    Math.abs((stagedPolicy.rules || []).length - (savedPolicy.rules || []).length) +
+    (stagedPolicy.default_action !== savedPolicy.default_action ? 1 : 0);
+
+  saveBtn.textContent = dirty
+    ? `Save ${pendingCount} pending change${pendingCount === 1 ? "" : "s"}`
+    : "Save policy";
+  // Recede when there is nothing to save, so the button's prominence tracks
+  // whether it has work to do rather than being permanently loud.
+  saveBtn.classList.toggle("outline", !dirty);
+  document.getElementById("policy-dirty-note").hidden = !dirty;
 }
 
 function renderRulesTable() {
@@ -54,13 +99,18 @@ function renderRulesTable() {
     .map((rule, index) => {
       const action = rule.action === "allow" ? "Allow" : "Block";
       const note = rule.note ? escapeHtml(rule.note) : "—";
+      // A staged rule has no created_at/created_by, since the server stamps
+      // those on save. That was previously the ONLY tell that a row was
+      // unsaved — an em-dash in a column an operator has no reason to read.
+      // Say it in words instead, in the column they are already looking at.
+      const pending = !rule.created_by && !rule.created_at;
       const added = rule.created_by
         ? `${escapeHtml(rule.created_at || "")} by ${escapeHtml(rule.created_by)}`
         : escapeHtml(rule.created_at || "—");
       return `
         <tr>
           <td>${escapeHtml(rule.host)}</td>
-          <td>${action}</td>
+          <td>${action}${pending ? ' <span class="pending-badge">Not saved</span>' : ""}</td>
           <td>${note}</td>
           <td>${added}</td>
           <td><button type="button" class="outline secondary rule-remove" data-index="${index}">Remove</button></td>
@@ -73,6 +123,7 @@ function renderRulesTable() {
 document.getElementById("default-action").addEventListener("change", (e) => {
   stagedPolicy.default_action = e.target.value;
   renderDefaultActionSummary();
+  renderDirtyState();
 });
 
 document.getElementById("rule-add").addEventListener("click", () => {
@@ -100,6 +151,7 @@ document.getElementById("rule-add").addEventListener("click", () => {
 
   stagedPolicy.rules = [...(stagedPolicy.rules || []), { host, action, note, created_at: null, created_by: null }];
   renderRulesTable();
+  renderDirtyState();
 
   hostInput.value = "";
   document.getElementById("rule-note").value = "";
@@ -111,6 +163,7 @@ document.getElementById("rules-table-body").addEventListener("click", (e) => {
   const index = Number(btn.dataset.index);
   stagedPolicy.rules = (stagedPolicy.rules || []).filter((_, i) => i !== index);
   renderRulesTable();
+  renderDirtyState();
 });
 
 document.getElementById("policy-save").addEventListener("click", async () => {
@@ -138,10 +191,22 @@ document.getElementById("policy-save").addEventListener("click", async () => {
     return;
   }
 
+  // The server's response is the new saved truth: advance both copies
+  // together so the page goes clean, the "Not saved" markers clear (the
+  // returned rules now carry created_at/created_by), and the default-action
+  // summary drops back to present tense.
   stagedPolicy = data;
+  savedPolicy = JSON.parse(JSON.stringify(data));
   renderRulesTable();
+  renderDefaultActionSummary();
+  renderDirtyState();
   successEl.textContent = "Policy saved.";
   successEl.hidden = false;
+
+  // Re-check violations automatically. A saved policy whose effect on
+  // existing links is unknown until someone remembers to press a separate
+  // button is the same "did that do anything?" gap the dirty state closes.
+  runViolationsCheck();
 });
 
 function renderViolations(report) {
@@ -177,7 +242,12 @@ function renderViolations(report) {
   `;
 }
 
-document.getElementById("violations-btn").addEventListener("click", async () => {
+// Named rather than inline so a successful save can re-run it. Existing links
+// that break a newly-saved rule are reported, never mutated (that is a
+// deliberate product decision — see CLAUDE.md), which makes "what did this
+// rule just break?" the operator's immediate next question. Answering it
+// automatically beats leaving it behind a button they have to remember.
+async function runViolationsCheck() {
   const errorEl = document.getElementById("violations-error");
   const resultEl = document.getElementById("violations-result");
   errorEl.textContent = "";
@@ -190,7 +260,9 @@ document.getElementById("violations-btn").addEventListener("click", async () => 
   }
 
   renderViolations(data);
-});
+}
+
+document.getElementById("violations-btn").addEventListener("click", runViolationsCheck);
 
 initHeader({
   dashboardHref: "../dashboard.html",
@@ -218,8 +290,20 @@ initHeader({
   const { ok, data } = await api.get("/admin/url-policy");
   if (ok) {
     stagedPolicy = data;
+    savedPolicy = JSON.parse(JSON.stringify(data));
   }
   document.getElementById("default-action").value = stagedPolicy.default_action;
   renderDefaultActionSummary();
   renderRulesTable();
+  renderDirtyState();
+});
+
+// Last line of defence, deliberately not the only one: the in-page markers
+// above are what an operator should notice. This catches the case where they
+// did not. Browsers ignore custom text here and show their own wording, so
+// none is supplied.
+window.addEventListener("beforeunload", (e) => {
+  if (!isDirty()) return;
+  e.preventDefault();
+  e.returnValue = "";
 });

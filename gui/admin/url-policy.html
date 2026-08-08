@@ -93,6 +93,12 @@
 
         <p id="policy-error" class="form-error" role="alert"></p>
         <p id="policy-success" class="form-success" aria-live="polite" hidden></p>
+        <!-- Unsaved-work notice. `.form-note` rather than `.form-error`: this
+             is a state, not a failure, and reusing the error red would make a
+             real save failure visually identical to it. -->
+        <p id="policy-dirty-note" class="form-note" aria-live="polite" hidden>
+          You have unsaved changes. Nothing on this page is in effect until you save.
+        </p>
         <button type="button" id="policy-save">Save policy</button>
       </article>
 
