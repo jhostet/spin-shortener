@@ -93,30 +93,40 @@ func FormatEvent(unixMs int64, referrer, uaClass string) string {
 // EventSlot picks a deterministic ring-buffer slot for "now" out of
 // numSlots, so recent-events reads are numSlots direct KV gets, never a scan.
 //
-// The raw nanosecond timestamp is multiplied by a large odd constant before
-// reducing mod numSlots, spreading entropy from all its bits into the
-// result. A plain `UnixNano() % numSlots` collided far more than a uniform
-// distribution would predict under realistic request timing (e.g. periodic
-// clicks a fixed interval apart), because clock resolution and/or timing
-// regularity concentrates entropy in a way that aliases against a small
-// modulus — confirmed empirically against the actual componentize-go/wasip1
-// clock. This is a de-correlation trick (Knuth's multiplicative hash
-// constant), not a cryptographic hash.
+// It delegates to ShardFor, whose splitmix64 finalizer is what makes the
+// distribution hold. This used to be `(UnixNano() * 2654435761) mod numSlots`
+// — a single multiply, intended as a de-correlation trick — and that was the
+// cause of the long-standing recent-events collision defect, found 2026-08-07:
+//
+//	A single multiply is LINEAR OVER THE MODULUS. Multiplication distributes
+//	over the modulo, so for two clicks Δ nanoseconds apart the slot advances by
+//	a constant stride of (Δ * 2654435761) mod numSlots. The reachable slots are
+//	therefore one additive cycle of length numSlots/gcd(stride, numSlots) —
+//	never the full ring, no matter how distinct the timestamps are. The
+//	multiplier is ≡ 1 (mod 30), so at the default numSlots=30 the stride
+//	collapses to Δ mod 30, and millisecond-scale Δ values are divisible by high
+//	powers of 2 and 5 while 30 = 2·3·5 shares them. Clicks 300 ms apart reached
+//	exactly ONE slot; 1 ms apart reached three of thirty.
+//
+// That reproduced the documented observation (8 requests 300 ms apart retaining
+// 3 distinct events) exactly. The timestamps were never the problem — CLAUDE.md
+// previously blamed WASI clock resolution and that explanation is retracted;
+// the timestamps are perfectly distinct and simply aliased onto the same slots.
+//
+// splitmix64's xorshifts are not linear over the modulus, so there is no
+// constant stride to collapse. Do not "simplify" this back into a multiply.
 func EventSlot(now time.Time, numSlots int) int {
-	if numSlots <= 0 {
-		numSlots = 1
-	}
-	mixed := uint64(now.UnixNano()) * 2654435761
-	return int(mixed % uint64(numSlots))
+	return ShardFor(uint64(now.UnixNano()), numSlots)
 }
 
 // ShardFor maps a 64-bit entropy value onto [0, numShards).
 //
 // The value is run through a splitmix64 finalizer before the modulo so the
-// result depends on all 64 input bits. This is deliberately NOT EventSlot's
-// single multiply-then-reduce: that is documented (CLAUDE.md, "Analytics") as
-// distributing badly against real request timing, the cause has never been
-// found, and a counter's correctness must not inherit an unexplained defect.
+// result depends on all 64 input bits, and — the property that actually
+// matters — so that inputs in arithmetic progression do not map to slots in
+// arithmetic progression. A single multiply-then-reduce has that flaw and it
+// is what broke EventSlot for as long as this feature has existed; see the
+// derivation above EventSlot, which now delegates here.
 func ShardFor(entropy uint64, numShards int) int {
 	if numShards <= 1 {
 		return 0

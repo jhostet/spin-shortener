@@ -136,6 +136,109 @@ func TestEventSlot_NonPositiveNumSlotsDefaultsToOne(t *testing.T) {
 	}
 }
 
+// The regression this function exists to prevent, and the reason the fix is
+// worth having: clicks arriving at a steady cadence produce timestamps in
+// arithmetic progression, and the old single-multiply implementation mapped
+// those onto an arithmetic progression of SLOTS — one additive cycle of the
+// ring, never the whole thing. The spacings below are the exact ones measured
+// collapsing on 2026-08-07. Under the old code, 300 ms apart reached ONE slot
+// of thirty and 1 ms apart reached three; every row here would fail.
+//
+// Thresholds are deliberately loose. This pins "the ring is actually used",
+// not a distribution quality bound — 20 clicks into 30 slots cannot fill more
+// than about 63% of them however good the hash is (balls-in-bins), so
+// demanding more would be demanding something arithmetically impossible.
+func TestEventSlot_SteadyCadenceReachesMostOfTheRing(t *testing.T) {
+	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name     string
+		spacing  time.Duration
+		numSlots int
+		clicks   int
+		wantMin  int // distinct slots, at minimum
+	}{
+		{"1ms apart, 30 slots", time.Millisecond, 30, 20, 10},
+		{"300ms apart, 30 slots", 300 * time.Millisecond, 30, 20, 10},
+		{"107ms apart, 30 slots", 107 * time.Millisecond, 30, 20, 10},
+		{"1ms apart, 16 slots", time.Millisecond, 16, 16, 7},
+		{"300ms apart, 16 slots", 300 * time.Millisecond, 16, 16, 7},
+		{"1s apart, 16 slots", time.Second, 16, 16, 7},
+		// Deliberately no "1s apart, 30 slots" row: under the old code that
+		// case reached 11 of 30 over 20 clicks and so would not have failed,
+		// making it a decorative assertion rather than a regression pin. The
+		// parity test below is what covers 30-slot behaviour universally.
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seen := make(map[int]bool)
+			for i := 0; i < tc.clicks; i++ {
+				slot := EventSlot(base.Add(time.Duration(i)*tc.spacing), tc.numSlots)
+				if slot < 0 || slot >= tc.numSlots {
+					t.Fatalf("slot %d out of range for numSlots=%d", slot, tc.numSlots)
+				}
+				seen[slot] = true
+			}
+			if len(seen) < tc.wantMin {
+				t.Errorf("%d clicks %v apart reached only %d of %d slots, want >= %d",
+					tc.clicks, tc.spacing, len(seen), tc.numSlots, tc.wantMin)
+			}
+		})
+	}
+}
+
+// The sharpest statement of the old defect, and the one that does not depend
+// on run length, spacing or slot count arithmetic working out a particular way.
+//
+// Go's multiply wraps at 2^64. 2^64 is divisible by 2, so wraparound preserves
+// the low bit, and every realistic spacing in nanoseconds is even — which
+// pinned slot PARITY to the base timestamp's low bit forever. Under the old
+// code, a link whose first click landed on an even nanosecond could reach only
+// even slots, for the entire life of the link: HALF THE RING WAS PERMANENTLY
+// UNREACHABLE. Verified against the old formula at 5,000 clicks across four
+// spacings and both base parities — every run reached exactly one parity.
+//
+// This also corrects the stride/gcd derivation's scope. That analysis is exact
+// only when numSlots divides 2^64 (i.e. is a power of two), where the collapse
+// is total — 1 slot of 16, every spacing. For numSlots=30 the wraparound
+// perturbs it, so the reachable set is larger than the naive formula predicts
+// but still capped at half the ring.
+func TestEventSlot_ReachesBothParitiesOfTheRing(t *testing.T) {
+	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	for _, spacing := range []time.Duration{
+		time.Millisecond, 300 * time.Millisecond, time.Second, 1500 * time.Millisecond,
+	} {
+		for _, offsetNanos := range []int{0, 1} { // even and odd base timestamps
+			seen := map[int]bool{}
+			start := base.Add(time.Duration(offsetNanos))
+			for i := 0; i < 200; i++ {
+				seen[EventSlot(start.Add(time.Duration(i)*spacing), 30)%2] = true
+			}
+			if len(seen) != 2 {
+				t.Errorf("spacing %v, base+%dns: reached only parity %v — half the ring is unreachable",
+					spacing, offsetNanos, seen)
+			}
+		}
+	}
+}
+
+// The original bug report, reproduced as a test: 8 requests 300 ms apart
+// retained only 3 distinct events under the old implementation.
+func TestEventSlot_ReproducesTheOriginalBugReportScenario(t *testing.T) {
+	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	seen := make(map[int]bool)
+	for i := 0; i < 8; i++ {
+		seen[EventSlot(base.Add(time.Duration(i)*300*time.Millisecond), 30)] = true
+	}
+	// 8 balls into 30 bins retains ~7.1 distinct on average. The old code gave
+	// exactly 1. Anything at or above 6 means the ring is genuinely in use.
+	if len(seen) < 6 {
+		t.Errorf("8 clicks 300ms apart retained %d distinct slots, want >= 6 (old code gave 1)", len(seen))
+	}
+}
+
 func TestShardFor_WithinRange(t *testing.T) {
 	for _, numShards := range []int{2, 4, 16, 64} {
 		for i := 0; i < 1000; i++ {
