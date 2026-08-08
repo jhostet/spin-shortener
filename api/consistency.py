@@ -18,6 +18,7 @@ and check 10 needs only the `username` field of a `session:` value.
 
 import json
 
+from kvbatch import gather_reads
 from responses import Response, iso_now, json_response
 
 MAX_FINDINGS_PER_CHECK = 100
@@ -157,11 +158,19 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
     unrecognized: list[dict] = []
 
     links_keys = await list_keys(links_store)
+    # One gathered read for the whole store rather than a round trip per key.
+    # Every key is fetched, including ones the loop classifies as
+    # `unrecognized` and discards: an allowlist here would have to restate the
+    # branch conditions below, and a condition that drifted out of it would
+    # silently hand the loop `None` and report a healthy key as unreadable.
+    links_values = dict(
+        zip(links_keys, await gather_reads(links_store.get(key) for key in links_keys))
+    )
     slug_count = 0
     owner_index_count = 0
     for key in links_keys:
         if key == ALL_SLUGS_INDEX_KEY:
-            raw = await links_store.get(key)
+            raw = links_values[key]
             parsed = _parse_str_list(raw)
             if raw is not None and parsed is None:
                 unreadable.append({"store": "links", "key": key})
@@ -170,7 +179,7 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
                 all_links = parsed
         elif key.startswith(SLUG_PREFIX):
             slug_count += 1
-            raw = await links_store.get(key)
+            raw = links_values[key]
             record = _parse_link_record(raw)
             if raw is not None and record is None:
                 unreadable.append({"store": "links", "key": key})
@@ -179,7 +188,7 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
         elif key.startswith(OWNER_LINKS_PREFIX):
             owner_index_count += 1
             username = key[len(OWNER_LINKS_PREFIX):]
-            raw = await links_store.get(key)
+            raw = links_values[key]
             parsed = _parse_str_list(raw)
             if raw is not None and parsed is None:
                 unreadable.append({"store": "links", "key": key})
@@ -190,7 +199,7 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
             # Known shape. Parsed only far enough to report a corrupted
             # policy as unreadable_value — no new check id, and no field of
             # it is needed by any of the twelve.
-            raw = await links_store.get(key)
+            raw = links_values[key]
             if raw is not None and _parse_policy(raw) is None:
                 unreadable.append({"store": "links", "key": key})
         else:
@@ -201,11 +210,24 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
     session_usernames: list[str] = []
 
     users_keys = await list_keys(users_store)
+    # Deliberately NOT every key, unlike the links store above: a `user:`
+    # record's value holds a PBKDF2 hash and must never be read here, so this
+    # is an explicit allowlist of the two shapes the loop below actually reads.
+    # Indexed with `[]` rather than `.get()` on purpose — a future branch that
+    # reads a value without being added here fails loudly instead of silently
+    # seeing None and reporting a healthy key as unreadable.
+    users_value_keys = [
+        key for key in users_keys
+        if key == USERNAMES_INDEX_KEY or key.startswith(SESSION_PREFIX)
+    ]
+    users_values = dict(
+        zip(users_value_keys, await gather_reads(users_store.get(key) for key in users_value_keys))
+    )
     user_count = 0
     session_count = 0
     for key in users_keys:
         if key == USERNAMES_INDEX_KEY:
-            raw = await users_store.get(key)
+            raw = users_values[key]
             parsed = _parse_str_list(raw)
             if raw is not None and parsed is None:
                 unreadable.append({"store": "users", "key": key})
@@ -219,7 +241,7 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
             user_records.add(key[len(USER_PREFIX):])
         elif key.startswith(SESSION_PREFIX):
             session_count += 1
-            raw = await users_store.get(key)
+            raw = users_values[key]
             username = _parse_session_username(raw)
             if raw is not None and username is None:
                 unreadable.append({"store": "users", "key": key})

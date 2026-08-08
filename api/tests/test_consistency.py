@@ -397,3 +397,47 @@ async def test_handle_consistency_never_leaks_password_hash():
     assert resp.status == 200
     assert b"password_hash" not in resp.body
     assert b"pbkdf2_sha256" not in resp.body
+
+
+async def test_collect_never_even_reads_a_user_record_value():
+    """Stronger than the report-body check above, which a `collect` that
+    fetched every user value and merely discarded it would still pass.
+
+    The users-store read is a deliberate allowlist of the two key shapes the
+    walk actually parses. The links store next to it is fetched wholesale, so
+    the tempting simplification is to make this one wholesale too — that would
+    pull every PBKDF2 hash in the store into the handler's memory for no
+    benefit at all, since no check reads a `user:` value. This test is what
+    makes that a failure rather than an invisible change.
+    """
+    class RecordingStore(FakeStore):
+        def __init__(self, data):
+            super().__init__(data)
+            self.read_keys: list[str] = []
+
+        async def get(self, key):
+            self.read_keys.append(key)
+            return await super().get(key)
+
+    users_store = RecordingStore({
+        "user:alice": _j({
+            "username": "alice",
+            "password_hash": "pbkdf2_sha256$100$c2FsdA==$aGFzaA==",
+            "role": "user",
+            "permissions": [],
+        }),
+        "session:tok": _j({"username": "alice"}),
+        "_meta:usernames": _j(["alice"]),
+        "_meta:bootstrapped": b"1",
+    })
+    collected = await consistency.collect(
+        {"links": FakeStore(), "users": users_store}, fake_list_keys
+    )
+
+    assert not [key for key in users_store.read_keys if key.startswith("user:")]
+    # The two shapes that ARE read still are, so this isn't passing by reading
+    # nothing at all.
+    assert "session:tok" in users_store.read_keys
+    assert "_meta:usernames" in users_store.read_keys
+    assert collected["user_records"] == {"alice"}
+    assert collected["session_usernames"] == ["alice"]

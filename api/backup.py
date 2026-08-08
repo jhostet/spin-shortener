@@ -16,6 +16,7 @@ import base64
 import binascii
 import json
 
+from kvbatch import gather_reads
 from responses import Response, iso_now, json_response
 
 BACKUP_FORMAT = "spin-shortener-kv-backup"
@@ -227,11 +228,17 @@ async def handle_export(
     for store_name in selected_stores:
         store = stores_by_name[store_name]
         keys = await list_keys(store)
-        entries: dict[str, bytes] = {}
-        for key in keys:
-            value = await store.get(key)
-            if value is not None:
-                entries[key] = value
+        # Gathered, not a round trip per key: an export reads every key in the
+        # store, so this is the largest read fan-out in the app and the one
+        # most exposed to per-operation latency. Bounded by gather_reads —
+        # export is already the path closest to the 30-second handler limit,
+        # and an unbounded fan-out over a large store would swap a latency
+        # problem for a read-cap one. Writes (the restore loop below) are
+        # deliberately NOT gathered; they are cap-bound, not latency-bound.
+        values = await gather_reads(store.get(key) for key in keys)
+        entries: dict[str, bytes] = {
+            key: value for key, value in zip(keys, values) if value is not None
+        }
         entries_by_store[store_name] = entries
 
     doc = build_backup(
