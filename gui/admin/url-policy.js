@@ -105,8 +105,8 @@ function renderRulesTable() {
       // Say it in words instead, in the column they are already looking at.
       const pending = !rule.created_by && !rule.created_at;
       const added = rule.created_by
-        ? `${escapeHtml(rule.created_at || "")} by ${escapeHtml(rule.created_by)}`
-        : escapeHtml(rule.created_at || "—");
+        ? `${escapeHtml(formatTimestamp(rule.created_at))} by ${escapeHtml(rule.created_by)}`
+        : escapeHtml(rule.created_at ? formatTimestamp(rule.created_at) : "—");
       return `
         <tr>
           <td>${escapeHtml(rule.host)}</td>
@@ -220,9 +220,9 @@ function renderViolations(report) {
   const rows = report.violations
     .map((v) => `
       <tr>
-        <td><a href="../links/detail.html?slug=${encodeURIComponent(v.slug)}">${escapeHtml(v.slug)}</a></td>
+        <td>${slugChip(v.slug, { linked: true })}</td>
         <td>${escapeHtml(v.owner || "—")}</td>
-        <td>${escapeHtml(v.status || "—")}</td>
+        <td>${v.status ? statusBadge(v) : "—"}</td>
         <td>${escapeHtml(v.host || "—")}</td>
         <td>${escapeHtml(violationReasonLabel(v.reason))}</td>
       </tr>
@@ -233,11 +233,19 @@ function renderViolations(report) {
     ? `<p>Showing the first ${report.max_violations} of ${report.count}.</p>`
     : "";
 
+  // <figure>, not a bare <table>: Pico gives figure the horizontal scroll
+  // container, and every other table in the app is wrapped in one. Without
+  // it this table broke the PAGE horizontally instead of scrolling inside
+  // itself — measured at 390px, documentElement scrollWidth 520 against a
+  // 375 client. The static markup on this page already wraps its rules
+  // table; only this injected one was missing it.
   resultEl.innerHTML = `
-    <table>
-      <thead><tr><th>Slug</th><th>Owner</th><th>Status</th><th>Host</th><th>Reason</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <figure>
+      <table>
+        <thead><tr><th>Slug</th><th>Owner</th><th>Status</th><th>Host</th><th>Reason</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </figure>
     ${truncatedHtml}
   `;
 }

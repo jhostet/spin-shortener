@@ -113,6 +113,7 @@
            no selection: it is deliberately independent of the checkboxes. -->
       <button type="button" id="export-csv" class="outline">Export CSV</button>
       <p id="links-error" class="form-error" role="alert"></p>
+      <p id="csv-success" class="form-success" aria-live="polite" hidden></p>
       <div id="bulk-action-errors" hidden></div>
       <div id="bulk-bar" role="status" hidden>
         <span id="bulk-count"></span>
@@ -136,7 +137,7 @@
         <table id="links-table">
           <thead>
             <tr>
-              <th class="select-col"><input type="checkbox" id="select-all-links" aria-label="Select all links in view" /></th>
+              <th class="select-col"><label class="checkbox-hit"><input type="checkbox" id="select-all-links" aria-label="Select all links in view" /></label></th>
               <th class="sortable" data-sort-key="slug" tabindex="0" aria-sort="none">Short link<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="owner" tabindex="0" aria-sort="none">Owner<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="target_url" tabindex="0" aria-sort="none">Destination<span class="sort-indicator"></span></th>

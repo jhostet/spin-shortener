@@ -223,6 +223,52 @@ function statusBadge(link) {
   return `<span class="status-badge status-${escapeHtml(state)}">${escapeHtml(STATE_LABELS[state] || state)}</span>`;
 }
 
+// The app's one genuinely product-specific component, shared so pages added
+// later can reach for it instead of falling back to a plain <a>. A critique
+// found the URL-policy violations table rendering slugs as bare sans-serif
+// prose while this existed three files away — the signature element absent
+// from the one new page that lists links.
+//
+// `linked` is opt-in rather than the default: the dashboard renders the chip
+// inside a row that already has its own View action, and nesting a link there
+// would give the row two competing targets.
+function slugChip(slug, { linked = false, title = null } = {}) {
+  const label = `/r/${escapeHtml(slug)}`;
+  const attrs = title ? ` title="${escapeHtml(title)}"` : "";
+  const chip = `<span class="slug-chip"${attrs}>${label}</span>`;
+  return linked
+    ? `<a class="slug-chip-link" href="/links/detail.html?slug=${encodeURIComponent(slug)}">${chip}</a>`
+    : chip;
+}
+
+// One formatter for every timestamp in the app. Three formats were live
+// simultaneously before this — "Aug 8, 2026, 1:07 AM" on the dashboard, a
+// bare "2026-08-07" in the analytics days table, and a raw ISO
+// "2026-08-08T05:07:13Z by admin" in the URL-policy Added column — so the
+// same instant read three ways depending on which page you were on.
+//
+// `dateOnly` exists because a per-day bucket genuinely has no time component;
+// rendering one would invent precision the data does not have.
+//
+// A bare "YYYY-MM-DD" is built from its own parts rather than handed to
+// `new Date(string)`, which parses a date-only string as UTC midnight — so
+// west of Greenwich every analytics day bucket would have rendered as the
+// PREVIOUS day. The server buckets clicks by a calendar date, not an instant;
+// shifting it into the viewer's timezone would be inventing a fact.
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function formatTimestamp(value, { dateOnly = false } = {}) {
+  if (!value) return "—";
+  const parts = DATE_ONLY.exec(String(value));
+  const date = parts
+    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
+    : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, dateOnly || parts
+    ? { dateStyle: "medium" }
+    : { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
 // Builds and wires the Auto/Light/Dark control into `container`. Shared
 // rather than living inside initHeader() because login.html has no
 // `#app-header` and never calls initHeader(), yet still needs somewhere to

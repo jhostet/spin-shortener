@@ -1,0 +1,37 @@
+/* Page-scoped styles for admin/url-policy.html.
+ *
+ * This page shipped with no stylesheet of its own, which is part of why its
+ * rules table never got the treatment the app's two other tables already had.
+ * A critique measured the consequence at 390px: the table's <figure> was
+ * scrollWidth 614 / clientWidth 327, putting the Remove button at x=542 —
+ * entirely off-screen, with no affordance indicating it existed at all.
+ * A row you cannot delete on a phone is a functional failure, not a
+ * cosmetic one. */
+
+/* Same sticky action-column treatment as #links-table and #users-table:
+ * keep the row's action reachable when the table overflows, rather than
+ * capping other columns' content or letting the action scroll away.
+ * There is no edit-row on this table, so no :not(.edit-row) guard is
+ * needed — unlike the two tables this is modelled on. */
+#rules-table thead th:last-child,
+#rules-table tbody > tr td:last-child {
+  position: sticky;
+  right: 0;
+  background: var(--pico-card-background-color);
+  border-left: 1px solid var(--pico-muted-border-color);
+}
+
+/* Below this width the sticky column's opaque background would occlude
+ * whatever sits under it — the same effect documented on the other two
+ * tables. Note is the column that collapses: it is free-text with no
+ * length cap, and it is the least necessary field for the Host/Action
+ * glance an operator actually makes on a phone. Added is dropped with it,
+ * since provenance is not what you are checking on a 390px screen. */
+@media (max-width: 600px) {
+  #rules-table th:nth-child(3),
+  #rules-table td:nth-child(3),
+  #rules-table th:nth-child(4),
+  #rules-table td:nth-child(4) {
+    display: none;
+  }
+}

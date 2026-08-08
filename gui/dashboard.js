@@ -42,10 +42,6 @@ function canEditLink(link) {
   );
 }
 
-function formatDateTime(iso) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
-}
-
 // Mirrors the server's own invalid_window_range check (start >= end is
 // invalid, not just start > end) so a bad combination is caught natively
 // before submission instead of round-tripping to the API to find out.
@@ -65,7 +61,7 @@ function wireWindowValidation(startInput, endInput) {
 
 function formatWindowField(value, { warnIfSoon = false, noteIfFuture = false } = {}) {
   if (!value) return "—";
-  const text = escapeHtml(formatDateTime(value));
+  const text = escapeHtml(formatTimestamp(value));
   const hoursUntil = (new Date(value) - Date.now()) / 3600000;
   if (noteIfFuture && hoursUntil > 0) {
     return `<span class="not-yet-live">${text} (not yet live)</span>`;
@@ -376,7 +372,7 @@ function renderLinksTable() {
     row.dataset.slug = link.slug;
     row.innerHTML = `
       <td class="select-cell">
-        ${canEditLink(link) ? `<input type="checkbox" class="row-select" data-slug="${escapeHtml(link.slug)}" aria-label="Select link ${escapeHtml(link.slug)}" />` : ""}
+        ${canEditLink(link) ? `<label class="checkbox-hit"><input type="checkbox" class="row-select" data-slug="${escapeHtml(link.slug)}" aria-label="Select link ${escapeHtml(link.slug)}" /></label>` : ""}
       </td>
       <td>
         <!-- The origin (http://host) is identical on every row — showing it
@@ -392,7 +388,7 @@ function renderLinksTable() {
       </td>
       <td>${escapeHtml(link.owner)}${isDeletedOwner(link.owner) ? ' <span class="status-badge status-disabled">deleted account</span>' : ""}</td>
       <td class="destination-cell" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
-      <td>${formatDateTime(link.created_at)}</td>
+      <td>${formatTimestamp(link.created_at)}</td>
       <td>${statusBadge(link)}</td>
       <td>${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>
       <td>${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
@@ -1047,4 +1043,12 @@ document.getElementById("export-csv").addEventListener("click", () => {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+
+  // Give the completed action a visible payoff, per DESIGN.md's rule that a
+  // real completed action never ends in silence. Names the row count, which
+  // also answers "what did I just export?" — the export follows the current
+  // filter, and nothing on screen said how many rows that was.
+  const successEl = document.getElementById("csv-success");
+  successEl.textContent = `Exported ${links.length} link${links.length === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
 });

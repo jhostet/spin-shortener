@@ -40,7 +40,10 @@
 
       <article>
         <h2>Restore from a backup</h2>
-        <p class="form-error">
+        <!-- .form-note, not .form-error: this advisory is always on screen,
+             and rendering it in the error red made a real #restore-error 150px
+             below it visually identical to permanent furniture. -->
+        <p class="form-note">
           Restoring replaces the links, users and analytics stores covered by
           the file. This can't be undone, and it signs everyone out —
           including you.

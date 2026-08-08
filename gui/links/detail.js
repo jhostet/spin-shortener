@@ -1,10 +1,6 @@
 const slug = new URLSearchParams(location.search).get("slug");
 let currentPrincipal = null;
 
-function formatDateTime(iso) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
-}
-
 // Hides every content article and leaves one error line plus a way out.
 //
 // Without this the page rendered a confident skeleton of nothing for a link
@@ -42,7 +38,7 @@ async function loadLinkInfo() {
   document.getElementById("target-url").textContent = data.target_url;
   const statusEl = document.getElementById("status");
   // Resolvability, not the stored `status` field — same correction as the
-  // dashboard's status badge; see resolveLinkState in dashboard.js.
+  // dashboard's status badge; see resolveLinkState in app.js.
   const state = resolveLinkState(data);
   statusEl.textContent = STATE_LABELS[state] || state;
   statusEl.classList.add(`status-${state}`);
@@ -52,8 +48,8 @@ async function loadLinkInfo() {
     ? tagList.map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")
     : "—";
   document.getElementById("password-status").textContent = data.password_protected ? "Password-protected" : "None";
-  document.getElementById("start-at").textContent = data.start_at ? formatDateTime(data.start_at) : "—";
-  document.getElementById("end-at").textContent = data.end_at ? formatDateTime(data.end_at) : "—";
+  document.getElementById("start-at").textContent = formatTimestamp(data.start_at);
+  document.getElementById("end-at").textContent = formatTimestamp(data.end_at);
 
   // Mirrors the server's own links._can_edit — only show Edit when the
   // viewer is this link's owner, an admin, or has links.edit_all.
@@ -101,7 +97,7 @@ async function loadAnalytics() {
   }
   for (const [day, count] of sortedDays) {
     const row = document.createElement("tr");
-    row.innerHTML = `<td>${escapeHtml(day)}</td><td>${escapeHtml(String(count))}</td>`;
+    row.innerHTML = `<td>${escapeHtml(formatTimestamp(day))}</td><td>${escapeHtml(String(count))}</td>`;
     daysBody.appendChild(row);
   }
 
@@ -113,7 +109,7 @@ async function loadAnalytics() {
   for (const event of data.recent_events) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${escapeHtml(formatDateTime(event.timestamp))}</td>
+      <td>${escapeHtml(formatTimestamp(event.timestamp))}</td>
       <td>${escapeHtml(event.referrer || "(direct)")}</td>
       <td>${escapeHtml(event.device_class)}</td>
     `;

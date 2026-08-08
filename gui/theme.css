@@ -638,6 +638,53 @@ details summary:focus-visible:not([role]) {
   margin-top: 0.5rem;
 }
 
+/* Pico renders input[type=search] as a full 80px pill. On this app that is a
+ * direct violation of the Pill-Is-For-Links Rule: the system's whole argument
+ * is that the pill SHAPE means "shortened link", and the links filter was the
+ * widest pill on the dashboard, sitting directly above twelve slug pills that
+ * mean something entirely different.
+ *
+ * NOTE THE MECHANISM — this is a new variant of the specificity trap this
+ * file already records three times. Pico does not set `border-radius` here;
+ * it redefines `--pico-border-radius: 5rem` ON THE ELEMENT. So the obvious
+ * fix, `border-radius: var(--pico-border-radius)`, resolves to 5rem and
+ * changes nothing — it reads the very variable being overridden. Measured
+ * live: still 80px. Reset the variable itself, not the property that reads
+ * it. 0.25rem is Pico's own :root value, i.e. what every card and button in
+ * the app already uses. */
+input[type="search"] {
+  --pico-border-radius: 0.25rem;
+}
+
+/* Consistency-check findings. Was a raw `key: value · key: value` dump; the
+ * key now recedes so the VALUE is what scans, which is the only part an
+ * operator acts on. No new colour — the existing muted token. */
+.finding-list {
+  margin-bottom: 0;
+}
+.finding-field {
+  margin-right: 0.75rem;
+  white-space: nowrap;
+}
+.finding-key {
+  color: var(--pico-muted-color);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* The slug chip as a link — used where a slug is the row's subject rather
+ * than one control among several (the violations table, consistency
+ * findings). Strips the anchor's own underline/colour so the chip keeps its
+ * own treatment, and takes the sitewide tap-target floor since it is the
+ * row's primary target. */
+.slug-chip-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  text-decoration: none;
+}
+
 /* An unsaved row in the URL policy table.
  *
  * The badge is the WHOLE signal — deliberately no row tint. A tint was built
@@ -798,6 +845,95 @@ a[role="button"] {
  * closing this gap rather than leaving the app's own standard inconsistent
  * within the header that most exemplifies it. */
 #app-header nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* --- The 44px floor, extended past the button family --------------------
+ *
+ * An Impeccable critique (2026-08-08) measured the floor as covering exactly
+ * four selector families — the button group above, a[role=button],
+ * #app-header nav a, and .domain-select — and nothing else. Everything else
+ * sat under it: every text/url/password/datetime/search/file input and every
+ * <select> at 40.4px, checkboxes at 20×20, <summary> at 16px, sortable <th>
+ * at 36.2px, and the in-body operator links at 18px. A floor that covers the
+ * controls someone happened to think of is not a floor, which is why these
+ * are written as broad element rules rather than another list of IDs.
+ *
+ * This supersedes the one-off .domain-select rule further up; that rule is
+ * kept only because its comment records why the gap existed. */
+
+/* Buttons were already 44px tall but not 44px wide — .edit-btn measured
+ * 39.8px across. The guideline is a target, not a height. */
+button,
+[type="submit"],
+[type="button"],
+[type="reset"],
+[role="button"] {
+  min-width: 44px;
+}
+
+/* Checkbox and radio are excluded deliberately: a 44px-tall checkbox is a
+ * 44px-tall BOX, which is not what the guideline asks for. They get an
+ * expanded hit area below instead, keeping their 20px visual. */
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  min-height: 44px;
+}
+
+/* A checkbox or radio inside a label: the LABEL is the real hit target,
+ * since clicking it toggles the input, so the floor belongs there rather
+ * than on the 20px box. Covers the permission, domain and export-store
+ * fieldsets, whose inputs measured 20×20 while their labels were the thing
+ * anyone actually clicks. */
+label:has(> input[type="checkbox"]),
+label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+
+/* A checkbox with NO label text of its own — the two in the links table —
+ * has no such wrapper to inherit the floor from, so it gets an explicit
+ * one. This is the entry point to every bulk action and was the smallest
+ * target in the app. The visual box stays 20px; only the target grows. */
+.checkbox-hit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Padding rather than min-height: Pico draws the disclosure chevron with a
+ * FLOATED summary::after, and float does not apply to flex items — so
+ * making <summary> a flex box to center its label would send the chevron to
+ * the wrong place. Padding reaches the same height without touching Pico's
+ * marker. */
+details > summary {
+  /* 0.875rem, not 0.75rem: the label's own line box is 16px, so 12px each
+   * side reached only 40px. Measured, not assumed. */
+  padding-block: 0.875rem;
+}
+
+/* min-height does not apply to a table cell; `height` on a <th> behaves as a
+ * minimum, which is what's wanted. Sortable headers are real controls —
+ * tabindex="0", Enter/Space cycle the sort — so they carry the floor too. */
+#links-table th.sortable,
+#users-table th.sortable {
+  height: 44px;
+}
+
+/* The sanctioned in-body alternative to a nav item (DESIGN.md: "the nav is
+ * at its item budget"). They are navigation, so they take the same floor
+ * #app-header nav a does — but as inline-flex, since they sit inline in a
+ * sentence beside a middot separator. */
+.operator-link {
   display: inline-flex;
   align-items: center;
   min-height: 44px;

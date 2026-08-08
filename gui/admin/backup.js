@@ -199,10 +199,21 @@ function consistencyCheckLabel(checkId) {
 
 function renderConsistencyFindings(findings) {
   if (!findings.length) return "";
+  // Was `<li>slug: winter · owner: admin</li>` — the raw record, with the
+  // app's own components sitting unused three files away. A `slug` field IS a
+  // link, so it renders as the slug chip and links to that link's detail page;
+  // every other field stays a labelled pair, since the shapes vary by check.
   const items = findings
-    .map((f) => `<li>${Object.entries(f).map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(String(v))}`).join(" · ")}</li>`)
+    .map((f) => {
+      const parts = Object.entries(f).map(([k, v]) =>
+        k === "slug"
+          ? slugChip(String(v), { linked: true })
+          : `<span class="finding-field"><span class="finding-key">${escapeHtml(k)}</span> ${escapeHtml(String(v))}</span>`
+      );
+      return `<li>${parts.join(" ")}</li>`;
+    })
     .join("");
-  return `<ul>${items}</ul>`;
+  return `<ul class="finding-list">${items}</ul>`;
 }
 
 function renderConsistencyCheck(check, { showSkippedNote } = {}) {

@@ -139,6 +139,10 @@ route = "/admin/url-policy.js"
 component = "gui"
 
 [[trigger.http]]
+route = "/admin/url-policy.css"
+component = "gui"
+
+[[trigger.http]]
 route = "/dashboard.js"
 component = "gui"
 
