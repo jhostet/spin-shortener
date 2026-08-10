@@ -808,3 +808,54 @@ Opened by the `asyncio.gather` finding in the click-count work: the host genuine
 **Note on what still is not fixed: `GET /api/links` has no pagination.** Gathering converts ~23 ms/link into roughly a constant, but the handler still issues one read per link, so a large deployment fires one bounded burst per dashboard load against an app-wide read cap. Pagination is the actual answer if link counts ever get large; this change buys a lot of headroom, not unlimited headroom.
 
 **Do NOT parallelize writes.** Reads are latency-bound against a 1,000 RPS cap with large headroom; **writes are capped at 50 RPS**, so `backup.py`'s restore loop (~line 292) and the bulk handlers are cap-bound rather than latency-bound. Gathering them buys nothing and risks throttling. This distinction is the whole reason the analytics change was safe.
+
+## Deploy of the Clicks column, and what tracing it found (2026-08-10)
+
+Deployed `051cfa7` as `app_version=051cfa7-clicks` (Akamai Version 14) and traced the new
+endpoint, which is why this section exists: `/api/analytics/click-totals` was designed around
+a read-cost argument that had never been checked against a real store.
+
+**The design's own argument holds, and the endpoint is cheap.** 9 KV operations per call
+(1 `open`, 1 `exists` for the session, 1 `list_keys`, 6 `get`s), 176–296 ms handler time over
+6 interleaved samples — against `/api/links`'s 19 ops and 142–281 ms in the same window.
+The feared shape (`COUNT_SHARDS + 1` reads per link, 65 × N) never materialises: only shards
+that exist are read, so 14 links cost 6 reads, not 910. **Correctness cross-checked live** —
+the busiest slug reports 524 from `click-totals` and 524 from `GET /api/links/{slug}/analytics`,
+which sums all 65 keys by a completely separate code path.
+
+**But the enumeration, not the reads, is now the endpoint's dominant cost, and that was not
+in the original argument.** `list_keys` measured **69–162 ms (mean ~99 ms)** and is
+`slow=list_keys:analytics:...` — the single slowest operation — in **every** trace. It is
+~4× a single `get` (~24 ms), it is **~44% of the endpoint's wall time**, and it is
+**un-overlappable**: `gather_reads` cannot issue a single read until the key list exists, so
+the endpoint's effective parallelism is only **~1.2×** against `/api/links`'s 3.2–4.6×.
+
+**The cost tracks the whole physical store, not the namespace being enumerated — measured,
+not inferred.** `scoped_list_keys` calls `raw_list_keys(store.raw)` and filters afterwards, so
+every namespace pays the full-store walk. `GET /api/admin/consistency` enumerates `links` and
+`users` — **3 user keys and ~18 link keys** — and each of its two `list_keys` calls still cost
+**~62 ms**, essentially the same as the 941-key analytics namespace. A 3-key namespace and a
+941-key namespace costing the same is the proof.
+
+**Why this matters for scaling:** the store is **962 physical keys, 941 of them analytics**
+(measured via a traced export: 200, 63,983 bytes, **1.01 s wall** — matching the recorded
+957 ms baseline, so no regression). Analytics keys grow at up to 94 per link (64 count shards
++ 30 event slots), currently ~52/link. **Every dashboard load now pays a full-store walk that
+grows as analytics grows**, and analytics is the fastest-growing and only unbounded namespace.
+**The growth *rate* is NOT measured** — two data points at one store size cannot establish it —
+so this is a flagged risk, not a projection. Measure `list_keys` against a materially larger
+store before assuming it is linear or that it is fine.
+
+**The existing "Cache the physical KV key enumeration for the lifetime of one request" entry
+under Future work is the fix, and this measurement is its trigger.** It would collapse
+consistency's two walks into one immediately; it does nothing for `click-totals`, which makes
+only one. For that endpoint the lever is a narrower enumeration (a prefix-scoped `get_keys`,
+if the host supports one) — worth checking before anything is designed.
+
+- [x] Deploy `051cfa7` to Akamai — done when: `X-SS-Version` reports the deployed label — **DONE.** The CLI hit its documented 60-second readiness timeout and reported `failed to wait for deployment to go live`; the deploy had in fact succeeded, exactly as CLAUDE.md says. Confirmed by polling `X-SS-Version` until it flipped, and no request was measured before it did.
+- [x] Verify the Clicks column on the deployed build — file(s): (none — verification step) — done when: it renders real totals with no console errors — **DONE.** Live values (524 / 2 / 0), **zero console errors** — which also clears the new favicon against `gui-pages`' no-`'unsafe-inline'` CSP. At 390px every documented invariant still holds: figure **327/327 and does not scroll**, no page overflow, select column collapsed to 0 with `#bulk-desktop-only` visible, and `td[data-cell="clicks"]` resolving — confirming the named-cell refactor that replaced the positional `children[3]/[6]/[7]` lookups.
+
+**Not re-measured, deliberately: recent-events retention.** The `EventSlot` fix was already
+measured live on `9fdbf78-p1p2-fixes` (8 clicks 300 ms apart → 8 distinct events, against 3
+under the old code) and `051cfa7` does not touch it. Repeating it would only add ~38
+permanent analytics keys to the store — which, per the finding above, is now a cost.
