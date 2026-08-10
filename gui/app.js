@@ -257,16 +257,31 @@ function slugChip(slug, { linked = false, title = null } = {}) {
 // shifting it into the viewer's timezone would be inventing a fact.
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-function formatTimestamp(value, { dateOnly = false } = {}) {
+// `precise` renders seconds and milliseconds, for the recent-events table
+// only. Everything else in the app is a date or an operator-entered window
+// where sub-second precision would be noise — but several clicks routinely
+// land in the same second, and without this the rows read as duplicates of
+// one another rather than as distinct visits.
+function formatTimestamp(value, { dateOnly = false, precise = false } = {}) {
   if (!value) return "—";
   const parts = DATE_ONLY.exec(String(value));
   const date = parts
     ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
     : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat(undefined, dateOnly || parts
-    ? { dateStyle: "medium" }
-    : { dateStyle: "medium", timeStyle: "short" }).format(date);
+  if (dateOnly || parts) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+  }
+  if (precise) {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      fractionalSecondDigits: 3,
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 // Builds and wires the Auto/Light/Dark control into `container`. Shared

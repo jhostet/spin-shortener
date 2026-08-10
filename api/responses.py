@@ -81,6 +81,23 @@ def to_iso8601_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def to_iso8601_utc_ms(dt: datetime) -> str:
+    """Second-resolution loses real information for analytics events, which
+    are recorded with `UnixMilli()` and routinely arrive several to a second.
+
+    A separate function rather than a flag on `to_iso8601_utc`, because the
+    two have different obligations. Link windows (`start_at`/`end_at`) are
+    operator-entered datetimes that round-trip through `parse_iso8601_utc`
+    and must keep their exact existing shape; an event timestamp is
+    display-only and never parsed back. Widening the shared function would
+    have put milliseconds into stored link records for no benefit.
+
+    `parse_iso8601_utc` accepts this format anyway (`datetime.fromisoformat`
+    handles fractional seconds), so nothing breaks if one is ever fed back.
+    """
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
 def iso_now() -> str:
     return to_iso8601_utc(datetime.now(timezone.utc))
 

@@ -56,21 +56,29 @@
   white-space: nowrap;
   vertical-align: bottom;
 }
-/* Below this width the table's 7 data columns + actions no longer fit
- * without the sticky action column visually occluding another column's
- * content at rest (confirmed live: at 390px the sticky column's opaque
- * background fully covered the Owner column). The real fix is fewer
- * columns, not a wider sticky element — Owner/Destination/Created/Starts
- * are the least essential for the "is this link still live" check this
- * width is standing in for; Status and Expires answer that directly and
- * stay visible alongside Short link and the actions. */
+/* Below this width the table's data columns + actions no longer fit without
+ * the sticky action column visually occluding another column's content at
+ * rest (confirmed live: at 390px the sticky column's opaque background fully
+ * covered the Owner column). The real fix is fewer columns, not a wider
+ * sticky element. Only ~249px of content width exists here before the sticky
+ * column, so the set is chosen, not trimmed: Short link, Status, Clicks. */
 @media (max-width: 600px) {
-  /* Column indices shifted by 1 when the select column was inserted as the
-   * new first column — the select column itself is also hidden here (a
-   * ~40px checkbox column would eat back the clearance the caps below were
-   * measured against, to enable a multi-select workflow nobody performs on
-   * a phone), so the visible set below 600px stays exactly what it was
-   * before this change: Short link, Status, Expires, and the actions. */
+  /* Hidden here: select (1), Owner (3), Destination (4), Created (5),
+   * Starts (8), Expires (9). The select column goes because a ~40px checkbox
+   * column would eat the clearance the caps below are measured against, for
+   * a multi-select workflow nobody performs on a phone — and the page now
+   * says so out loud rather than just removing the control (#bulk-desktop-only).
+   *
+   * EXPIRES is the one that changed, and the reason is worth keeping. It used
+   * to be visible here and Clicks did not exist. Adding Clicks put four
+   * content columns into three columns' worth of space: measured at 390px,
+   * Expires' right edge landed at 373px against a sticky actions column
+   * starting at 273px, i.e. straight underneath it — the exact overlap this
+   * block exists to prevent. Expires lost the tie-break rather than Clicks
+   * because the Status badge now DERIVES expiry ("Expired" / "Scheduled" /
+   * "Active"), so the question Expires answered at a glance is already
+   * answered one column to its left, while Clicks answers one that nothing
+   * else on the row does. */
   #links-table th:nth-child(1),
   #links-table td:nth-child(1),
   #links-table th:nth-child(3),
@@ -79,22 +87,11 @@
   #links-table td:nth-child(4),
   #links-table th:nth-child(5),
   #links-table td:nth-child(5),
-  #links-table th:nth-child(7),
-  #links-table td:nth-child(7) {
+  #links-table th:nth-child(8),
+  #links-table td:nth-child(8),
+  #links-table th:nth-child(9),
+  #links-table td:nth-child(9) {
     display: none;
-  }
-  /* An HTML table's column width is shared across every row (the widest
-   * cell in the column, not just the visible one) — a single long
-   * custom slug ANYWHERE in the table widens column 1 for every row,
-   * which then pushes Expires' position rightward and defeats its own
-   * max-width cap below even though that cap never changed (confirmed
-   * live: adding one "black-friday-2026"-length slug elsewhere in the
-   * table broke the previously-verified clearance on an unrelated row).
-   * Capping this column directly, not just the .slug-chip inside it,
-   * is what makes the later Expires cap's assumption actually hold. */
-  #links-table th:nth-child(2),
-  #links-table tbody > tr:not(.edit-row) td:nth-child(2) {
-    max-width: 100px;
   }
   /* Even with 4 columns hidden, View/Copy/Edit/Delete in one unwrapped
    * row (~208px) still doesn't leave enough room for Short link/Status/
@@ -109,25 +106,58 @@
     max-width: 100px;
     gap: 0.25rem;
   }
-  /* Neither padding-right alone (adds space after left-aligned text,
-   * doesn't move it) nor padding-right + text-align:right (the padding
-   * terms cancel out algebraically once the cell's own width is also
-   * determined by that same padding, in an auto-layout table) actually
-   * created real clearance — both measured zero effect live. The sticky
-   * actions column sits at a fixed position independent of this cell's
-   * padding, so the only thing that reliably keeps content clear of it
-   * is capping this column's own rendered width so wrapped text
-   * physically cannot reach that far right. 75px is the safe zone
-   * measured live between this column's natural left edge and the
-   * sticky column's left edge at 390px. An auto-layout table sizes a
-   * column to the widest cell across *all* rows including the header —
-   * capping only td left the th's natural width (sort arrow + "Expires"
-   * text) in control, rendering 80.4px instead of 75px (a later audit
-   * caught this; the equivalent users.html fix correctly capped both
-   * from the start). */
-  #links-table thead th:nth-child(8),
-  #links-table tbody > tr:not(.edit-row) td:nth-child(8) {
-    max-width: 75px;
+  /* Short link and Status are capped so the three content columns plus the
+   * sticky actions column fit the ~327px available at 390px. Measured, not
+   * estimated: uncapped they render 100px and 105px, which with Clicks at
+   * 70px and actions at 78px totals 353px and pushes the rightmost column
+   * under the sticky one. Clicks needs no cap — it holds an integer.
+   *
+   * Both th AND td are capped, deliberately. An auto-layout table sizes a
+   * column to its widest cell across ALL rows including the header, so
+   * capping only td leaves the th's natural width (label plus sort arrow) in
+   * control — an earlier audit caught exactly that, where a td-only cap
+   * rendered 80.4px against an intended 75px.
+   *
+   * Also note padding is not a substitute here: neither padding-right alone
+   * nor padding-right with text-align:right creates real clearance, both
+   * measured at zero effect, because the sticky column sits at a fixed
+   * position independent of this cell's padding. Capping the rendered width
+   * is the only thing that keeps content from reaching under it. */
+  #links-table thead th:nth-child(2),
+  #links-table tbody > tr:not(.edit-row) td:nth-child(2) {
+    max-width: 90px;
+  }
+  #links-table thead th:nth-child(6),
+  #links-table tbody > tr:not(.edit-row) td:nth-child(6) {
+    /* "Scheduled" is the longest label and fits in 72px.
+     *
+     * A note on what this cap does and does NOT do, because the obvious
+     * reading is wrong: tightening it from 80 to 72 did not create
+     * clearance against the sticky column. Measured, the freed 8px went
+     * straight to the actions column (87 -> 95) — an auto-layout table
+     * reallocates spare width rather than leaving a gap, so clearance is
+     * 0 either way and always will be.
+     *
+     * What actually prevents the overlap this block exists to stop is that
+     * the columns now SUM to the available width: the figure measures
+     * 327/327 and does not scroll, so no cell can sit underneath the
+     * sticky column at all. The caps are what make that sum fit. If a
+     * future column pushes the total past the container, the figure starts
+     * scrolling again and the overlap returns — check scrollWidth against
+     * clientWidth, not the gap between two cells. */
+    max-width: 72px;
+  }
+}
+
+/* The desktop-only bulk notice is the inverse of the row-select column:
+ * visible exactly where selection is not. Hidden by default so the wide
+ * layout — where bulk works — never carries an irrelevant sentence. */
+#bulk-desktop-only {
+  display: none;
+}
+@media (max-width: 600px) {
+  #bulk-desktop-only {
+    display: block;
   }
 }
 

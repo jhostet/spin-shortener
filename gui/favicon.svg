@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32">
+  <!-- The nav brand mark, unchanged in geometry, on the app's Deep Navy so
+       the glyph reads at 16px in a tab strip. Not a new mark: the whole point
+       of a favicon here is that a pinned tab is recognisable as the same
+       product as the header. Stroke is Signal Blue, matching the brand mark's
+       own currentColor in the nav.
+
+       Deliberately not theme-aware. A favicon is drawn against the browser's
+       tab strip, not the page, so it cannot know the app's theme — and the
+       navy tile reads on both light and dark chrome, which a bare glyph
+       inheriting a transparent background would not. -->
+  <rect width="24" height="24" rx="5" fill="#0a1628" />
+  <g transform="translate(2.6 2.6) scale(0.783)" fill="none" stroke="#6fb0ee"
+     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+  </g>
+</svg>

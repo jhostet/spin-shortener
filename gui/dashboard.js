@@ -59,6 +59,14 @@ function wireWindowValidation(startInput, endInput) {
   endInput.addEventListener("input", validate);
 }
 
+// An em-dash while totals are still in flight, not "0" — a real zero and
+// "not loaded yet" are different facts, and showing 0 for the second one
+// tells the operator their campaign got no clicks.
+function clicksCell(slug) {
+  if (clickTotals === null) return '<span class="clicks-pending" aria-label="Loading">—</span>';
+  return escapeHtml(String(clickTotals[slug] ?? 0));
+}
+
 function formatWindowField(value, { warnIfSoon = false, noteIfFuture = false } = {}) {
   if (!value) return "—";
   const text = escapeHtml(formatTimestamp(value));
@@ -78,6 +86,11 @@ function formatWindowField(value, { warnIfSoon = false, noteIfFuture = false } =
 }
 
 let allLinks = [];
+// slug -> click total, from GET /api/analytics/click-totals. Loaded AFTER the
+// table renders, deliberately: the links list must never wait on analytics,
+// which reads a different store and is the slower of the two. Until it
+// arrives every row shows an em-dash rather than a misleading 0.
+let clickTotals = null;
 let sortKey = null;
 let sortDir = 1;
 
@@ -296,7 +309,13 @@ function getVisibleLinks() {
   const owner = document.getElementById("owner-filter").value;
   if (owner) visible = visible.filter((link) => link.owner === owner);
 
-  if (sortKey) {
+  if (sortKey === "clicks") {
+    // Numeric, not lexicographic — localeCompare would order 10 before 9.
+    // Unloaded totals sort as 0 rather than throwing.
+    visible = [...visible].sort(
+      (a, b) => sortDir * (((clickTotals ?? {})[a.slug] ?? 0) - ((clickTotals ?? {})[b.slug] ?? 0))
+    );
+  } else if (sortKey) {
     // start_at/end_at may be null (unbounded window) — sort those first regardless of direction.
     visible = [...visible].sort(
       (a, b) => sortDir * String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? ""))
@@ -308,7 +327,7 @@ function getVisibleLinks() {
 function editRowHtml(link) {
   return `
     <tr class="edit-row" data-slug="${escapeHtml(link.slug)}">
-      <td colspan="9">
+      <td colspan="10">
         <form class="edit-form">
           <label>Destination URL <input type="url" class="edit-target-url" value="${escapeHtml(link.target_url)}" required /></label>
           <div class="grid">
@@ -345,6 +364,31 @@ async function loadLinks() {
   rebuildTagFilterOptions();
   rebuildOwnerFilterOptions();
   renderLinksTable();
+  loadClickTotals();
+}
+
+// Fired after the table is already on screen, and deliberately not awaited by
+// loadLinks(): totals read a different store and are the slower half, so
+// blocking the links list on them would make every dashboard load feel like
+// the analytics page. A failure here leaves the em-dash in place — the table
+// stays fully usable without it, which is why this swallows the error rather
+// than surfacing one for a column nobody asked to wait for.
+async function loadClickTotals() {
+  const { ok, data } = await api.get("/analytics/click-totals");
+  if (!ok) return;
+  clickTotals = data.totals || {};
+  paintClickTotals();
+}
+
+// Writes the totals into the cells that already exist, rather than calling
+// renderLinksTable(). A full re-render clears the selection by design (see
+// the comment there), so re-rendering ~a second after load would silently
+// drop any checkbox the operator ticked while the totals were in flight.
+function paintClickTotals() {
+  for (const row of document.querySelectorAll("#links-body tr[data-slug]:not(.edit-row)")) {
+    const cell = row.querySelector('[data-cell="clicks"]');
+    if (cell) cell.innerHTML = clicksCell(row.dataset.slug);
+  }
 }
 
 function renderLinksTable() {
@@ -361,7 +405,7 @@ function renderLinksTable() {
   const visibleLinks = getVisibleLinks();
   if (!visibleLinks.length) {
     const message = allLinks.length ? "No links match your filter." : "No links yet — create one above.";
-    body.innerHTML = `<tr><td colspan="9" class="empty-state">${escapeHtml(message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="empty-state">${escapeHtml(message)}</td></tr>`;
     updateSelectAllState();
     return;
   }
@@ -387,11 +431,12 @@ function renderLinksTable() {
         ${(link.tags ?? []).map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")}
       </td>
       <td>${escapeHtml(link.owner)}${isDeletedOwner(link.owner) ? ' <span class="status-badge status-disabled">deleted account</span>' : ""}</td>
-      <td class="destination-cell" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
+      <td class="destination-cell" data-cell="destination" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
       <td>${formatTimestamp(link.created_at)}</td>
       <td>${statusBadge(link)}</td>
-      <td>${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>
-      <td>${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
+      <td class="clicks-cell" data-cell="clicks">${clicksCell(link.slug)}</td>
+      <td data-cell="starts">${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>
+      <td data-cell="expires">${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
       <td>
         <div role="group">
           <a role="button" class="outline" aria-label="View link ${escapeHtml(link.slug)}" href="links/detail.html?slug=${encodeURIComponent(link.slug)}">View</a>
@@ -493,11 +538,15 @@ async function handleEditFormSubmit(form) {
   const displayRow = editRow.previousElementSibling;
   if (displayRow) {
     // Positional indices shifted by 1 when the select-column was inserted
-    // as the new first <td> — destination was children[2], now children[3];
+    // Looked up by data-cell rather than by index. These were children[3],
+    // [6] and [7], and the comment they replace recorded that the indices had
+    // already shifted once when the select column was inserted — adding the
+    // Clicks column would have shifted them again, silently writing the start
+    // date into the clicks cell.
     // Starts/Expires were [5]/[6], now [6]/[7]. This fails silently if wrong.
-    displayRow.children[3].textContent = targetUrl;
-    displayRow.children[6].innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
-    displayRow.children[7].innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
+    displayRow.querySelector('[data-cell="destination"]').textContent = targetUrl;
+    displayRow.querySelector('[data-cell="starts"]').innerHTML = formatWindowField(startAt, { noteIfFuture: linkRecord?.status === "active" });
+    displayRow.querySelector('[data-cell="expires"]').innerHTML = formatWindowField(endAt, { warnIfSoon: linkRecord?.status === "active" });
   }
 
   if (removePassword || newPassword) {
@@ -1002,6 +1051,7 @@ const CSV_COLUMNS = [
   // small lie. Exporting only the derived value would have made the file
   // disagree with nothing; exporting only the stored one is what let the file
   // disagree with the table it came from.
+  ["Clicks", (l) => (clickTotals ?? {})[l.slug] ?? ""],
   ["State", (l) => resolveLinkState(l)],
   ["Status", (l) => l.status],
   ["Starts", (l) => l.start_at ?? ""],

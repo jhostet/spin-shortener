@@ -142,6 +142,17 @@ component = "gui"
 route = "/admin/url-policy.css"
 component = "gui"
 
+# SVG only, and no /favicon.ico route: there is no .ico file to serve, and a
+# browser only makes the unprompted /favicon.ico request for a page that
+# declares no <link rel="icon"> — which, after this change, is just the
+# redirect component's password prompt. That page is deliberately left
+# without one: its CSP is the strictest in the app (`default-src 'none'`),
+# a favicon is fetched under img-src, and widening the one policy that
+# guards the page where a visitor types a credential is not worth a tab icon.
+[[trigger.http]]
+route = "/favicon.svg"
+component = "gui"
+
 [[trigger.http]]
 route = "/dashboard.js"
 component = "gui"

@@ -213,6 +213,17 @@ class HttpHandler(Handler):
                 return result
             return await links.handle_set_password(links_store, result, slug, request)
 
+        # Deliberately NOT /api/links/clicks: "clicks" is a legal custom slug
+        # (CUSTOM_SLUG_PATTERN allows it), so that path would be shadowed by
+        # a real link the moment anyone created one, and GET would silently
+        # return totals instead of that link's record. Namespaced under
+        # /api/analytics/ instead, where no slug can ever reach.
+        if path == "/api/analytics/click-totals" and method == "GET":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            return await analytics.handle_click_totals(links_store, analytics_store, result, list_keys)
+
         if path.startswith("/api/links/") and path.endswith("/analytics") and method == "GET":
             slug = path.removeprefix("/api/links/").removesuffix("/analytics")
             if not slug or "/" in slug:

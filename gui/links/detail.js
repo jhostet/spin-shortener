@@ -109,7 +109,7 @@ async function loadAnalytics() {
   for (const event of data.recent_events) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${escapeHtml(formatTimestamp(event.timestamp))}</td>
+      <td>${escapeHtml(formatTimestamp(event.timestamp, { precise: true }))}</td>
       <td>${escapeHtml(event.referrer || "(direct)")}</td>
       <td>${escapeHtml(event.device_class)}</td>
     `;

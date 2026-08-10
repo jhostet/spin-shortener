@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>spin-shortener — Dashboard</title>
   <script src="theme-init.js"></script>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="vendor/pico.min.css" />
   <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="dashboard.css" />
@@ -115,6 +116,15 @@
       <p id="links-error" class="form-error" role="alert"></p>
       <p id="csv-success" class="form-success" aria-live="polite" hidden></p>
       <div id="bulk-action-errors" hidden></div>
+      <!-- Bulk actions are a deliberate desktop-only feature. The row-select
+           column is hidden below 600px (a checkbox column would eat the
+           clearance the mobile caps are measured against), so the workflow is
+           unreachable there. Saying so is the point: previously the control
+           simply vanished and the page claimed nothing, which reads as a bug
+           rather than a decision. Shown only at the width where it applies. -->
+      <p id="bulk-desktop-only" class="form-note">
+        Selecting links for bulk actions needs a wider screen.
+      </p>
       <div id="bulk-bar" role="status" hidden>
         <span id="bulk-count"></span>
         <div role="group">
@@ -143,6 +153,7 @@
               <th class="sortable" data-sort-key="target_url" tabindex="0" aria-sort="none">Destination<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="created_at" tabindex="0" aria-sort="none">Created<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="status" tabindex="0" aria-sort="none">Status<span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort-key="clicks" tabindex="0" aria-sort="none">Clicks<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="start_at" tabindex="0" aria-sort="none">Starts<span class="sort-indicator"></span></th>
               <th class="sortable" data-sort-key="end_at" tabindex="0" aria-sort="none">Expires<span class="sort-indicator"></span></th>
               <th></th>

@@ -625,6 +625,19 @@ details summary:focus-visible:not([role]) {
   color: var(--ss-slate-500);
 }
 
+/* Pico leaves a disabled control at cursor: pointer, so it reads as
+ * clickable while being inert — measured on backup.html's Restore button,
+ * the only disabled control in the app. Opacity says "unavailable" and the
+ * cursor contradicted it. */
+button:disabled,
+[type="submit"]:disabled,
+[type="button"]:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+}
+
 /* Static advisory / unsaved-state note — deliberately NOT .form-error.
  *
  * Red is reserved for "something just failed". Reusing it for a standing

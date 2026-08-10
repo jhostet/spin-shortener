@@ -236,7 +236,23 @@ function renderConsistencyReport(report) {
 
   if (report.ok) {
     const totalKeys = Object.values(report.scanned || {}).reduce((sum, s) => sum + (s.keys || 0), 0);
-    resultEl.innerHTML = `<p class="form-success">No inconsistencies found — ${totalKeys} keys scanned across the links and users stores.</p>`;
+    const ran = report.checks || [];
+    // A clean result used to be one sentence, which made it unfalsifiable to
+    // the operator: "no inconsistencies" is only reassuring if you can see
+    // WHAT was looked for. The list is collapsed behind the app's own
+    // <details> idiom so the happy path stays one line unless asked.
+    const checkList = ran
+      .map((c) => `<li>${escapeHtml(consistencyCheckLabel(c.check).title)}${c.skipped ? " <em>(not checked)</em>" : ""}</li>`)
+      .join("");
+    resultEl.innerHTML = `
+      <p class="form-success">
+        All ${ran.length} check${ran.length === 1 ? "" : "s"} passed — ${totalKeys} keys scanned across the links and users stores.
+      </p>
+      <details>
+        <summary>What was checked</summary>
+        <ul>${checkList}</ul>
+      </details>
+    `;
     return;
   }
 

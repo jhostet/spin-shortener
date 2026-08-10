@@ -7,8 +7,9 @@ import json
 from datetime import datetime, timezone
 
 from auth import Principal
-from links import can_view, get_link
-from responses import json_response, to_iso8601_utc
+from kvbatch import gather_reads
+from links import can_view, get_link, owned_slugs
+from responses import json_response, to_iso8601_utc_ms
 
 
 # MUST stay equal to redirect/linkgate/keys.go's CountShards — see that file
@@ -65,8 +66,78 @@ def _parse_event(raw: bytes) -> dict | None:
     except (ValueError, UnicodeDecodeError):
         return None
 
-    timestamp = to_iso8601_utc(datetime.fromtimestamp(unix_ms / 1000, tz=timezone.utc))
+    # Millisecond resolution, deliberately. The record has always carried it
+    # (redirect writes UnixMilli), and this function used to round it away to
+    # whole seconds — which was invisible while EventSlot's slot aliasing was
+    # discarding most events, and became misleading the moment that was fixed:
+    # several clicks legitimately land in one second, so the table rendered
+    # rows that looked like duplicates of each other.
+    timestamp = to_iso8601_utc_ms(datetime.fromtimestamp(unix_ms / 1000, tz=timezone.utc))
     return {"timestamp": timestamp, "unix_ms": unix_ms, "referrer": referrer, "device_class": device_class}
+
+
+async def handle_click_totals(links_store, analytics_store, principal: Principal, list_keys):
+    """Click totals for every link the caller can see, for the dashboard's
+    Clicks column. Totals only — no per-day map, no events.
+
+    THE READ COST IS THE WHOLE DESIGN HERE, so read this before changing it.
+
+    The naive shape is `COUNT_SHARDS + 1` reads per link: 65 x N. At 200 links
+    that is 13,000 reads for one dashboard load, against an app-wide cap of
+    1,000 reads/second — a single page view would consume the entire
+    application's read budget for thirteen seconds. That is why the Clicks
+    column was originally deferred as a product decision rather than treated
+    as a small addition.
+
+    Instead this enumerates the analytics namespace ONCE and reads only the
+    count keys that actually exist. A shard key is written on first use, so a
+    link with clicks in five shards costs five reads, not sixty-five. Cost
+    becomes proportional to real traffic rather than to links x shard count,
+    which also means raising COUNT_SHARDS again does not multiply this
+    endpoint's cost the way it would have multiplied the naive one.
+
+    Rejected alternative, recorded so it is not re-proposed: maintaining a
+    denormalized `analytics:total:<slug>` would make this O(N) reads, but it
+    adds a THIRD KV write to every click. Writes are the binding constraint
+    (50/second app-wide, already two per click); trading read cost for write
+    cost is backwards here.
+    """
+    if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
+        visible = set(await _all_slugs_for_totals(links_store))
+    else:
+        visible = set(await owned_slugs(links_store, principal.username))
+
+    if not visible:
+        return json_response(200, {"totals": {}})
+
+    # One enumeration, then only the keys that exist and belong to a slug the
+    # caller may see. A slug can never contain a colon (CUSTOM_SLUG_PATTERN),
+    # so splitting on it is unambiguous.
+    keys = await list_keys(analytics_store)
+    wanted: dict[str, list[str]] = {}
+    for key in keys:
+        if not key.startswith("count:"):
+            continue
+        rest = key[len("count:"):]
+        slug = rest.split(":", 1)[0]
+        if slug in visible:
+            wanted.setdefault(slug, []).append(key)
+
+    flat = [key for slug_keys in wanted.values() for key in slug_keys]
+    values = await gather_reads(analytics_store.get(key) for key in flat)
+    by_key = dict(zip(flat, values))
+
+    totals = {}
+    for slug in visible:
+        total, _days = _merge_counts(by_key.get(key) for key in wanted.get(slug, []))
+        totals[slug] = total
+
+    return json_response(200, {"totals": totals})
+
+
+async def _all_slugs_for_totals(links_store):
+    raw = await links_store.get("all_links")
+    return json.loads(raw) if raw else []
 
 
 async def handle_analytics(links_store, analytics_store, principal: Principal, slug: str, num_event_slots: int):
