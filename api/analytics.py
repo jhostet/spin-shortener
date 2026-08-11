@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+import links
 from auth import Principal
 from kvbatch import gather_reads
 from links import can_view, get_link, owned_slugs
@@ -58,6 +59,26 @@ def _merge_counts(blobs) -> tuple[int, dict[str, int]]:
     return total, days
 
 
+def parse_analytics_key(key: str) -> tuple[str, str] | None:
+    """("count"|"event", slug) for a recognized analytics key, else None.
+
+    Shape only — it does not judge whether `slug` is a *valid* slug, because
+    handle_click_totals intersects against a known-visible set and must keep
+    its current behaviour byte for byte. analyticsorphans.py applies
+    links.is_valid_custom_slug on top before anything is deleted.
+    """
+    if key.startswith("count:"):
+        kind, rest = "count", key[len("count:"):]
+    elif key.startswith("events:"):
+        kind, rest = "event", key[len("events:"):]
+    else:
+        return None
+    slug = rest.split(":", 1)[0]
+    if not slug:
+        return None
+    return kind, slug
+
+
 def _parse_event(raw: bytes) -> dict | None:
     try:
         text = raw.decode("utf-8")
@@ -103,7 +124,7 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     cost is backwards here.
     """
     if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
-        visible = set(await _all_slugs_for_totals(links_store))
+        visible = set(await links.all_slugs(links_store))
     else:
         visible = set(await owned_slugs(links_store, principal.username))
 
@@ -116,10 +137,10 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     keys = await list_keys(analytics_store)
     wanted: dict[str, list[str]] = {}
     for key in keys:
-        if not key.startswith("count:"):
+        parsed = parse_analytics_key(key)
+        if parsed is None or parsed[0] != "count":
             continue
-        rest = key[len("count:"):]
-        slug = rest.split(":", 1)[0]
+        slug = parsed[1]
         if slug in visible:
             wanted.setdefault(slug, []).append(key)
 
@@ -133,11 +154,6 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
         totals[slug] = total
 
     return json_response(200, {"totals": totals})
-
-
-async def _all_slugs_for_totals(links_store):
-    raw = await links_store.get("all_links")
-    return json.loads(raw) if raw else []
 
 
 async def handle_analytics(links_store, analytics_store, principal: Principal, slug: str, num_event_slots: int):

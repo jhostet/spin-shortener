@@ -51,7 +51,7 @@ async def owned_slugs(store, username: str) -> list[str]:
 ALL_SLUGS_INDEX_KEY = "all_links"
 
 
-async def _all_slugs(store) -> list[str]:
+async def all_slugs(store) -> list[str]:
     raw = await store.get(ALL_SLUGS_INDEX_KEY)
     return json.loads(raw) if raw else []
 
@@ -59,11 +59,11 @@ async def _all_slugs(store) -> list[str]:
 async def add_slugs_to_indexes(store, owner: str, slugs: list[str]) -> None:
     """One read+write of `all_links`, one of `owner_links:<owner>`, for any
     number of slugs. Order-preserving, skips slugs already present."""
-    all_slugs = await _all_slugs(store)
+    slugs_index = await all_slugs(store)
     for slug in slugs:
-        if slug not in all_slugs:
-            all_slugs.append(slug)
-    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(all_slugs).encode("utf-8"))
+        if slug not in slugs_index:
+            slugs_index.append(slug)
+    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8"))
 
     owned = await owned_slugs(store, owner)
     for slug in slugs:
@@ -77,9 +77,9 @@ async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]])
     a per-owner mapping because a `links.edit_all` user can delete links
     belonging to several owners in a single action."""
     all_to_remove = {slug for slugs in slugs_by_owner.values() for slug in slugs}
-    all_slugs = await _all_slugs(store)
-    all_slugs = [slug for slug in all_slugs if slug not in all_to_remove]
-    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(all_slugs).encode("utf-8"))
+    slugs_index = await all_slugs(store)
+    slugs_index = [slug for slug in slugs_index if slug not in all_to_remove]
+    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8"))
 
     for owner, slugs in slugs_by_owner.items():
         to_remove = set(slugs)
@@ -254,7 +254,7 @@ async def handle_create(store, principal: Principal, request):
 
 async def handle_list(store, principal: Principal):
     if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
-        slugs = await _all_slugs(store)
+        slugs = await all_slugs(store)
     else:
         slugs = await owned_slugs(store, principal.username)
     # One gathered fetch, not a round trip per link. `GET /api/links` has no

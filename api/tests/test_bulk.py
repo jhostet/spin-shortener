@@ -243,7 +243,7 @@ async def test_bulk_create_success_shared_created_at_and_public_shape():
         assert "password_hash" not in link
         assert link["password_protected"] is False
 
-    all_slugs = await links._all_slugs(store)
+    all_slugs = await links.all_slugs(store)
     assert set(all_slugs) == slugs
     assert set(await links.owned_slugs(store, "alice")) == slugs
 
@@ -352,7 +352,7 @@ async def test_bulk_create_invalid_batch_password_rejected_before_any_write():
     resp = await bulk.handle_bulk_create(store, _principal(), _request({"text": text, "password": "ab"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_password"
-    assert await links._all_slugs(store) == []
+    assert await links.all_slugs(store) == []
 
 
 async def test_bulk_create_invalid_window_range_rejected():
@@ -473,7 +473,7 @@ async def test_bulk_create_mixed_submission_custom_slug_forbidden_on_every_slugg
     assert body["error"] == "bulk_validation_failed"
     assert [e["line"] for e in body["row_errors"]] == [1, 3]
     assert all(e["error"] == "custom_slug_forbidden" for e in body["row_errors"])
-    assert await links._all_slugs(store) == []
+    assert await links.all_slugs(store) == []
 
 
 async def test_bulk_create_writes_indexes_exactly_once(monkeypatch):
@@ -644,7 +644,7 @@ async def test_bulk_action_delete_cross_owner_by_edit_all_updates_both_owner_ind
     assert await store.exists(f"slug:{bob_slug}") is False
     assert alice_slug not in await links.owned_slugs(store, "alice")
     assert bob_slug not in await links.owned_slugs(store, "bob")
-    assert await links._all_slugs(store) == []
+    assert await links.all_slugs(store) == []
 
 
 async def test_bulk_action_delete_writes_indexes_exactly_once_per_owner(monkeypatch):

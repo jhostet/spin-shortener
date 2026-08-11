@@ -213,7 +213,7 @@ async def handle_bulk_create(store, principal, request):
     if len(rows) > MAX_BULK_ROWS:
         return json_response(400, {"error": "too_many_rows", "max_rows": MAX_BULK_ROWS, "row_count": len(rows)})
 
-    existing = set(await links._all_slugs(store))
+    existing = set(await links.all_slugs(store))
     policy = await urlpolicy.load_policy(store)
     row_errors = validate_bulk_rows(rows, existing, principal.has_permission("links.create_custom_slug"), policy)
 

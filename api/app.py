@@ -7,6 +7,7 @@ from spin_sdk import key_value, variables
 from spin_sdk.http import Handler
 
 import analytics
+import analyticsorphans
 import auth
 import backup
 import bulk
@@ -309,6 +310,22 @@ class HttpHandler(Handler):
             # docs/plans/kv-consistency-check.md's rejected alternatives.
             return await consistency.handle_consistency(
                 {"links": links_store, "users": users_store}, result, list_keys,
+            )
+
+        if path == "/api/admin/analytics/orphans" and method == "GET":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            return await analyticsorphans.handle_orphan_report(
+                links_store, analytics_store, result, list_keys,
+            )
+
+        if path == "/api/admin/analytics/purge" and method == "POST":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            return await analyticsorphans.handle_orphan_purge(
+                links_store, analytics_store, result, request, list_keys,
             )
 
         if path == "/api/admin/url-policy/violations" and method == "GET":

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>spin-shortener — Backup and restore</title>
+  <title>spin-shortener — Store maintenance</title>
   <script src="../theme-init.js"></script>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="../vendor/pico.min.css" />
@@ -13,7 +13,7 @@
   <header id="app-header" class="container"></header>
 
   <main class="container">
-    <h1>Backup and restore</h1>
+    <h1>Store maintenance</h1>
     <p id="forbidden-notice" class="form-error" role="alert" hidden>
       You don't have permission to manage backups.
     </p>
@@ -76,6 +76,24 @@
         <button type="button" id="consistency-btn" class="outline">Run consistency check</button>
         <p id="consistency-error" class="form-error" role="alert"></p>
         <div id="consistency-result" aria-live="polite"></div>
+      </article>
+
+      <article>
+        <h2>Clean up analytics for deleted links</h2>
+        <p>
+          Deleting a link doesn't delete its click data. That data can never be
+          read again — the link is gone — but every key in the store is
+          scanned on every dashboard load, so it makes the app slower for
+          everyone, forever.
+        </p>
+        <p class="form-note">
+          Deleting it can't be undone, and restoring an older backup brings it
+          back. Run this when traffic is low: it shares the same write budget
+          as click recording.
+        </p>
+        <button type="button" id="orphans-btn" class="outline">Find orphaned analytics</button>
+        <p id="orphans-error" class="form-error" role="alert"></p>
+        <div id="orphans-result" aria-live="polite"></div>
       </article>
     </div>
   </main>

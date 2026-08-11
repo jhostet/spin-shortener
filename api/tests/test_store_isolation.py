@@ -11,6 +11,7 @@ import base64
 import json
 
 import auth
+import analyticsorphans
 import backup
 import consistency
 import kvprefix
@@ -173,3 +174,48 @@ async def test_consistency_report_does_not_see_analytics_keys_sharing_the_physic
     assert report["ok"] is True
     unrecognized = next(c for c in report["checks"] if c["check"] == "unrecognized_key")
     assert unrecognized["count"] == 0
+
+
+async def test_orphan_purge_through_views_touches_only_targeted_analytics_keys():
+    """A fifth cross-namespace hazard: the purge must never touch links: or
+    users: keys sharing the physical store, even though it deletes by raw key
+    name once it has enumerated the analytics view. If scoped_list_keys or
+    open_views ever let the purge see (and therefore plan to delete) a
+    links:/users:-prefixed key, this is what would catch it."""
+    physical = FakeStore({
+        "links:slug:keepme": json.dumps({
+            "slug": "keepme", "target_url": "https://example.com", "owner": "admin",
+        }).encode("utf-8"),
+        "links:all_links": b'["keepme"]',
+        "links:owner_links:admin": b'["keepme"]',
+        "users:user:admin": b'{"username": "admin", "password_hash": "pbkdf2_sha256$100000$s$h"}',
+        "users:_meta:usernames": b'["admin"]',
+        "analytics:count:keepme:1": b'{"total": 3, "days": {}}',
+        "analytics:count:killme:1": b'{"total": 9, "days": {}}',
+        "analytics:count:killme:2": b'{"total": 1, "days": {}}',
+        "analytics:events:killme:5": b"1700000000000|referrer|desktop",
+    })
+    before = dict(physical._data)
+    views = kvprefix.open_views(physical)
+    list_keys = kvprefix.scoped_list_keys(fake_list_keys)
+
+    request = Request(
+        method="POST", uri="/api/admin/analytics/purge", headers={},
+        body=json.dumps({"confirm": "PURGE", "slugs": ["keepme", "killme"]}).encode("utf-8"),
+    )
+    response = await analyticsorphans.handle_orphan_purge(
+        views["links"], views["analytics"], _principal(), request, list_keys,
+    )
+    assert response.status == 200
+    body = json.loads(response.body)
+    assert body["purged_slugs"] == ["killme"]
+    assert {"slug": "keepme", "reason": "link_exists"} in body["skipped"]
+
+    for key, value in before.items():
+        if key.startswith("links:") or key.startswith("users:"):
+            assert physical._data.get(key) == value
+
+    assert "analytics:count:keepme:1" in physical._data
+    assert "analytics:count:killme:1" not in physical._data
+    assert "analytics:count:killme:2" not in physical._data
+    assert "analytics:events:killme:5" not in physical._data

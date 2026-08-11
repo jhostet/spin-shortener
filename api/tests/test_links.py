@@ -277,7 +277,7 @@ async def test_delete_owner_succeeds_and_removes_index():
     assert resp.status == 200
     assert await store.exists(f"slug:{slug}") is False
     assert slug not in await links.owned_slugs(store, "alice")
-    assert slug not in await links._all_slugs(store)
+    assert slug not in await links.all_slugs(store)
 
 
 async def test_delete_non_owner_forbidden():
@@ -696,7 +696,7 @@ async def test_patch_tags_full_replacement_not_merge():
 async def test_add_slugs_to_indexes_writes_all_links_and_owner_once():
     store = FakeStore()
     await links.add_slugs_to_indexes(store, "alice", ["s1", "s2", "s3"])
-    assert await links._all_slugs(store) == ["s1", "s2", "s3"]
+    assert await links.all_slugs(store) == ["s1", "s2", "s3"]
     assert await links.owned_slugs(store, "alice") == ["s1", "s2", "s3"]
 
 
@@ -704,7 +704,7 @@ async def test_add_slugs_to_indexes_skips_already_present_and_preserves_order():
     store = FakeStore()
     await links.add_slugs_to_indexes(store, "alice", ["s1"])
     await links.add_slugs_to_indexes(store, "alice", ["s1", "s2"])
-    assert await links._all_slugs(store) == ["s1", "s2"]
+    assert await links.all_slugs(store) == ["s1", "s2"]
     assert await links.owned_slugs(store, "alice") == ["s1", "s2"]
 
 
@@ -715,7 +715,7 @@ async def test_remove_slugs_from_indexes_multi_owner():
 
     await links.remove_slugs_from_indexes(store, {"alice": ["a1"], "bob": ["b1"]})
 
-    assert await links._all_slugs(store) == ["a2"]
+    assert await links.all_slugs(store) == ["a2"]
     assert await links.owned_slugs(store, "alice") == ["a2"]
     assert await links.owned_slugs(store, "bob") == []
 
@@ -847,7 +847,7 @@ async def test_create_rejection_consumes_no_slug():
     )
     assert resp.status == 400
     assert await store.exists("slug:my-slug") is False
-    assert await links._all_slugs(store) == []
+    assert await links.all_slugs(store) == []
 
 
 async def test_update_rejects_destination_denied_by_policy():

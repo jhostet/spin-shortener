@@ -273,8 +273,22 @@ function formatTimestamp(value, { dateOnly = false, precise = false } = {}) {
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
   }
   if (precise) {
+    // The date parts are spelled out instead of using `dateStyle: "medium"`,
+    // and that is a correctness requirement, not a style choice: ECMA-402
+    // forbids combining `dateStyle`/`timeStyle` with any individual component
+    // option, so `dateStyle` alongside `hour`/`minute`/`second` throws
+    // `TypeError: Invalid option`. `fractionalSecondDigits` is NOT the culprit
+    // and works fine next to `second` — do not "fix" this by dropping it.
+    //
+    // This shipped broken in 051cfa7 and reached production. The throw lands
+    // inside links/detail.js's recent-events render loop, so a link with no
+    // events rendered fine and only links that actually had events showed an
+    // empty table — which is why a deploy smoke test on a fresh link missed it.
+    // These options reproduce `dateStyle: "medium"` exactly ("Aug 9, 2026").
     return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",

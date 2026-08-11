@@ -289,9 +289,149 @@ document.getElementById("consistency-btn").addEventListener("click", async () =>
   renderConsistencyReport(data);
 });
 
+// Call-site override map, passed as friendlyError's third argument exactly
+// as its docstring intends — "lets one call site's copy win over the shared
+// map." Not optional tidiness here: BACKUP_ERROR_MESSAGES.confirmation_required
+// reads "Type REPLACE exactly to confirm", which would be actively wrong for
+// a purge whose confirmation is set programmatically, not typed.
+const PURGE_ERROR_MESSAGES = {
+  confirmation_required: "Something went wrong confirming this action — try again.",
+  links_index_unreadable: "The links index couldn't be read. Run the consistency check first.",
+  too_many_slugs: "Too many links in one batch — try again.",
+  invalid_slug: "One of the links in this batch has an invalid name.",
+  no_slugs: "There's nothing to purge.",
+  duplicate_slug: "The same link appeared twice in this batch.",
+};
+
+let latestOrphanReport = null;
+let orphanPurgeStopped = false;
+
+function formatOrphanHeadline(report) {
+  const { orphan_keys, orphan_slugs } = report.totals;
+  const linkWord = orphan_slugs === 1 ? "link that no longer exists" : "links that no longer exist";
+  return `${orphan_keys} of ${report.scanned.analytics_keys} analytics keys belong to ${orphan_slugs} ${linkWord}.`;
+}
+
+function renderOrphanList(report) {
+  if (!report.orphans.length) return "";
+  const items = report.orphans
+    .map((o) => `<li>${slugChip(o.slug)} <span class="finding-field"><span class="finding-key">keys</span> ${o.keys}</span></li>`)
+    .join("");
+  const truncatedHtml = report.truncated
+    ? `<p>Showing the first ${report.max_orphan_slugs} of ${report.totals.orphan_slugs}. Purging will fetch the rest.</p>`
+    : "";
+  return `<ul class="finding-list">${items}</ul>${truncatedHtml}`;
+}
+
+function renderOrphanReport(report) {
+  const resultEl = document.getElementById("orphans-result");
+  latestOrphanReport = report;
+
+  if (report.totals.orphan_slugs === 0) {
+    resultEl.innerHTML = `<p class="form-success">No orphaned analytics — every analytics key belongs to a link that still exists.</p>`;
+    return;
+  }
+
+  resultEl.innerHTML = `
+    <p>${escapeHtml(formatOrphanHeadline(report))}</p>
+    ${renderOrphanList(report)}
+    <button type="button" id="purge-btn" class="outline secondary">Delete these analytics keys</button>
+    <button type="button" id="purge-stop-btn" class="outline" hidden>Stop</button>
+    <p id="purge-progress" aria-live="polite"></p>
+  `;
+
+  document.getElementById("purge-btn").addEventListener("click", onPurgeClick);
+}
+
+async function onPurgeClick() {
+  const report = latestOrphanReport;
+  if (!report) return;
+
+  const { orphan_keys, orphan_slugs } = report.totals;
+  const confirmed = await confirmDialog(
+    `Permanently delete ${orphan_keys} analytics keys for ${orphan_slugs} deleted link${orphan_slugs === 1 ? "" : "s"}? This can't be undone.`,
+    { confirmLabel: "Delete analytics" },
+  );
+  if (!confirmed) return;
+
+  await runOrphanPurge(report);
+}
+
+async function runOrphanPurge(initialReport) {
+  orphanPurgeStopped = false;
+  const errorEl = document.getElementById("orphans-error");
+  const progressEl = document.getElementById("purge-progress");
+  const findBtn = document.getElementById("orphans-btn");
+  const purgeBtn = document.getElementById("purge-btn");
+  const stopBtn = document.getElementById("purge-stop-btn");
+  errorEl.textContent = "";
+  findBtn.disabled = true;
+  purgeBtn.disabled = true;
+  stopBtn.hidden = false;
+  stopBtn.onclick = () => { orphanPurgeStopped = true; };
+
+  let report = initialReport;
+  let slugs = report.orphans.map((o) => o.slug);
+  const totalKeysAtStart = report.totals.orphan_keys;
+  let deleted = 0;
+
+  while (slugs.length && !orphanPurgeStopped) {
+    const chunk = slugs.slice(0, 50);
+    const { ok, data } = await api.post("/admin/analytics/purge", { confirm: "PURGE", slugs: chunk });
+    if (!ok) {
+      errorEl.textContent = friendlyError(data, "Could not purge orphaned analytics.", PURGE_ERROR_MESSAGES);
+      break;
+    }
+    deleted += data.deleted_keys;
+    slugs = data.remaining_slugs.concat(slugs.slice(50));
+    progressEl.textContent = `Deleted ${deleted} of ${totalKeysAtStart} keys…`;
+  }
+
+  // A truncated report means more orphans existed than the report showed —
+  // re-fetch and keep going, since one click should finish the job on a
+  // store with thousands of orphans.
+  if (report.truncated && !orphanPurgeStopped && !slugs.length) {
+    const { ok, data } = await api.get("/admin/analytics/orphans");
+    if (ok && data.totals.orphan_slugs > 0) {
+      progressEl.textContent = `Deleted ${deleted} keys so far — continuing…`;
+      findBtn.disabled = false;
+      stopBtn.hidden = true;
+      await runOrphanPurge(data);
+      return;
+    }
+  }
+
+  findBtn.disabled = false;
+  stopBtn.hidden = true;
+  if (errorEl.textContent) {
+    purgeBtn.disabled = false;
+  } else if (!slugs.length) {
+    document.getElementById("orphans-result").innerHTML =
+      `<p class="form-success">Deleted ${deleted} analytics keys. Every analytics key now belongs to a link that still exists.</p>`;
+  } else {
+    progressEl.textContent = `Stopped. Deleted ${deleted} keys so far.`;
+    purgeBtn.disabled = false;
+  }
+}
+
+document.getElementById("orphans-btn").addEventListener("click", async () => {
+  const errorEl = document.getElementById("orphans-error");
+  const resultEl = document.getElementById("orphans-result");
+  errorEl.textContent = "";
+  resultEl.innerHTML = "";
+
+  const { ok, data } = await api.get("/admin/analytics/orphans");
+  if (!ok) {
+    errorEl.textContent = friendlyError(data, "Could not check for orphaned analytics.", PURGE_ERROR_MESSAGES);
+    return;
+  }
+
+  renderOrphanReport(data);
+});
+
 initHeader({
   dashboardHref: "../dashboard.html",
-  pageLabel: "Backup and restore",
+  pageLabel: "Store maintenance",
   manageUsersHref: "users.html",
 }).then((result) => {
   // Both /api/admin/backup and /api/admin/restore gate on users.manage
