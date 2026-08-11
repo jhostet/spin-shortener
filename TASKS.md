@@ -1020,3 +1020,34 @@ work** — it shipped in `051cfa7` on 2026-08-10 and was live on Akamai in both
 **The irony worth keeping:** `051cfa7` added millisecond resolution specifically to answer a critique finding that identical-looking timestamps "read as broken". It shipped a change that made the table not render at all, and the feature has therefore never actually worked in production until now.
 
 Verified live: 5 clicks 300 ms apart render 5 rows at `01:42:56.544` / `.206` / `55.852` / `.504` / `.164` — distinct milliseconds visible, which is the whole point of the change. Zero console errors.
+
+## Deploy of the orphan purge + events fix (2026-08-11)
+
+Deployed `55dc06d` as `app_version=55dc06d-orphan-purge`. The CLI again hit its documented
+60-second readiness timeout; the build went live **~110 s** later, confirmed by polling
+`X-SS-Version`. All five variables re-supplied and verified: login succeeds, `/api/auth/me`
+reports the real `fwf.app` domain with no `localhost` leak, and both changed assets are served
+(`app.js` carries the events fix, `admin/backup.js` carries the purge UI).
+
+**This also puts the recent-events fix live**, so that table works in production for the first
+time since `051cfa7` shipped it broken.
+
+**First orphan report against the real store — it confirms the hand-analysis that motivated the
+whole feature, from a completely separate code path:**
+
+| | |
+|---|---|
+| analytics keys scanned | 947 |
+| live slugs | 14 |
+| **orphan slugs** | **29** |
+| **orphan keys** | **911 (96% of the namespace)** |
+| live keys | 36 |
+| unrecognized | 0 |
+
+Earlier hand-decoding of a backup gave 907/943; the small drift is the test links created and
+deleted in between. Two independent methods agreeing is the point. At the measured ~68.7 µs/key,
+purging would take **~63 ms off every dashboard load**. The largest orphans are the
+`shardverify*`/`s64verify*` load-test slugs left by the 2026-08-07 sharding measurements.
+
+- [x] Deploy `55dc06d` — done when: `X-SS-Version` reports the label and both changes are live — **DONE.**
+- [ ] Run the purge against the deployed store and re-measure `list_keys` — file(s): (none — measurement) — done when: the purge has removed the 911 orphan keys, a fresh `click-totals` trace gives a new `list_keys` median, and the drop is compared against the ~68.7 µs/key model's prediction (911 × 68.7 µs ≈ 63 ms, i.e. ~66 ms → ~3 ms). **This is a destructive action on the deployed store and is deliberately left for an explicit go-ahead** — the data is unreadable by definition, but it is not recoverable once deleted.
