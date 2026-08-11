@@ -1,5 +1,31 @@
 # Orphaned Analytics Purge
 
+## Decisions taken 2026-08-10 — the three questions this plan raised are CLOSED
+
+The plan deliberately left three calls to the user rather than assuming them.
+All three were put to the user and all three were **confirmed as this plan
+proposes**, so a builder should implement what is written below and not
+re-open them:
+
+1. **Retitle scope — the cheap half only.** `<h1>`, `<title>`, `initHeader`'s
+   `pageLabel` and `users.html`'s anchor become "Store maintenance"; **the file
+   stays `gui/admin/backup.html`.** The resulting filename/title mismatch is
+   accepted deliberately, and is strictly less harmful than today's state,
+   where the title actively misdescribes a page hosting four tools. Still
+   measure the breadcrumb at 390 px per DESIGN.md:250 rather than assuming.
+2. **Confirmation — server-side `{"confirm": "PURGE"}` plus a count-bearing
+   `confirmDialog`, and NO typed GUI field.** Confirmation rituals are a
+   budget; spending one here would devalue restore's, which is calibrated to a
+   far larger blast radius. Two properties make the lower rung safe: the purge
+   only ever deletes data for slugs with no link record, and the destructive
+   path independently re-checks `exists("slug:<S>")` immediately before each
+   write, so a stale report cannot cause a wrong deletion.
+3. **Module name — `api/analyticsorphans.py`.** Matches the existing
+   compound-no-underscore convention (`urlpolicy.py`, `kvprefix.py`,
+   `kvbatch.py`) and stays unambiguous against `consistency.py`, which already
+   owns "orphan" for index drift (`orphan_session`,
+   `orphan_owner_index_entry`).
+
 ## Context
 
 `links.handle_delete` and `bulk.handle_bulk_action`'s delete path remove
