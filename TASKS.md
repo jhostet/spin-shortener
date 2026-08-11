@@ -1050,4 +1050,41 @@ purging would take **~63 ms off every dashboard load**. The largest orphans are 
 `shardverify*`/`s64verify*` load-test slugs left by the 2026-08-07 sharding measurements.
 
 - [x] Deploy `55dc06d` — done when: `X-SS-Version` reports the label and both changes are live — **DONE.**
-- [ ] Run the purge against the deployed store and re-measure `list_keys` — file(s): (none — measurement) — done when: the purge has removed the 911 orphan keys, a fresh `click-totals` trace gives a new `list_keys` median, and the drop is compared against the ~68.7 µs/key model's prediction (911 × 68.7 µs ≈ 63 ms, i.e. ~66 ms → ~3 ms). **This is a destructive action on the deployed store and is deliberately left for an explicit go-ahead** — the data is unreadable by definition, but it is not recoverable once deleted.
+- [x] Run the purge against the deployed store and re-measure `list_keys` — file(s): (none — measurement) — done when: the purge has removed the 911 orphan keys, a fresh `click-totals` trace gives a new `list_keys` median, and the drop is compared against the ~68.7 µs/key model's prediction (911 × 68.7 µs ≈ 63 ms, i.e. ~66 ms → ~3 ms). **This is a destructive action on the deployed store and is deliberately left for an explicit go-ahead** — the data is unreadable by definition, but it is not recoverable once deleted.
+
+**PURGE RUN AGAINST THE DEPLOYED STORE, 2026-08-11 — and it falsified part of the model.**
+
+Run with explicit user go-ahead. **4 chunked rounds, biggest-slug-first, 234 + 227 + 233 + 217 =
+911 keys deleted**, every round inside the 250-key budget. Analytics namespace went **947 → 36
+keys**; the orphan report now returns `orphan_slugs: 0`. **Live data verifiably intact:** the
+busiest slug still reports **524**, matching both the figure recorded at the `051cfa7` deploy and
+an independent cross-check through `GET /api/links/{slug}/analytics`, which sums the shards by a
+completely separate code path.
+
+| | before | after | change |
+|---|---|---|---|
+| physical keys | 968 | 57 | −911 |
+| `list_keys` median | **74.9 ms** | **23.9 ms** | **−51.0 ms** |
+| ratio to one `get` | 2.57× | 0.85× | −1.72× |
+| `click-totals` wall | 223.5 ms | 167.9 ms | −55.6 ms |
+
+Both rows were measured in the **same latency window** (`get` 28.5 vs 28.9 ms), so this comparison
+is sound in raw milliseconds and not only in ratio.
+
+**The model predicted the drop but not the floor, and the floor is the new finding.** It
+predicted 62.6 ms of saving against 51.0 ms measured (~19% over), because it predicted the
+post-purge cost would fall to **~1 ms** when it actually bottomed out at **23.9 ms**. The
+2026-08-10 fit was taken over four store sizes that were *all ≥ 962 keys*, where a ~20 ms fixed
+cost is 2–30% of the total and is absorbed into noise as a ~0 intercept. At 57 keys it is
+essentially the whole measurement.
+
+**A `list_keys` costs about one KV round trip plus ~68.7 µs per key.** The floor measures **0.85×
+a single `get`** — i.e. the enumeration is at minimum one operation, which is what it must be.
+**Enumeration can never be made free, only proportional-to-nothing**, so ~24 ms is the hard
+ceiling on any future win from shrinking the store. Refitting all six points regime-normalised
+gives `lk/get = 2.53e-3 × keys + 0.31`, R² = 0.9989 — **the slope is confirmed unchanged**, so
+every forward-looking growth projection in this file still stands; only the low end was wrong.
+
+**The honest caveat:** even the refit under-predicts the 57-key point by 45%, because least
+squares over a range dominated by large values cannot fit the low end well. Treat "~1 KV
+operation" as the floor, not the refit's 0.31 intercept.
