@@ -343,9 +343,6 @@ function editRowHtml(link) {
           </div>
           <label>Tags <input type="text" class="edit-tags" list="tag-suggestions" value="${escapeHtml((link.tags ?? []).join(", "))}" /></label>
           ${canManageUsers() ? `<label>Owner <select class="edit-owner"></select></label>` : ""}
-          <div class="grid">
-            <label><input type="checkbox" class="edit-disabled" ${link.status === "disabled" ? "checked" : ""} /> Disabled (stops <code>/r/${escapeHtml(link.slug)}</code> resolving)</label>
-          </div>
           <div role="group">
             <button type="submit" class="save-edit-btn">Save</button>
             <button type="button" class="cancel-edit-btn secondary outline">Cancel</button>
@@ -355,6 +352,21 @@ function editRowHtml(link) {
       </td>
     </tr>
   `;
+}
+
+// Deliberately sits between Edit and Delete: it is the reversible correction,
+// and it belongs in the user's path BEFORE the irreversible one. Until this
+// existed the asymmetry ran the other way — Delete was one click while
+// disabling meant opening the edit form and finding a checkbox seven fields
+// down, past the password inputs. For a non-technical author fixing a mistake
+// that made the destructive action the path of least resistance.
+//
+// Only `active` and `disabled` are ever stored; `scheduled`/`expired` are
+// derived from the window by resolveLinkState(), so this is a genuine binary
+// and the label can state the outcome rather than the current state.
+function statusToggleHtml(link) {
+  const label = link.status === "disabled" ? "Enable" : "Disable";
+  return `<button data-slug="${escapeHtml(link.slug)}" data-status="${escapeHtml(link.status)}" class="status-btn outline" aria-label="${label} link ${escapeHtml(link.slug)}">${label}</button>`;
 }
 
 async function loadLinks() {
@@ -433,7 +445,7 @@ function renderLinksTable() {
       <td>${escapeHtml(link.owner)}${isDeletedOwner(link.owner) ? ' <span class="status-badge status-disabled">deleted account</span>' : ""}</td>
       <td class="destination-cell" data-cell="destination" title="${escapeHtml(link.target_url)}">${escapeHtml(link.target_url)}</td>
       <td>${formatTimestamp(link.created_at)}</td>
-      <td>${statusBadge(link)}</td>
+      <td data-cell="status">${statusBadge(link)}</td>
       <td class="clicks-cell" data-cell="clicks">${clicksCell(link.slug)}</td>
       <td data-cell="starts">${formatWindowField(link.start_at, { noteIfFuture: link.status === "active" })}</td>
       <td data-cell="expires">${formatWindowField(link.end_at, { warnIfSoon: link.status === "active" })}</td>
@@ -443,6 +455,7 @@ function renderLinksTable() {
           <button data-slug="${escapeHtml(link.slug)}" class="copy-btn outline" aria-label="Copy link ${escapeHtml(link.slug)}">Copy</button>
           ${canEditLink(link) ? `
             <button data-slug="${escapeHtml(link.slug)}" class="edit-btn outline" aria-label="Edit link ${escapeHtml(link.slug)}">Edit</button>
+            ${statusToggleHtml(link)}
             <button data-slug="${escapeHtml(link.slug)}" class="delete-btn secondary outline" aria-label="Delete link ${escapeHtml(link.slug)}">Delete</button>
           ` : ""}
         </div>
@@ -487,6 +500,49 @@ async function handleDeleteClick(btn) {
   loadLinks();
 }
 
+// No confirmation dialog, deliberately, and that is the point of the control
+// rather than an omission: disabling is instantly reversible by the same
+// button, and the existing bulk Enable/Disable actions already run without one
+// (only bulk delete confirms). Adding friction here would re-create the very
+// imbalance this fixes.
+async function handleStatusToggleClick(btn) {
+  const slug = btn.dataset.slug;
+  const next = btn.dataset.status === "disabled" ? "active" : "disabled";
+  const errorEl = document.getElementById("links-error");
+  errorEl.textContent = "";
+
+  // PATCH gates every field on `if "field" in payload`, so a status-only body
+  // is a true partial update and cannot disturb the destination or schedule.
+  btn.disabled = true;
+  const { ok, data } = await api.patch(`/links/${slug}`, { status: next });
+  btn.disabled = false;
+  if (!ok) {
+    errorEl.textContent = friendlyError(data, `Could not ${next === "disabled" ? "disable" : "enable"} link.`);
+    return;
+  }
+
+  // Repaint in place instead of calling loadLinks(). A full re-render clears
+  // the bulk selection by design, so refreshing here would silently drop any
+  // checkbox ticked beforehand — the same reason click totals paint in place.
+  const record = allLinks.find((l) => l.slug === slug);
+  if (record) record.status = next;
+  btn.dataset.status = next;
+  const label = next === "disabled" ? "Enable" : "Disable";
+  btn.textContent = label;
+  btn.setAttribute("aria-label", `${label} link ${slug}`);
+
+  // Starts/Expires repaint too, not just the badge: both cells' "starts soon"
+  // and "expires soon" notes are predicated on the link being active, so a
+  // toggle that updated only the badge would leave an expiry warning showing
+  // on a link that no longer resolves at all.
+  const row = btn.closest("tr");
+  if (record && row) {
+    row.querySelector('[data-cell="status"]').innerHTML = statusBadge(record);
+    row.querySelector('[data-cell="starts"]').innerHTML = formatWindowField(record.start_at, { noteIfFuture: record.status === "active" });
+    row.querySelector('[data-cell="expires"]').innerHTML = formatWindowField(record.end_at, { warnIfSoon: record.status === "active" });
+  }
+}
+
 function handleEditToggleClick(btn) {
   const editRow = document.querySelector(`#links-body tr.edit-row[data-slug="${CSS.escape(btn.dataset.slug)}"]`);
   const opening = editRow.style.display === "none";
@@ -510,15 +566,17 @@ async function handleEditFormSubmit(form) {
   const newPassword = form.querySelector(".edit-password").value;
   const removePassword = form.querySelector(".edit-remove-password").checked;
   const tagList = parseTagsInput(form.querySelector(".edit-tags").value);
-  // PATCH /links/{slug} has accepted `status` since Phase 1, but until this
-  // control existed no client ever sent it — bulk enable/disable was the only
-  // way to change a link's status from the GUI, so disabling one link meant
-  // selecting it and using a bar labelled for bulk work.
-  const status = form.querySelector(".edit-disabled").checked ? "disabled" : "active";
   const errorEl = form.querySelector(".edit-error");
   errorEl.textContent = "";
 
-  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, status, tags: tagList });
+  // `status` is deliberately NOT sent here. It used to be, from a checkbox in
+  // this form, but the row's own Disable/Enable button now owns it — and the
+  // two together were a live bug rather than a redundancy: this form's markup
+  // is built once by renderLinksTable(), so a checkbox rendered before a
+  // button toggle would still hold the old value and silently revert it on
+  // Save. PATCH gates each field on `if "field" in payload`, so omitting it
+  // leaves the stored status untouched.
+  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, tags: tagList });
   if (!ok) {
     const msg = friendlyError(data, "Could not update link.");
     errorEl.textContent = data && data.host ? `${msg} (${data.host})` : msg;
@@ -593,11 +651,12 @@ async function handleEditFormSubmit(form) {
 }
 
 document.getElementById("links-body").addEventListener("click", (e) => {
-  const btn = e.target.closest(".copy-btn, .delete-btn, .edit-btn, .cancel-edit-btn");
+  const btn = e.target.closest(".copy-btn, .delete-btn, .edit-btn, .status-btn, .cancel-edit-btn");
   if (!btn) return;
   if (btn.matches(".copy-btn")) handleCopyClick(btn);
   else if (btn.matches(".delete-btn")) handleDeleteClick(btn);
   else if (btn.matches(".edit-btn")) handleEditToggleClick(btn);
+  else if (btn.matches(".status-btn")) handleStatusToggleClick(btn);
   else if (btn.matches(".cancel-edit-btn")) handleCancelEditClick(btn);
 });
 

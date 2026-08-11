@@ -140,6 +140,8 @@ This invokes each component's `[component.<name>.build]` command from `spin.toml
 
 When testing the `gui` in a real browser over plain `http://localhost`, also set `SPIN_VARIABLE_COOKIE_SECURE=false` — the session cookie's `Secure` flag otherwise stops the browser from storing/sending it over non-HTTPS, breaking login. Leave `cookie_secure` at its default `true` for any HTTPS deployment.
 
+**Editing any file under `gui/` requires restarting `spin up` — the running server does NOT pick it up.** `spin_static_fs` serves a snapshot of the mapped directory taken at startup, so a `.js`/`.css` edit is invisible until the process restarts. This is worth knowing because of how it presents: a genuinely correct fix keeps reproducing the *old* error in the browser, with the old line numbers, which reads as "my fix is wrong" rather than "the server is stale" — confirmed 2026-08-10, where `curl localhost:3000/dashboard.js` returned the pre-edit file while the on-disk file already had the fix. **When a GUI change appears not to work, diff the served asset against the file on disk before doubting the change** (`curl localhost:3000/<asset>`), and note that a browser hard-reload does not help, because the staleness is server-side. This does not apply to `gui-pages`, `api` or `redirect`, which are rebuilt by `--build`.
+
 To run the same app **plus the local-only KV explorer** at `/internal/kv-explorer/` (see the `kv-explorer` bullet under Architecture for what it can and cannot reach):
 
 ```bash
