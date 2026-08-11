@@ -643,6 +643,22 @@ client-driven loop gets every benefit and adds no state.
 
 ### 3. Purging inline in `handle_delete` / bulk delete — rejected, checked rather than assumed
 
+> **REVISITED 2026-08-11 and PARTLY OVERTURNED — see
+> `docs/plans/inline-analytics-purge-on-delete.md`.** The half of this entry
+> covering **bulk delete** stands unchanged and was re-derived: 4,750 writes is
+> 95–123 s against a 30-second handler limit, and bulk delete remains out of
+> scope. The half covering **single-link delete** did not survive review. Its
+> "~2–2.5 seconds" and "~95 writes" figures both price the *saturated* 95-key
+> link, but analytics keys accumulate by coupon-collector, so the dominant
+> case for this app's audience — a mistyped link deleted after ~3 clicks —
+> holds roughly **6 keys, i.e. ~24 ms of enumeration plus ~138 ms of writes**.
+> And the last paragraph's one-line dismissal of the conditional variant is
+> inverted: the enumeration measured **23.9 ms** against **~2,185 ms** for 95
+> writes, so it is not "most of the cost" — it is what makes an inline purge
+> cheap, by turning speculative writes into real ones. The new plan builds it
+> for the single-link path only. Everything else in this document, including
+> the shipped report/purge endpoints and the operator tool, is unaffected.
+
 **Attractive because** orphans would never accumulate at all and no operator
 tool would be needed.
 
