@@ -203,6 +203,25 @@ Every successful redirect updates two keys in the `analytics` KV store, written 
 - `count:<slug>:<shard>` — one JSON blob `{total, days: {"YYYY-MM-DD": n, ...}}`, read-modified-written on every click (one KV round trip), with `days` trimmed to `analytics_day_retention_days` (default 90) entries. **The counter is sharded across `linkgate.CountShards` (16) keys** — see "Click counting is sharded across 16 keys" below.
 - `events:<slug>:<slot>` — a fixed-shape `"<unix_ms>|<referrer>|<device_class>"` string, blind-overwritten (no read) into one of `analytics_event_slots` (default 30) ring-buffer slots selected by `linkgate.EventSlot(now, numSlots)`.
 
+### The Clicks column's read cost scales with traffic, without bound — MEASURED 2026-08-11
+
+**`GET /api/analytics/click-totals` reads every existing `count:` key for every visible slug, so its read count grows with traffic toward 64 per link.** `api/analytics.py`'s docstring calls this "proportional to real traffic rather than to links × shard count." That is true and it is **not a bound**: as a link gets busy, shards-touched → `COUNT_SHARDS`, and the endpoint converges on exactly the 65×N shape it was designed to avoid. The protection holds for quiet links and evaporates for the busy ones a real deployment cares about.
+
+Measured on the deployed build by seeding 20 links and clicking them in stages (the `get` count in an `X-SS-Debug` trace **is** Σ shards-touched, so this is direct, not inferred):
+
+| clicks/link | `get` measured | model | wall |
+|---|---|---|---|
+| 0 | **7** | 7 | 175 ms |
+| 5 | 106 | 104 | 197 ms |
+| 25 | 417 | 424 | 412 ms |
+| 100 | **930** | 1022 | **792 ms** |
+
+**Two consequences.** First, **wall time scales once reads exceed `gather_reads`' 100-concurrent bound** — below it gathering hides the cost, above it the fan-out serialises into waves. Second, extrapolated against Akamai's **1,000 reads/second app-wide cap that redirects also draw from**, one dashboard load at **100 links × 200 clicks issues ~6,126 reads — 613% of the entire app's per-second read budget.** That is a design limit, not a tuning problem.
+
+**The measurement method is the lesson.** A 2026-08-10 run seeded 9,000 links and concluded the endpoint was cheap; it seeded links that were **deliberately never clicked**, so they created no count keys and the `get` count sat at 6 for the whole experiment. **Measuring this endpoint requires seeding clicks, not links** — seeding links alone measures only the enumeration axis and will report a false all-clear.
+
+**The rejected denormalised `analytics:total:<slug>` deserves re-costing against these numbers**, not the ones available when it was rejected for "adding a THIRD KV write to every click". Writes are capped at 50/s and reads at 1,000/s, so the real trade is one extra write per click against thousands of reads per dashboard load. Re-argue it; do not assume either conclusion.
+
 ### Click counting is sharded across 16 keys
 
 The write path (`recordClickCount` in `redirect/main.go`) picks a shard per click and read-modify-writes `analytics:count:<slug>:<shard>`. The read path (`api/analytics.py`'s `handle_analytics`) sums **17** keys: all 16 shards plus the legacy unsharded `count:<slug>`.

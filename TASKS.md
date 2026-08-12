@@ -1267,3 +1267,61 @@ it seeded 9,000 links that were deliberately never clicked, so they produced no 
 and the endpoint's `get` count stayed at 6 for the whole experiment. That isolation was correct
 for measuring the enumeration and is precisely why this axis went unmeasured. **Any future
 measurement of this endpoint must seed clicks, not just links.**
+
+## MEASURED: the Clicks column does not scale, and it outranks everything queued (2026-08-11)
+
+Run after the user pointed out that the `fwf.app` deployment is a disposable test site and that
+measurements should reshape its data freely rather than tiptoe around it. **That correction is
+what made this measurable** — the previous run's caution (seed links, never click them) is exactly
+what hid the effect.
+
+**Method.** 20 links seeded, then clicked in stages, tracing `click-totals` at each. The `get`
+count in the log line **is** Σ shards-touched, so this measures the axis directly rather than
+inferring it. Clicks paced at ~17 req/s (~34 writes/s), under the 50 write/s cap, so counter loss
+is not a factor.
+
+| stage | clicks/link | `get` measured | coupon-collector model | err | wall |
+|---|---|---|---|---|---|
+| A | 0 | **7** | 7 | 0% | 175 ms |
+| B | 5 | **106** | 104 | +2% | 197 ms |
+| C | 25 | **417** | 424 | −2% | 412 ms |
+| D | 100 | **930** | 1022 | −9% | 792 ms |
+
+**The model holds across a 130× range of read counts.** Stage A is the headline for method:
+**20 new links moved `get` not at all**, because unclicked links create no count keys — which is
+precisely why the 2026-08-10 seeding run could not see this axis.
+
+**Two things this establishes.**
+
+1. **Reads scale with traffic, without bound, toward 64 per link.** `handle_click_totals` reads
+   every existing `count:` key for every visible slug. `api/analytics.py`'s docstring calls this
+   "proportional to real traffic rather than to links × shard count" — true, and **not a bound.**
+2. **Wall time scales too, once reads pass `gather_reads`' 100-concurrent bound.** 175 → 792 ms
+   across the stages. Below 100 reads gathering hides the cost; above it, the fan-out serialises
+   into waves and the user feels it. `GET /api/links` never showed this because it stayed under
+   the bound.
+
+**Extrapolated, and this is the part that reorders the backlog** — reads issued by ONE dashboard
+load, against Akamai's **1,000 reads/second app-wide cap that redirects also draw from**:
+
+| links | clicks/link | reads | share of the app-wide cap |
+|---|---|---|---|
+| 100 | 50 | 3,488 | **349%** |
+| 100 | 200 | 6,126 | **613%** |
+| 200 | 200 | 12,251 | **1,225%** |
+
+**A single dashboard load at 100 modestly-successful links would need roughly six seconds of the
+entire application's read budget.** Every concurrent redirect competes with it. This is a design
+limit, not a tuning problem, and it binds far sooner than pagination (2.9% of reads) or the
+orphan ratchet (which inline purge addresses).
+
+- [x] Measure `handle_click_totals`' traffic-driven read axis — file(s): (none — measurement) — done when: the coupon-collector model is confirmed or refuted against real clicks — **DONE, confirmed.**
+- [ ] Decide what to do about the Clicks column's read cost — file(s): api/analytics.py, docs/plans/ — done when: an approach is chosen with its trade-offs recorded. The denormalised `analytics:total:<slug>` rejected in that docstring ("adds a THIRD KV write to every click") deserves re-costing **against these numbers** rather than against the ones available when it was rejected: it would make the endpoint O(N) reads with no traffic term at all. The write cap is 50/s and the read cap 1,000/s, so the trade is 1 extra write per click against thousands of reads per dashboard load — the opposite conclusion to the one reached before, and it should be re-argued rather than assumed either way.
+
+**Cleanup:** all 20 seeded links deleted and their 1,597 analytics keys purged in 7 chunks; the
+store is back to exactly its pre-measurement state (36 analytics keys, 14 links, 0 orphans).
+
+**One honest gap:** stage D came in 9% under model. Click loss is unlikely at 34 writes/s, so the
+likelier cause is shard-selection non-uniformity — but the seeded links were deleted before their
+recorded totals were compared against the 2,000 clicks issued, so this was not run down. Check
+recorded totals *before* cleanup next time.
