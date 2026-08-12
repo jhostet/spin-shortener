@@ -325,6 +325,11 @@ Known remaining drift, not part of any round above: `.impeccable/design.json` (t
 - [x] A key-count cap that defers heavily-clicked links' inline purge to the operator tool — considered 2026-08-11 while planning `docs/plans/inline-analytics-purge-on-delete.md`, rejected **as a policy** while being kept as a rail. Attractive because the enumeration reveals the count for free (the very inversion that revisit corrected) and a cap of ~32 would hold every delete under ~900 ms. Rejected because the links it would defer — heavily clicked ones — are exactly the links carrying the most orphan keys, so it opts out of most of the benefit while keeping all the complexity; because it invents a caller-visible `deferred` state the non-technical audience cannot act on; and because the harm it bounds is shallower than it looks: a sequential delete loop runs at ~40–50 writes/second whatever the cap, so a cap shortens the contention window rather than reducing its depth, and the shipped purge endpoint already sustains that window for 5.75 s per 250-key chunk. What is kept is `MAX_INLINE_PURGE_KEYS = 128`, a rail that cannot fire at shipped configuration (64 shards + 1 legacy + 30 event slots = 95), pinned by a test against `COUNT_SHARDS + 1 + 30`.
 - [x] Purging a deleted slug's analytics **before** removing its record — considered 2026-08-11 while planning `docs/plans/inline-analytics-purge-on-delete.md`, rejected. Attractive because it would close the tens-of-milliseconds window in which another user could recreate the same slug between the record delete and the enumeration. Rejected because it inverts the write ordering: an interruption after the analytics deletes but before the record delete leaves a **live, resolving link whose click history is gone**, silently and unrecoverably, with nothing that reports it — against orphan analytics keys, which are recoverable by a shipped tool and are today's normal state. The race it closes costs at most one click on a link created inside that window.
 - [x] Rendering the inline purge's result in the dashboard — considered 2026-08-11 while planning `docs/plans/inline-analytics-purge-on-delete.md`, rejected. Attractive because silent behaviour is usually worse than visible behaviour, and the `deferred`/`failed` statuses are real information. Rejected because the audience is explicitly non-technical marketing staff: "6 analytics keys removed" is noise, and "some keys were left for an administrator" names a person they cannot summon and an action they cannot take. The information's correct home is the Store maintenance page's orphan report, read by the operator who *can* act. The `analytics_purge` field stays in the JSON response for `curl` and tests. The delete confirmation text is likewise left unchanged — the analytics became unreachable the moment the link was deleted, purge or no purge, and saying so here but not in the bulk dialog (which does not purge) would advertise a distinction the user cannot see.
+- [ ] Paginating `GET /api/links` now — considered 2026-08-11 while planning `docs/plans/links-pagination.md`, rejected and deferred. Attractive because an unbounded list endpoint is a real smell, CLAUDE.md's own "Parallel KV reads" section names it as the remaining unfixed item, and one KV read per link per dashboard load draws on the same app-wide 1,000 reads/second cap the redirect hot path draws from. Rejected on arithmetic: at 100 links averaging 50 clicks a dashboard load fires ~3,600 KV reads and `GET /api/links` is **103 of them — 2.9%** (the other 97% is `GET /api/analytics/click-totals`, MODELLED from the coupon-collector key formula and not yet measured against a clicked store). It also buys no latency at reachable sizes — measured **~173 ms at 50 links against ~178 ms at 14** once `gather_reads` landed — while costing a seven-feature client-side cascade (tag autocomplete, the record-derived owner filter that is the documented repair path for orphaned links, text/tag filtering, sorting, sorting by Clicks specifically, CSV export whose own comment says it needs no endpoint *because* `allLinks` is complete, and bulk select-all) plus re-opening the settled decision to have no `tag:` index. Revisit on either trigger in the Future-work entry below.
+- [ ] Landing the API-side pagination groundwork only (`?limit=`/`?offset=` with no client change) — considered 2026-08-11 while planning `docs/plans/links-pagination.md`, rejected. Explicitly offered as an acceptable smaller scope and it still loses: parameters designed against no client get designed wrong. The design work established that a cheaply-paginated endpoint can serve **index order only, with no filter and no sort** — every sortable column lives in the link record, not in the index, so sorting server-side means reading every record, which is the exact cost pagination exists to avoid. An endpoint offering only index order is not what any client wants, so the parameters would be dead on arrival and redesigned the moment a real client appeared. Landing nothing is the right amount of code.
+- [ ] Cursor-based pagination for `GET /api/links` — considered 2026-08-11 while planning `docs/plans/links-pagination.md`, rejected in favour of offset/limit. Attractive as the textbook answer, and made to feel necessary by `spin:key-value/key-value@3.0.0`'s `get-keys()` having no cursor. But pagination never enumerates — it slices the app's own `all_links`/`owner_links:<u>` index, which is a **single JSON array read wholesale in one `get`**, so a cursor and an offset cost identically and there is no seek to avoid. Offset additionally wins on drift: `add_slugs_to_indexes` appends, so a concurrent create never shifts an earlier page, while a cursor naming a slug deleted between requests needs a fallback policy that offset does not. Complexity with no corresponding benefit.
+- [ ] Widening `all_links` from a slug array into a per-link summary array — considered 2026-08-11 while planning `docs/plans/links-pagination.md`, rejected. **The most attractive alternative considered**: holding `{slug, owner, target_url, status, created_at, tags}` per link in the index would make `GET /api/links` **O(1) KV reads instead of O(N)** — strictly better than pagination rather than a mitigation of it — and every client-side feature would survive untouched. Rejected on the identical argument that killed the `tag:` index: `handle_update` touches no index today, and this adds an index read-modify-write to every single-link `PATCH`, every password change and every bulk tag action, with no compare-and-swap anywhere in Spin KV. It also caps the deployment hard — at ~250 bytes per summary, Akamai's 1 MB max value size is reached near 4,000 links, converting a slow dashboard into a write failure — and a summary silently drifting from its record is a whole new class of consistency finding. Revisit only if a compare-and-swap primitive ever appears.
+- [ ] Moving filtering and sorting server-side as part of pagination — considered 2026-08-11 while planning `docs/plans/links-pagination.md`, rejected. It is the only design that preserves correctness under pagination, which is why it keeps suggesting itself: without it, filtering and sorting silently apply to the current page only, and "I can't find my spring-sale link" presents to a non-technical author as data loss rather than as a paging artifact. It loses because filtering or sorting on any field requires the records — every sortable column lives in the `slug:<slug>` record and Clicks lives in a third store — so it reads all N anyway, unless backed by new indexes, which is the summary-index entry above or the already-rejected `tag:` index wearing a different hat.
 
 ## Future work (not scheduled)
 
@@ -394,6 +399,8 @@ All items below are complete-and-shipped-adjacent or deliberately deferred — n
 - [ ] Renaming `gui/admin/backup.html` **on disk** — the remaining half of the entry above, split out 2026-08-10 while planning `docs/plans/analytics-orphan-purge.md`. That entry's trigger ("a fourth operator tool landing there") has now fired, and the cheap half was taken: the `<h1>`, `<title>`, breadcrumb `pageLabel` and the `admin/users.html` anchor all read "Store maintenance", while the file path stays `admin/backup.html`. The file rename itself stays deferred because it needs a new `gui-pages/routing.py` `ROUTES` entry, a new `spin.toml` route for the renamed `.js`, edits to every inbound link, and it breaks any bookmark — for no functional gain. Trigger: a URL that is actively confusing to a new operator, or a fifth tool.
 - [ ] A schedule for the orphaned-analytics purge — raised 2026-08-10 while planning `docs/plans/analytics-orphan-purge.md`, which ships an operator-driven button only. There is no cron in Spin and no background execution under WASI: every mutation in this app is request-driven, so a schedule means an external caller hitting `POST /api/admin/analytics/purge` on a timer with a real session, which is an operations decision rather than a code one. Note that the endpoint's chunking contract already makes such a caller straightforward — loop on `remaining_slugs` until `complete`. Trigger: a deployment where orphan accumulation between manual purges is itself the complaint.
 - [ ] Switch `analyticsorphans.purge_slug_analytics` from a full-store enumeration to a gathered `exists` probe over constructed candidate keys — raised 2026-08-11 while planning `docs/plans/inline-analytics-purge-on-delete.md` (see that plan's Trade-offs #3). The enumeration's cost is `~1 KV round trip + 68.7 µs × physical keys`, so it grows with **live** analytics, which purging cannot shrink — at ~1,500 keys it is ~120 ms and at 10,000 it is ~690 ms on every single-link delete. A gathered `exists` probe over the 95 candidate keys (reads, so gathering is allowed) costs the same number of *writes* and is independent of store size. It lost for now only because the enumeration is **measured** (23.9 ms, six points, R² = 0.9989) while the probe is **estimated** (~50–250 ms, extrapolated from the 64-shard analytics endpoint's 98 gathered `get`s), and this repo re-measures rather than extrapolates; it also constructs keys rather than discovering them, so it would miss the legacy unsharded `count:<slug>`, keys left by a since-lowered `analytics_event_slots`, and any future analytics key type. **Trigger: both** a traced `GET /api/analytics/click-totals` on the deployed build showing `list_keys` above ~120 ms, **and** a measurement of an isolated 95-way gathered `exists` fan-out on the same build. The two designs are interchangeable behind `purge_slug_analytics`'s signature, so the switch is a body change in one function.
+- [ ] Paginate `GET /api/links` — planned in full and deliberately deferred 2026-08-11, see `docs/plans/links-pagination.md` for the design, the seven-feature cascade and the five rejected alternatives. **Two triggers, either sufficient:** (a) a traced `GET /api/links` on the deployed build exceeding **1 s wall time**, or a live link count above **~1,000** — the point at which it stops being ~3% of a dashboard load's KV reads; or (b) `GET /api/analytics/click-totals` having been bounded by other means, at which point `/api/links` genuinely becomes the largest remaining term. **Ordering constraint, and the most important thing to carry forward: do not pick this up before `click-totals` is bounded.** Paginating first leaves the same full-store enumeration and the same count-shard read fan-out in front of a page of 50, and page-scoping `click-totals` to compensate would make sorting the table by Clicks impossible in principle. Design decisions already taken, so this needs execution rather than re-planning: offset/limit (not cursor — the index is one JSON array read wholesale, so a cursor costs the same and needs a deleted-cursor policy offset does not), index order only with no `?sort=`, page size 50 to match `MAX_BULK_ROWS`, `MAX_PAGE_SIZE = 200`, both parameters absent means today's response byte for byte, and **no new KV key type**.
+- [ ] Windowed rendering of the links table — raised 2026-08-11 while planning `docs/plans/links-pagination.md`, which found that "pagination" conflates two problems with different answers. Server read cost is not the binding constraint; **client render and memory cost is genuinely unbounded and its answer is not API pagination** — rendering `getVisibleLinks().slice(0, renderWindow)` with a "Show 50 more" footer row keeps `allLinks` complete, so all seven client-side features (tag autocomplete, owner filter, filtering, sorting, sorting by Clicks, CSV export, bulk select-all) keep working verbatim and no API change is needed at all. Roughly 30 lines in `gui/dashboard.js`. Two things to get right: the "Show more" path must not run the `selectedSlugs.clear()` at the top of `renderLinksTable()`, or it silently drops the operator's bulk selection; and the 390px invariant needs re-measuring, since a `colspan="10"` footer row is a new widest-element candidate. **Trigger: the local measurement task in `## Links pagination` finding `renderLinksTable()` above ~200 ms at a link count a real deployment could reach.**
 
 ## Impeccable critique (7th pass, 30/40) + 2 P1 fixes
 
@@ -1173,3 +1180,90 @@ is real but **weak**, and earlier wording overstated it. Post-purge production i
 live busy links that is ~9,400 keys and **~650 ms of enumeration per dashboard load with zero
 orphans present**. **Inline purge removes the unbounded term, not the baseline** — it buys time.
 Pagination, caching `click-totals`, or cutting the `events:` write are still eventually required.
+
+## Links pagination — deferred, and what actually binds (2026-08-11)
+
+Asked to plan pagination for `GET /api/links`, with an explicit invitation to answer the prior
+question honestly first. **The answer is defer: pagination is third in line, and for the problem
+people usually mean by it, it is the wrong tool.** Plan, with the full design so that firing a
+trigger means execution rather than re-planning: `docs/plans/links-pagination.md`.
+
+**The arithmetic that decides it.** Reads per dashboard load, analytics key counts MODELLED from
+the coupon-collector formula `64(1-(63/64)^C)` + `30(1-(29/30)^C)` (validated at exactly one live
+point — `jwh`, 5 keys at 3 clicks against a predicted 6), enumeration cost using the **measured**
+`~24 ms + 68.7 µs/key`:
+
+| shape | physical keys | enumeration | `click-totals` gets | `/api/links` reads | `/api/links` share |
+|---|---|---|---|---|---|
+| today (14 links, 2 clicked) | 57 | 24 ms | ~6 | 17 | 74% |
+| 100 links @ 50 clicks | ~6,000 | ~440 ms | ~3,500 | 103 | **2.9%** |
+| 500 links @ 50 clicks | ~30,200 | ~2,100 ms | ~17,400 | 503 | **2.8%** |
+| 1,000 links @ 10 clicks | ~19,000 | ~1,330 ms | ~9,300 | 1,003 | 9.7% |
+
+**`GET /api/analytics/click-totals` runs on the same dashboard load and costs ~35× more reads, on
+two independent unbounded axes** — a full-store enumeration (measured, linear, un-overlappable)
+and one `get` per *existing* count-shard key of every visible slug (`api/analytics.py:147-149`).
+Its docstring frames the second as the win: *"cost becomes proportional to real traffic rather
+than to links × shard count."* Proportional-to-real-traffic **is** the unbounded term, and the
+2026-08-10 seeding run cannot speak to it — it seeded links that were deliberately never clicked.
+
+**A new inference worth confirming: a single handler's read throughput appears to top out at
+~1,000 reads/second, exactly Akamai's published per-app cap.** Computing ops ÷ wall from the four
+recorded gathered traces — `/api/links` 55 ops → 318/s, consistency 69 → 246/s, analytics 100 →
+407/s, **export 999 → 1,044/s** — throughput rises monotonically with fan-out and stops dead on
+the published number. If that is the cap rather than coincidence, **wall time for any fan-out
+above ~1,000 reads is `reads ÷ 1,000` seconds and no parallelism improves it**, which turns the
+table above into hard floors: ~3.5 s at 100 links, ~17.4 s at 500. The competing explanation is
+queueing under 100-way concurrency (100 in flight ÷ ~96 ms/op also gives ~1,044/s); both give the
+same practical rule. UNCONFIRMED either way — task 3 below.
+
+**Two problems are both called "pagination", and they have different answers.** Server read cost
+is not the binding constraint and pagination recovers under 3% of it. Client render and memory
+cost is real, unmeasured, and its answer is **windowed rendering** — no API change, no cascade,
+no correctness regression, because `allLinks` stays complete. That entry is under Future work.
+
+**Priority of the already-planned inline analytics purge is UNCHANGED — ship it next.** It is
+planned, unbuilt and cheap, and it removes the unbounded orphan term. But every figure above
+assumes **zero orphans present**, so it does not move them: post-purge production is 57 keys of
+which 36 (63%) are live analytics, and in a mature deployment live analytics *is* the store.
+
+- [ ] Measure the dashboard's client-side ceiling locally — file(s): (none — measurement) — done when: a local `spin up` store seeded via POST /api/links/bulk to at least 1,000 and 5,000 links has GET /api/links response size, allLinks memory and renderLinksTable() wall time (performance.now() either side of the call) recorded at each size, the growth shape is stated linear or superlinear, and the link count at which renderLinksTable() first exceeds 200 ms is recorded in this section as windowed rendering's measured trigger
+- [ ] Measure GET /api/analytics/click-totals' shard-read fan-out against a clicked store — file(s): (none — measurement) — done when: on the deployed build at least 3 link-count/click-count combinations have been traced with X-SS-Debug recording get count, list_keys and wall time, the per-link get growth is compared against the coupon-collector prediction 64x(1-(63/64)^C), the reads-per-dashboard-load figure is stated, and every seeded link is deleted and its analytics removed via POST /api/admin/analytics/purge afterwards with a follow-up orphan report showing orphan_slugs 0
+- [ ] Confirm or refute the ~1,000 reads/second single-handler throughput ceiling (depends on the trace above) — file(s): CLAUDE.md — done when: ops divided by wall time is computed for a traced handler with a fan-out above 2,000 reads and compared against the existing four points (55 ops 318/s, 69 ops 246/s, 100 ops 407/s, 999 ops 1044/s), and CLAUDE.md's "Parallel KV reads" section either states the confirmed ceiling with the rule that wall time for a large fan-out is reads divided by 1000 seconds, or records the refutation and what the real scaling is
+- [ ] Record the pagination deferral, its trigger and the ranking (depends on all three measurements) — file(s): CLAUDE.md, TASKS.md — done when: CLAUDE.md's "Parallel KV reads" closing paragraph no longer implies pagination is the next fix, states instead that click-totals binds first on two independent axes with the measured reads-per-load ratio, distinguishes server read cost from client render cost and names windowed rendering as the answer to the second, and TASKS.md's "Future work (not scheduled)" carries a links-pagination entry naming both triggers from docs/plans/links-pagination.md
+
+**Measurement hygiene for tasks 1-2, learned the hard way and worth repeating here.** Clicks
+leave permanent analytics keys, so the cleanup in task 2 is not optional — leaving them behind
+corrupts the next `list_keys` measurement anyone takes. Hold click seeding under ~20 requests/s
+(`dev/click-load.sh` warns at 50) or the run measures the app-wide write cap instead. And discard
+the first traced sample after any idle period: it measures ~175 ms against a 60-70 ms warm median.
+
+**Blocker cleared before it was raised: the deployed build's `log_debug_token` IS known.** The plan
+records task 2 as blocked behind a redeploy on the belief the token could not be recovered. It
+can — it lives in the operator's deploy-secrets file outside the repo, `55dc06d-orphan-purge` was
+deployed with it, and it has been used to trace this deployment repeatedly today (including the
+purge before/after measurement in the section above). **No redeploy is needed.** This blocker was
+genuine for *earlier* builds (see the two notes above about unknown tokens on previously-deployed
+builds) but is not for the current one; a planning agent cannot see that file, which is why it
+was flagged.
+
+**Verified independently, and it inverts the priority — `handle_click_totals` has a second
+unbounded axis that the 2026-08-10 seeding run structurally could not detect.** It reads every
+existing `count:` key for every visible slug, so reads scale with **shards touched**, which grows
+with traffic toward the 64-shard ceiling:
+
+| clicks/link | shards hit | reads @ 100 links | vs. the naive 65×N it was designed to avoid |
+|---|---|---|---|
+| 3 | 3.0 | 295 | 5% |
+| 50 | 34.9 | 3,488 | 54% |
+| 200 | 61.3 | 6,126 | **94%** |
+| 500+ | 64.0 | 6,398 | 98% |
+
+`api/analytics.py`'s own docstring calls the win *"proportional to real traffic rather than to
+links × shard count"*. That is true and it is **not a bound**: proportional-to-real-traffic is
+itself unbounded, so the protection holds for quiet links and **evaporates for exactly the busy
+links a marketing team cares about**. **The 2026-08-10 measurement could not have found this** —
+it seeded 9,000 links that were deliberately never clicked, so they produced no count-shard keys
+and the endpoint's `get` count stayed at 6 for the whole experiment. That isolation was correct
+for measuring the enumeration and is precisely why this axis went unmeasured. **Any future
+measurement of this endpoint must seed clicks, not just links.**
