@@ -35,6 +35,16 @@ exactly the links carrying the most keys.
 for the user; adding words to the app's most common corrective action to
 describe a consequence that already effectively existed is noise.
 
+**Post-build local measurement (2026-08-12), corroborating point 1 above.** A
+link clicked exactly 12 times and then deleted through the real dashboard
+returned `analytics_purge: {"status": "complete", "found_keys": 20,
+"deleted_keys": 20}`. The coupon-collector formula predicts
+`64(1-(63/64)^12) + 30(1-(29/30)^12) ≈ 21.04` for C=12 — measured 20 is within
+one key. This was run locally (sqlite-backed KV, not Akamai), so it
+corroborates only the key-*count* half of the model, not the per-write timing
+figures in the cost table below, which remain modelled pending a deployed
+trace (Verification step 12).
+
 ## Scope correction worth carrying into the build
 
 **Inline purge removes the unbounded growth term, NOT the baseline cost — it

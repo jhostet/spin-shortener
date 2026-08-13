@@ -960,3 +960,36 @@ async def test_bulk_action_reassign_two_old_owners_updates_both_old_indexes_and_
     assert set(await links.owned_slugs(store, "carol")) == {alice_slug, bob_slug}
     assert await links.owned_slugs(store, "alice") == []
     assert await links.owned_slugs(store, "bob") == []
+
+
+async def test_bulk_action_delete_leaves_analytics_untouched():
+    """docs/plans/inline-analytics-purge-on-delete.md's Trade-offs #5: bulk
+    delete's rejected inline-purge arithmetic (50 slugs x 95 keys ~= 95-123s
+    against a 30s handler limit) stands, so bulk delete must keep leaving
+    orphan analytics keys behind for the existing operator tool
+    (analyticsorphans.handle_orphan_purge) to clean up — unlike single-link
+    delete, which now purges inline (api/links.py's handle_delete)."""
+    store = FakeStore()
+    slug1 = await _make_link(store, owner="alice")
+    slug2 = await _make_link(store, owner="alice")
+
+    analytics_keys = {
+        f"count:{slug1}:1": b'{"total": 9, "days": {}}',
+        f"count:{slug1}:2": b'{"total": 1, "days": {}}',
+        f"events:{slug1}:5": b"1700000000000|referrer|desktop",
+        f"count:{slug2}:1": b'{"total": 3, "days": {}}',
+    }
+    for key, value in analytics_keys.items():
+        await store.set(key, value)
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(username="alice"),
+        _action_request({"slugs": [slug1, slug2], "action": "delete"}),
+    )
+    assert resp.status == 200
+    assert json.loads(resp.body) == {"ok": True, "action": "delete", "count": 2}
+
+    assert await store.exists(f"slug:{slug1}") is False
+    assert await store.exists(f"slug:{slug2}") is False
+    for key, value in analytics_keys.items():
+        assert await store.get(key) == value

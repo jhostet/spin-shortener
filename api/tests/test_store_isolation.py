@@ -15,6 +15,7 @@ import analyticsorphans
 import backup
 import consistency
 import kvprefix
+import links
 from responses import Request
 from tests.fakes import FakeStore, fake_list_keys
 
@@ -216,6 +217,65 @@ async def test_orphan_purge_through_views_touches_only_targeted_analytics_keys()
             assert physical._data.get(key) == value
 
     assert "analytics:count:keepme:1" in physical._data
+    assert "analytics:count:killme:1" not in physical._data
+    assert "analytics:count:killme:2" not in physical._data
+    assert "analytics:events:killme:5" not in physical._data
+
+
+async def test_inline_delete_purge_through_views_touches_only_the_deleted_slugs_keys():
+    """A sixth cross-namespace hazard: docs/plans/inline-analytics-purge-on-delete.md's
+    inline purge, driven through links.handle_delete's injected purge_analytics
+    callable over the real kvprefix.open_views, must never touch users: keys
+    or unrelated links:/analytics: keys — only the deleted slug's own record,
+    both index entries, and its own analytics keys should disappear."""
+    physical = FakeStore({
+        "links:slug:killme": json.dumps({
+            "slug": "killme", "target_url": "https://example.com", "owner": "admin",
+        }).encode("utf-8"),
+        "links:slug:keepme": json.dumps({
+            "slug": "keepme", "target_url": "https://example.com", "owner": "admin",
+        }).encode("utf-8"),
+        "links:all_links": b'["killme", "keepme"]',
+        "links:owner_links:admin": b'["killme", "keepme"]',
+        "users:user:admin": b'{"username": "admin", "password_hash": "pbkdf2_sha256$100000$s$h"}',
+        "users:_meta:usernames": b'["admin"]',
+        "analytics:count:killme:1": b'{"total": 9, "days": {}}',
+        "analytics:count:killme:2": b'{"total": 1, "days": {}}',
+        "analytics:events:killme:5": b"1700000000000|referrer|desktop",
+        "analytics:count:keepme:1": b'{"total": 3, "days": {}}',
+    })
+    before_users = {k: v for k, v in physical._data.items() if k.startswith("users:")}
+    before_unrelated_links_and_analytics = {
+        k: v for k, v in physical._data.items()
+        if (k.startswith("links:") or k.startswith("analytics:")) and "keepme" in k
+    }
+    views = kvprefix.open_views(physical)
+    list_keys = kvprefix.scoped_list_keys(fake_list_keys)
+
+    principal = _principal(username="admin", role="admin", permissions=["links.edit_all"])
+
+    async def purge(slug):
+        return await analyticsorphans.purge_slug_analytics(views["analytics"], slug, list_keys)
+
+    response = await links.handle_delete(views["links"], principal, "killme", purge_analytics=purge)
+    assert response.status == 200
+    body = json.loads(response.body)
+    assert body["ok"] is True
+    assert body["analytics_purge"]["status"] == "complete"
+    assert body["analytics_purge"]["deleted_keys"] == 3
+
+    # users: keys are untouched.
+    for key, value in before_users.items():
+        assert physical._data.get(key) == value
+
+    # keepme's own record and analytics survive byte-identically.
+    for key, value in before_unrelated_links_and_analytics.items():
+        assert physical._data.get(key) == value
+
+    # killme's record, index entries and analytics are all gone.
+    assert "links:slug:killme" not in physical._data
+    assert physical._data["links:all_links"] == b'["keepme"]'
+    assert physical._data["links:owner_links:admin"] == b'["keepme"]'
     assert "analytics:count:killme:1" not in physical._data
     assert "analytics:count:killme:2" not in physical._data
     assert "analytics:events:killme:5" not in physical._data

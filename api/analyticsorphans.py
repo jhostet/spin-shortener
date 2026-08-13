@@ -60,6 +60,15 @@ PURGE_CONFIRMATION = "PURGE"
 ORPHANS_FORMAT = "spin-shortener-analytics-orphans"
 SCHEMA_VERSION = 1
 
+# Rail, not policy — see docs/plans/inline-analytics-purge-on-delete.md. At
+# shipped configuration (64 count shards + 1 legacy unsharded key + 30 event
+# slots = 95) this can never fire; it exists so that a slug carrying keys from
+# a once-larger analytics_event_slots, or a future analytics key type, cannot
+# make a single-link delete unbounded. api/tests/test_analytics_orphans.py
+# pins MAX_INLINE_PURGE_KEYS >= analytics.COUNT_SHARDS + 1 + 30 so a future
+# raise-only CountShards bump cannot silently start deferring every delete.
+MAX_INLINE_PURGE_KEYS = 128
+
 
 # --- Pure functions -------------------------------------------------------
 
@@ -204,6 +213,53 @@ def _parse_live_slugs(raw: bytes | None) -> list[str] | None:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         return None
     return value
+
+
+async def purge_slug_analytics(analytics_store, slug: str, list_keys,
+                                max_keys: int = MAX_INLINE_PURGE_KEYS) -> dict:
+    """Delete every analytics key belonging to `slug`. One enumeration, then
+    sequential deletes.
+
+    THE CALLER MUST HAVE ESTABLISHED THAT `slug` HAS NO LINK RECORD. This
+    function forms no liveness opinion of its own — `handle_orphan_purge`
+    establishes it with an `exists("slug:<S>")` re-check against a possibly
+    stale report, and `links.handle_delete` establishes it by having deleted
+    the record itself, earlier in the same request. Do not wire a third
+    caller without deciding which of those two it is.
+
+    Returns {"status", "found_keys", "deleted_keys"[, "max_inline_keys"]}.
+    Never raises for a KV failure mid-loop: it returns status "failed" with
+    the count that got through, because the caller (links.handle_delete) has
+    already deleted the link and must not be told the deletion failed.
+
+    Deletes only keys this enumeration actually found, never constructed
+    ones — the same reason handle_orphan_purge picks up the legacy unsharded
+    count:<slug> key, keys left by a since-lowered analytics_event_slots, and
+    any future analytics key type for free.
+
+    DELETES ARE ALWAYS SEQUENTIAL, NEVER GATHERED — see the module docstring.
+    """
+    keys = await list_keys(analytics_store)
+    by_slug, _unrecognized = classify_analytics_keys(keys)
+    found = by_slug.get(slug, {"keys": []})["keys"]
+
+    if len(found) > max_keys:
+        return {
+            "status": "deferred",
+            "found_keys": len(found),
+            "deleted_keys": 0,
+            "max_inline_keys": max_keys,
+        }
+
+    deleted = 0
+    try:
+        for key in found:
+            await analytics_store.delete(key)
+            deleted += 1
+    except Exception:
+        return {"status": "failed", "found_keys": len(found), "deleted_keys": deleted}
+
+    return {"status": "complete", "found_keys": len(found), "deleted_keys": deleted}
 
 
 # --- Handlers ---------------------------------------------------------------

@@ -312,6 +312,134 @@ async def test_delete_view_all_permission_alone_still_forbidden():
     assert json.loads(resp.body)["required_permission"] == "links.edit_all"
 
 
+class _RecordingStore(FakeStore):
+    """Records op order so handle_delete's record-then-indexes-then-analytics
+    ordering (docs/plans/inline-analytics-purge-on-delete.md) is testable
+    rather than aspirational — same pattern as
+    tests/test_analytics_orphans.py's RecordingStore."""
+
+    def __init__(self, data=None):
+        super().__init__(data)
+        self.ops: list[tuple[str, str]] = []
+
+    async def get(self, key):
+        self.ops.append(("get", key))
+        return await super().get(key)
+
+    async def set(self, key, value):
+        self.ops.append(("set", key))
+        await super().set(key, value)
+
+    async def delete(self, key):
+        self.ops.append(("delete", key))
+        await super().delete(key)
+
+
+async def test_delete_without_purge_analytics_is_byte_identical_to_today():
+    """purge_analytics defaults to None, and omitting it must be exactly
+    today's behaviour — bulk.handle_bulk_action's delete branch does not pass
+    it and must stay untouched."""
+    store = FakeStore()
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    resp = await links.handle_delete(store, owner, slug)
+    assert resp.status == 200
+    assert json.loads(resp.body) == {"ok": True}
+
+
+async def test_delete_with_purge_analytics_includes_the_result_in_the_response():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    async def purge(s):
+        assert s == slug
+        return {"status": "complete", "found_keys": 3, "deleted_keys": 3}
+
+    resp = await links.handle_delete(store, owner, slug, purge_analytics=purge)
+    assert resp.status == 200
+    assert json.loads(resp.body) == {
+        "ok": True,
+        "analytics_purge": {"status": "complete", "found_keys": 3, "deleted_keys": 3},
+    }
+
+
+async def test_delete_purge_analytics_is_never_called_on_404():
+    store = FakeStore()
+    calls = []
+
+    async def purge(s):
+        calls.append(s)
+        return {"status": "complete", "found_keys": 0, "deleted_keys": 0}
+
+    resp = await links.handle_delete(store, _principal(username="alice"), "nosuchslug", purge_analytics=purge)
+    assert resp.status == 404
+    assert calls == []
+
+
+async def test_delete_purge_analytics_is_never_called_on_403():
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+    calls = []
+
+    async def purge(s):
+        calls.append(s)
+        return {"status": "complete", "found_keys": 0, "deleted_keys": 0}
+
+    resp = await links.handle_delete(store, _principal(username="bob"), slug, purge_analytics=purge)
+    assert resp.status == 403
+    assert calls == []
+
+
+async def test_delete_record_and_both_indexes_complete_before_the_first_analytics_delete():
+    store = _RecordingStore()
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+    store.ops.clear()
+
+    purge_started_at = []
+
+    async def purge(s):
+        purge_started_at.append(len(store.ops))
+        return {"status": "complete", "found_keys": 0, "deleted_keys": 0}
+
+    resp = await links.handle_delete(store, owner, slug, purge_analytics=purge)
+    assert resp.status == 200
+
+    # Everything recorded before the purge callable ran must be the record
+    # delete and both index read/writes — never anything analytics-shaped,
+    # and the purge callable itself must have run exactly once, after them.
+    assert len(purge_started_at) == 1
+    ops_before_purge = store.ops[:purge_started_at[0]]
+    assert ("delete", f"slug:{slug}") in ops_before_purge
+    assert any(key == "all_links" for _, key in ops_before_purge)
+    assert any(key == f"owner_links:{owner.username}" for _, key in ops_before_purge)
+
+
+async def test_delete_purge_analytics_raising_still_yields_200_with_failed_status():
+    store = FakeStore()
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+
+    async def purge(s):
+        raise RuntimeError("simulated KV failure")
+
+    resp = await links.handle_delete(store, owner, slug, purge_analytics=purge)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["ok"] is True
+    assert body["analytics_purge"] == {"status": "failed", "found_keys": 0, "deleted_keys": 0}
+    # The link itself is still gone — the KV failure in the purge must never
+    # roll back or otherwise affect the already-completed deletion.
+    assert await store.exists(f"slug:{slug}") is False
+
+
 async def test_set_password_set_change_clear():
     store = FakeStore()
     owner = _principal(username="alice")

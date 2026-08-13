@@ -395,3 +395,108 @@ async def test_handle_orphan_purge_deletes_sequentially_never_gathered():
     assert body["deleted_keys"] == 5
     delete_ops = [key for kind, key in analytics_store.ops if kind == "delete"]
     assert sorted(delete_ops) == sorted(f"count:killme:{i}" for i in range(5))
+
+
+# --- purge_slug_analytics ---------------------------------------------------
+#
+# docs/plans/inline-analytics-purge-on-delete.md. THE CALLER MUST HAVE
+# ESTABLISHED slug HAS NO LINK RECORD before calling this — these tests never
+# assert a liveness check because purge_slug_analytics performs none.
+
+
+async def test_purge_slug_analytics_deletes_only_the_named_slugs_keys():
+    analytics_store = RecordingStore({
+        "count:killme:0": _count(2),
+        "count:killme:3": _count(1),
+        "events:killme:5": _event(),
+        "count:keepme:0": _count(9),
+        "events:keepme:1": _event(),
+    })
+    result = await orphans_mod.purge_slug_analytics(analytics_store, "killme", fake_list_keys)
+    assert result == {"status": "complete", "found_keys": 3, "deleted_keys": 3}
+    assert sorted(analytics_store.keys()) == ["count:keepme:0", "events:keepme:1"]
+
+
+async def test_purge_slug_analytics_deletes_sequentially_never_gathered():
+    analytics_store = RecordingStore({f"count:killme:{i}": _count(1) for i in range(6)})
+    result = await orphans_mod.purge_slug_analytics(analytics_store, "killme", fake_list_keys)
+    assert result["deleted_keys"] == 6
+    delete_ops = [key for kind, key in analytics_store.ops if kind == "delete"]
+    # Sequential means every delete completed (recorded) one at a time in the
+    # exact order `found` iterated them — a RecordingStore can't observe true
+    # concurrency, but an out-of-order or partial-then-resumed sequence would
+    # falsify this, matching the existing handle_orphan_purge test's approach.
+    assert sorted(delete_ops) == sorted(f"count:killme:{i}" for i in range(6))
+    assert len(delete_ops) == 6
+
+
+async def test_purge_slug_analytics_never_touches_the_list_keys_store_via_gather():
+    """The enumeration is the only read; gather_reads must never appear in
+    the delete loop. Verified indirectly: RecordingStore.ops shows a single
+    contiguous run of delete ops with no interleaved reads once the loop
+    starts (get is only used inside list_keys's FakeStore.keys(), which
+    records no ops at all)."""
+    analytics_store = RecordingStore({f"count:killme:{i}": _count(1) for i in range(4)})
+    await orphans_mod.purge_slug_analytics(analytics_store, "killme", fake_list_keys)
+    kinds = [kind for kind, _ in analytics_store.ops]
+    assert kinds == ["delete"] * 4
+
+
+async def test_purge_slug_analytics_on_a_never_clicked_slug_is_complete_with_zero_keys():
+    analytics_store = RecordingStore({"count:other:0": _count(1)})
+    result = await orphans_mod.purge_slug_analytics(analytics_store, "neverclicked", fake_list_keys)
+    assert result == {"status": "complete", "found_keys": 0, "deleted_keys": 0}
+    assert analytics_store.keys() == ["count:other:0"]
+
+
+async def test_purge_slug_analytics_defers_when_found_keys_exceeds_max_and_deletes_nothing():
+    analytics_store = RecordingStore({f"count:killme:{i}": _count(1) for i in range(5)})
+    result = await orphans_mod.purge_slug_analytics(
+        analytics_store, "killme", fake_list_keys, max_keys=4
+    )
+    assert result == {
+        "status": "deferred", "found_keys": 5, "deleted_keys": 0, "max_inline_keys": 4,
+    }
+    assert len(analytics_store.keys()) == 5
+    delete_ops = [key for kind, key in analytics_store.ops if kind == "delete"]
+    assert delete_ops == []
+
+
+class _RaisingOnKeyStore(RecordingStore):
+    """Raises when deleting a specific key, to simulate a KV failure partway
+    through the sequential loop."""
+
+    def __init__(self, data, raise_on_key):
+        super().__init__(data)
+        self._raise_on_key = raise_on_key
+
+    async def delete(self, key):
+        if key == self._raise_on_key:
+            self.ops.append(("delete", key))
+            raise RuntimeError("simulated KV failure")
+        await super().delete(key)
+
+
+async def test_purge_slug_analytics_returns_failed_with_partial_count_on_mid_loop_exception():
+    keys = {f"count:killme:{i}": _count(1) for i in range(5)}
+    analytics_store = _RaisingOnKeyStore(keys, raise_on_key="count:killme:3")
+    result = await orphans_mod.purge_slug_analytics(analytics_store, "killme", fake_list_keys)
+    assert result["status"] == "failed"
+    assert result["found_keys"] == 5
+    assert result["deleted_keys"] < 5
+    # Never raises out of the function.
+
+
+async def test_max_inline_purge_keys_cannot_fire_at_shipped_configuration():
+    """docs/plans/inline-analytics-purge-on-delete.md Trade-offs #4: the rail
+    must sit above the shipped-configuration ceiling (64 count shards + 1
+    legacy unsharded key + 30 event slots = 95), or a future raise of
+    CountShards (RAISE ONLY, never lower — see CLAUDE.md) could silently
+    start deferring every single-link delete's inline purge."""
+    import analytics
+    assert orphans_mod.MAX_INLINE_PURGE_KEYS >= analytics.COUNT_SHARDS + 1 + 30, (
+        "MAX_INLINE_PURGE_KEYS must stay above analytics.COUNT_SHARDS + 1 + 30 "
+        "(the shipped-configuration ceiling) — CountShards is raise-only, "
+        "never lowered, so a future raise must not silently start deferring "
+        "every single-link delete's inline analytics purge"
+    )

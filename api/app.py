@@ -255,7 +255,16 @@ class HttpHandler(Handler):
                 return await links.handle_get(links_store, result, slug)
             if method == "PATCH":
                 return await links.handle_update(links_store, result, slug, request)
-            return await links.handle_delete(links_store, result, slug)
+            # Inline analytics purge (docs/plans/inline-analytics-purge-on-delete.md):
+            # single-link delete purges the deleted slug's analytics keys in
+            # the same request, unlike bulk delete (api/bulk.py), which
+            # remains out of scope — see the app.py consistency-route comment
+            # below for why that leaves orphans as normal, expected state.
+            return await links.handle_delete(
+                links_store, result, slug,
+                purge_analytics=lambda s: analyticsorphans.purge_slug_analytics(
+                    analytics_store, s, list_keys),
+            )
 
         if path == "/api/users" and method in ("GET", "POST"):
             result = await _require_session(users_store, request)
@@ -305,7 +314,7 @@ class HttpHandler(Handler):
             # The analytics view is deliberately NOT handed to
             # handle_consistency, even though the physical store backing it is
             # already open: orphan analytics keys are normal
-            # (links.handle_delete never removes them), so a check over them
+            # (bulk delete never removes them), so a check over them
             # would fire on healthy state forever. See
             # docs/plans/kv-consistency-check.md's rejected alternatives.
             return await consistency.handle_consistency(

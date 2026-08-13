@@ -349,7 +349,23 @@ async def handle_update(store, principal: Principal, slug: str, request):
     return json_response(200, public_link(record))
 
 
-async def handle_delete(store, principal: Principal, slug: str):
+async def handle_delete(store, principal: Principal, slug: str, purge_analytics=None):
+    """`purge_analytics`, when passed, is an injected async callable
+    `slug -> dict` (see analyticsorphans.purge_slug_analytics), invoked here
+    rather than imported directly — analytics.py already imports links, so
+    links.py importing analyticsorphans would be a cycle.
+
+    Ordering is load-bearing: record delete, then both indexes, then (only
+    if passed) the analytics purge. Every interruption before the purge
+    leaves a recoverable state (orphan analytics keys, the shipped operator
+    tool's whole reason to exist); the reverse ordering would leave a live,
+    resolving link whose click history vanished with no tool able to
+    restore it. See docs/plans/inline-analytics-purge-on-delete.md.
+
+    A KV failure inside `purge_analytics` must never turn a successful
+    deletion into a 500 — the link is already gone, and the response must
+    say so regardless of what happened to its analytics.
+    """
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
@@ -357,7 +373,16 @@ async def handle_delete(store, principal: Principal, slug: str):
         return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
     await store.delete(f"slug:{slug}")
     await remove_slugs_from_indexes(store, {record["owner"]: [slug]})
-    return json_response(200, {"ok": True})
+
+    if purge_analytics is None:
+        return json_response(200, {"ok": True})
+
+    try:
+        analytics_purge = await purge_analytics(slug)
+    except Exception:
+        analytics_purge = {"status": "failed", "found_keys": 0, "deleted_keys": 0}
+
+    return json_response(200, {"ok": True, "analytics_purge": analytics_purge})
 
 
 async def handle_set_password(store, principal: Principal, slug: str, request):

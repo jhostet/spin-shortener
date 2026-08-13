@@ -487,8 +487,18 @@ async function handleDeleteClick(btn) {
   if (!await confirmDialog(`Delete the link "${btn.dataset.slug}"? This can't be undone.`)) return;
   const errorEl = document.getElementById("links-error");
   errorEl.textContent = "";
+  // Delete now purges the slug's analytics keys inline
+  // (docs/plans/inline-analytics-purge-on-delete.md), so a heavily-clicked
+  // link's delete can take noticeably longer than before (~300 ms typical,
+  // up to ~2.3 s at the shipped-configuration ceiling) — matching
+  // handleStatusToggleClick's existing btn.disabled pattern so the button
+  // can't be double-clicked mid-request. Confirmation text and rendering
+  // stay unchanged; the response's analytics_purge field is deliberately
+  // never displayed (see the plan's GUI changes section).
+  btn.disabled = true;
   const { ok, data } = await api.delete(`/links/${btn.dataset.slug}`);
   if (!ok) {
+    btn.disabled = false;
     errorEl.textContent = friendlyError(data, "Could not delete link.");
     return;
   }
