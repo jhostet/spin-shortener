@@ -495,13 +495,29 @@ async function handleDeleteClick(btn) {
   // shipped ceiling. The earlier "~300 ms typical, up to ~2.3 s" here was
   // modelled at 23 ms/write; real deletes cost ~75 ms each. Matching
   // handleStatusToggleClick's existing btn.disabled pattern so the button
-  // can't be double-clicked mid-request. Confirmation text and rendering
-  // stay unchanged; the response's analytics_purge field is deliberately
-  // never displayed (see the plan's GUI changes section).
+  // can't be double-clicked mid-request.
+  //
+  // `aria-busy` is what communicates the wait. A disabled button alone says
+  // "not clickable", not "working" — and at ~2 s a silent pause on the app's
+  // most common corrective action reads as a hang to a non-technical user.
+  // Pico styles [aria-busy=true] natively (a spinner prepended via ::before,
+  // using a data: SVG already permitted by the CSP's img-src, which is why
+  // this needs no new CSS and no new token). It also announces the busy state
+  // to assistive tech, which a disabled attribute does not.
+  //
+  // The label is deliberately NOT changed to "Deleting…": the button lives in
+  // a sticky actions column whose width is load-bearing at 390px, where the
+  // group is capped at 100px and the figure must stay at 327/327 without
+  // scrolling. The spinner's ~1.3em is affordable there; a longer word is not.
+  //
+  // This does not reopen the closed decision that the purge RESULT is never
+  // rendered — that is about the outcome; this is about the wait.
   btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
   const { ok, data } = await api.delete(`/links/${btn.dataset.slug}`);
   if (!ok) {
     btn.disabled = false;
+    btn.removeAttribute("aria-busy");
     errorEl.textContent = friendlyError(data, "Could not delete link.");
     return;
   }

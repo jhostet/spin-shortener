@@ -209,3 +209,45 @@
   font-family: var(--ss-mono-font);
   font-size: 0.85em;
 }
+
+/* The row-action busy spinner must cost ZERO layout width.
+ *
+ * Pico renders [aria-busy=true] as an inline ::before, which widened the
+ * Delete button 71px -> 73px and pushed the actions column 70 -> 72. Measured
+ * at 390px that took the links figure from 327/327 to 328/327 — i.e. it
+ * started scrolling, which is exactly the overlap the mobile block above
+ * exists to prevent, and exactly why that block says to check scrollWidth
+ * against clientWidth rather than the gap between two cells.
+ *
+ * So the spinner is taken out of flow and centered, and the label is made
+ * transparent rather than hidden: `color: transparent` keeps the text
+ * occupying its original width, so the button's box is byte-identical busy or
+ * idle. `display: none` or emptying the label would shrink it instead, which
+ * moves the column just as surely as widening it did.
+ *
+ * Scoped to #links-body so it covers any future row action that adopts
+ * aria-busy, and no control outside the table. */
+#links-body [aria-busy="true"] {
+  position: relative;
+  color: transparent;
+  /* The button carries `disabled` too, so Pico dims it to opacity .5 —
+   * measured, and at 1em (12px in this table) the spinner was then a barely
+   * visible dot on a blank button, which reads as broken rather than working.
+   * Busy and disabled are different states: the control is unavailable
+   * BECAUSE work is happening, and that work is the thing worth showing. The
+   * pointer affordance still says not-allowed, and the label is transparent,
+   * so restoring full opacity cannot read as clickable. */
+  opacity: 1;
+}
+#links-body [aria-busy="true"]::before {
+  position: absolute;
+  inset-inline-start: 50%;
+  inset-block-start: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  /* Larger than Pico's 1em default for legibility at this table's 12px type.
+   * Free of layout consequences precisely because it is out of flow. */
+  width: 1.4em;
+  height: 1.4em;
+  background-size: 1.4em auto;
+}
