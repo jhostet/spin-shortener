@@ -1491,3 +1491,54 @@ before leaning on it for any new design.
 2. **The result was invisible, and no measurement would have caught it.** The button carries `disabled` too, so Pico dims it to `opacity: .5`, and at Pico's default 1em — **12 px in this table** — the spinner was a faint dot on a blank button: it read as *broken*, not *busy*. Fixed by restoring `opacity: 1` while busy (busy and disabled are different states: the control is unavailable *because* work is happening, and that work is the thing worth showing) and sizing the spinner to 1.4em, which is free of layout consequences precisely because it is out of flow. **Verified by screenshot in both themes** — every geometric assertion passed while the thing was still unusable, so this is a case where reading the numbers was not enough.
 
 Verified end to end at 1280px and 390px: real delete removes the row, the sibling link survives, no button is left stuck busy, tap target still 44 px, figure still **327/327 and not scrolling**, zero console errors or warnings. Suites: api 572, gui-pages 71.
+
+## The `get_many` spike — ANSWERED, and the answer is no (2026-08-15)
+
+Deployed `7df2817` as `app_version=7df2817-busy-state` first (CLI hit its usual readiness
+timeout; live ~120 s later, all five variables verified), so the delete busy-state now ships
+alongside the latency that motivated it.
+
+**`wasi:keyvalue/batch` is NOT reachable from this component. `get_many` is off the table.**
+Established by a temporary spike endpoint built and run three times against a real `spin up --build`,
+then reverted (`git checkout api/app.py`, verified 0 occurrences remain):
+
+| binding | importable in the built component? |
+|---|---|
+| `wasi:keyvalue/store` | **ok** |
+| `wasi:keyvalue/atomics` | **ok** |
+| **`wasi:keyvalue/batch`** | **`ModuleNotFoundError`** |
+| `spin:key-value` (control) | ok |
+
+**The two sides are exactly mismatched, which is the finding worth remembering.** Akamai's docs
+say `store` and `batch` are supported and `atomic` is *not* ("it requires a consistency guarantee
+not provided by our global store"). The component provides `store` and `atomics` and *not*
+`batch`. **So the one interface Akamai supports is the one the toolchain cannot reach, and the one
+the toolchain provides is the one Akamai refuses to run.** Neither half is usable, from opposite
+directions.
+
+**This corrects the blocker I predicted.** I expected the obstacle to be the WIT resource-type
+mismatch — `get_many(bucket: wasi_keyvalue_store.Bucket, …)` against this app's
+`spin_key_value.Store`. That mismatch is real but never gets a chance to bite: the module cannot
+be imported at all. **The `.py` files exist in the venv** (`wasi_keyvalue_batch_0_2_0_draft2.py`
+is right there on disk), so reading the SDK on the host is *actively misleading* here — only a
+runtime check inside a built component tells the truth.
+
+**It looks like a toolchain gap rather than a deliberate exclusion, so re-test after an upgrade
+rather than treating it as permanently closed.** `spin:up@4.0.0`'s `world http-trigger` includes
+`platform`, which includes `wasi:keyvalue/imports@0.2.0-draft2`, whose own world declares
+`import store; import atomics; import batch;` — all three. The WIT says batch should be generated
+and it is not, under componentize-py 0.23.0 / spin-sdk 4.0.0.
+
+**Incidental finding: the componentize-py runtime prunes the stdlib.** `pkgutil` raised
+`ModuleNotFoundError` inside the component while working fine on the host. Worth knowing before
+reaching for a less-common stdlib module in `api/` or `gui-pages/`.
+
+- [x] Spike whether `get_many` is reachable and whether Akamai bills it as 1 read or K — file(s): (none — spike, reverted) — done when: the first question is answered — **DONE: unreachable, so the billing question is moot and was not run.**
+
+**Where this leaves the Clicks column's read cost.** Every option now has a verdict: the
+denormalised total is rejected on accuracy (single hot key, no CAS — the pre-sharding shape that
+lost 25% at 9.4 clicks/s); `increment` is documented-unsupported by Akamai; `get_many` is
+unreachable from the toolchain; and dropping the `events:` write reopens a settled decision while
+fixing the wrong half. **The remaining candidate is the cached totals blob** already designed in
+full under Future work as the fallback — that is now the front-runner by elimination rather than
+by preference, and its stampede/staleness costs should be re-read before it is picked up.
