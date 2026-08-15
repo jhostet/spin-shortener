@@ -488,9 +488,12 @@ async function handleDeleteClick(btn) {
   const errorEl = document.getElementById("links-error");
   errorEl.textContent = "";
   // Delete now purges the slug's analytics keys inline
-  // (docs/plans/inline-analytics-purge-on-delete.md), so a heavily-clicked
-  // link's delete can take noticeably longer than before (~300 ms typical,
-  // up to ~2.3 s at the shipped-configuration ceiling) — matching
+  // (docs/plans/inline-analytics-purge-on-delete.md), so a clicked link's
+  // delete takes noticeably longer than before. MEASURED on Akamai
+  // 2026-08-15, not modelled: a 12-click link (21 keys) took 1.9 s and an
+  // 8-click link (16 keys) 1.6 s, extrapolating to ~7 s at the 95-key
+  // shipped ceiling. The earlier "~300 ms typical, up to ~2.3 s" here was
+  // modelled at 23 ms/write; real deletes cost ~75 ms each. Matching
   // handleStatusToggleClick's existing btn.disabled pattern so the button
   // can't be double-clicked mid-request. Confirmation text and rendering
   // stay unchanged; the response's analytics_purge field is deliberately

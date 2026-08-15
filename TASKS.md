@@ -1433,3 +1433,52 @@ shared 250-key budget, biggest-first; the inline path is one slug against a 128-
 expensive, subtle part (key classification) **is** shared: all three call sites go through
 `classify_analytics_keys`. Only a two-line delete loop is duplicated, and the task's done-when
 asked for unchanged behaviour with existing tests passing, which holds.
+
+## Deploy of the inline purge, and the write-cost measurement it enabled (2026-08-15)
+
+Deployed `553607d` as `app_version=553607d-inline-purge`; the CLI hit its documented 60-second
+readiness timeout again and the build went live **~100 s** later, confirmed by polling
+`X-SS-Version`. All five variables re-supplied and verified (login works, `/api/auth/me` reports
+the real `fwf.app` domain, no `localhost` leak).
+
+- [x] Deploy and trace one inline purge on Akamai — file(s): (none — measurement) — done when: a real delete is traced and the plan's modelled per-write timing is confirmed or corrected — **DONE, and the model was WRONG BY ~3×.**
+
+**Two traced deletes, with a sibling control link that was verified untouched between them:**
+
+| | keys purged | `delete` each | `get` each | `set` each | `list_keys` | wall |
+|---|---|---|---|---|---|---|
+| `dvictim` (12 clicks) | 21 | **74.6 ms** | 6.68 ms | 74.8 ms | 74.5 ms | **1.91 s** |
+| `dsibling` (8 clicks) | 16 | **75.1 ms** | 7.18 ms | 73.8 ms | 91.1 ms | **1.56 s** |
+
+**The headline: in the SAME request, a write costs ~75 ms while a read costs ~7 ms — an 11×
+asymmetry.** This is not the documented latency-regime swing, because both figures come from one
+request: reads here are ~4× *faster* than CLAUDE.md's recorded 20–26 ms while writes are ~3×
+*slower*. The repo's per-operation table (get 21.2 ms, set 26.1 ms) has them near-parity; they are
+not, at least in this window. **Every write-path estimate in this repo derived from ~23 ms/write is
+therefore optimistic by ~3×.**
+
+**Consequences, in order of how much they matter:**
+
+1. **The inline purge's worst case is ~7.1 s, not the plan's modelled 2.2 s.** Still comfortably
+   inside Akamai's 30-second handler limit, so **the decision to ship it stands** — but the margin
+   is 4× rather than 14×, and it is now measured rather than assumed.
+2. **The bulk-delete rejection is reinforced by ~3×.** 50 links × 95 keys at 75 ms is **~356
+   seconds**, not the 95–123 s that was already judged impossible. That door is now firmly shut.
+3. **A user-visible latency the plan under-estimated: a real delete took 1.9 s.** The GUI comment
+   claiming "~300 ms typical" was modelled and is corrected in `gui/dashboard.js`. The delete
+   button is disabled for the duration, but nothing else tells the user why the page paused —
+   see the open question below.
+
+**The cleanest confirmation that the feature works: this measurement needed no cleanup.** Every
+previous analytics measurement in this file ended with a manual purge; this one left the store at
+exactly its pre-test state (36 keys, 0 orphans, 14 links) because the deletes cleaned up after
+themselves. The sibling control also proves scoping: `dsibling` kept all 8 clicks while `dvictim`
+was purged.
+
+**Caveat on durability, stated because this file has been burned by absolutes before.** `list_keys`
+measured 74–91 ms here against **23.9 ms at a comparable store size on 2026-08-11** — so it moved
+3× while `get` moved 3× the other way. Op-type ratios are themselves unstable across windows, not
+just absolute values. Treat the 11× read/write asymmetry as measured-in-this-window, and re-measure
+before leaning on it for any new design.
+
+- [ ] Decide whether a multi-second delete needs user feedback beyond the disabled button — file(s): gui/dashboard.js — done when: either a progress affordance exists or the decision to leave it is recorded with its reasoning. **Note this reopens nothing:** the closed decision was that `analytics_purge`'s *result* is not rendered, which is different from whether the *wait* is communicated. At 1.9 s measured (and ~7 s at the ceiling) on the app's most common corrective action, for non-technical users, a silent pause may read as a hang.
