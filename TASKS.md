@@ -1542,3 +1542,47 @@ unreachable from the toolchain; and dropping the `events:` write reopens a settl
 fixing the wrong half. **The remaining candidate is the cached totals blob** already designed in
 full under Future work as the fallback — that is now the front-runner by elimination rather than
 by preference, and its stampede/staleness costs should be re-read before it is picked up.
+
+### RETRACTION (same day): `wasi:keyvalue/batch` IS reachable. `get_many` works.
+
+**The section immediately above is WRONG and is retracted.** It concluded batch was unreachable
+from a `ModuleNotFoundError`. The error was real; the diagnosis was not. **The cause was my spike,
+not the toolchain: componentize-py bundles only modules reachable from a TOP-LEVEL import.** The
+first spike did `from spin_sdk.wit.imports import ...batch...` *inside a handler function*, which
+the bundler does not follow, so the module was never packaged. Moving the identical import to
+module scope makes it work. This also explains the store/atomics asymmetry that looked so odd —
+those two are top-level-imported by other bundled modules, batch is imported by nothing.
+
+**Measured with the corrected spike (built and run against a real `spin up --build`, then
+reverted):**
+
+| question | answer |
+|---|---|
+| `wasi:keyvalue/batch` importable? | **yes**, via a top-level import |
+| `wasi:keyvalue/store.open("default")` | **ok** |
+| `get_many` on real keys | **works** |
+| **does `spin.toml`'s `key_value_stores` allowlist still apply?** | **YES — `open("users")` and `open("links")` both refused; only `"default"` opens** |
+| missing keys | **omitted from the result**, not returned as `(key, None)` |
+| result order | **NOT preserved** — the reply came back in a different order than requested |
+| local timing, 3 keys | batch 29 µs vs 69 µs sequential (2.4×) |
+
+**Two of those are load-bearing for any implementation.** The allowlist holding means this opens
+no new security hole — a `wasi:keyvalue` handle is confined to the same single store the component
+is already granted, so `kvprefix`'s namespace discipline remains the only thing separating
+namespaces, exactly as today. And **because missing keys are omitted and order is not preserved,
+`get_many` is NOT a drop-in for `gather_reads`**, whose order preservation CLAUDE.md documents as
+load-bearing for `handle_list`, `backup.py` and `consistency.py` (they zip results against their
+key lists). A `get_many` caller must build a dict keyed by the returned key and look up by name —
+positional zipping would silently mis-associate values with keys, which is a data-corruption bug,
+not a crash.
+
+**Still unknown, and it is the whole question: does Akamai's host implement it, and is a
+`get_many` of K keys billed as 1 read or K?** Akamai's docs say the interface is supported; that
+is not the same as knowing its cost. Local microsecond timings say nothing about a host where a
+single `get` is 7–25 ms. **This needs a deployed measurement before any design work.**
+
+**Toolchain lesson worth more than this feature:** a module that exists in the venv can be absent
+from the built component, and the failure is a plain `ModuleNotFoundError` that reads like "not
+supported". **Reading the SDK on the host proves nothing about what is in the component, and a
+function-level import proves nothing about what the bundler packages.** Test with a top-level
+import inside a real build before concluding an interface is unavailable.
