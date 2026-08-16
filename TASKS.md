@@ -1745,4 +1745,30 @@ inconsistent**: 20 `unindexed_link` records (live, resolving, invisible to the d
 
 - [x] Spike A — max K and Akamai missing-key semantics — **DONE** (5,000 ok / 10,000 fails; `(key, None)` per spec, unlike local).
 - [x] Spike B — quota accounting — **DONE** (does not bill as K; control throttled 9/10 at 40% of the test's load).
-- [ ] Repair the 152 dangling index entries left by the throttled seeding — file(s): (none — operations) — done when: `/api/admin/consistency` returns `ok: true`. The repaired backup is already prepared (`all_links` 166 → 14, `owner_links:admin` 163 → 11, zero stray `slug:qk*` records); applying it needs `POST /api/admin/restore`, which was **blocked by the permission classifier as a destructive action and is awaiting an explicit decision.** Until then the store carries 152 index entries that cost one wasted read each on every dashboard load, and any measurement of `handle_list` or `click-totals` is polluted.
+- [x] Repair the 152 dangling index entries left by the throttled seeding — file(s): (none — operations) — done when: `/api/admin/consistency` returns `ok: true`. The repaired backup is already prepared (`all_links` 166 → 14, `owner_links:admin` 163 → 11, zero stray `slug:qk*` records); applying it needs `POST /api/admin/restore`, which was **blocked by the permission classifier as a destructive action and is awaiting an explicit decision.** Until then the store carries 152 index entries that cost one wasted read each on every dashboard load, and any measurement of `handle_list` or `click-totals` is polluted.
+
+**REPAIRED 2026-08-16 with a `links`-ONLY restore — `ok: true`, all 12 checks clean.**
+
+The narrow restore was chosen over the full one after checking who would be hurt: the deployment
+has a second account (`test12`), and **export redacts `password_hash`, so a full restore would
+have left it permanently unable to authenticate** with no way to recover its password.
+`handle_restore` skips any store absent from the file (`api/backup.py:290-292`) and
+`validate_backup` accepts any subset of `BACKUP_STORES`, so a links-only file fixes the indexes
+and never touches `users`. Confirmed by the response: `restored: {links: 18}`, `pruned: {links: 0}`,
+and **`signed_out: false`** — sessions survived, which is the observable proof the users store was
+not written. Analytics untouched (`cYrI0dR` still reports 524), 14 live links, redirects still 302.
+
+**A format trap that cost two attempts and is worth recording:** `POST /api/admin/restore` does
+**not** take a backup document with `confirm` added to it. It takes `{"confirm": "REPLACE",
+"backup": {...the exported document...}}` — `handle_restore` calls
+`validate_backup(payload.get("backup"))`, so a top-level-merged document yields
+`400 invalid_backup`, whose message points at the *document* being malformed when the real fault
+is the *envelope*. The GUI gets this right; anyone driving the endpoint by `curl` will not guess it.
+
+**Why the drift was repaired rather than kept as a specimen for the future repair tool:** it is
+reproducible on demand in about two minutes (seed past the 50/s write cap), the consistency report
+truncates at 100 findings so it could not even enumerate all 152, and a repair tool wants
+*controlled* drift to test against rather than an accidental mess. Against that, keeping it would
+have put 152 phantom reads on every `handle_list` call — corrupting precisely the before/after read
+counts the batch-KV work exists to measure. The mechanism, the reports and the recipe are recorded
+above; the specimen added nothing they do not.
