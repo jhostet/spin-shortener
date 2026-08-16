@@ -1586,3 +1586,41 @@ from the built component, and the failure is a plain `ModuleNotFoundError` that 
 supported". **Reading the SDK on the host proves nothing about what is in the component, and a
 function-level import proves nothing about what the bundler packages.** Test with a top-level
 import inside a real build before concluding an interface is unavailable.
+
+### MEASURED ON AKAMAI: `get_many` is ~ONE round trip regardless of K (2026-08-15)
+
+Run with a token-gated spike endpoint deployed as `spike-batch-DO-NOT-KEEP`, then **reverted and a
+clean build redeployed as `8be5a0a-clean`** — the spike endpoint is confirmed 404 on the deployed
+app even *with* a valid token, and the 100 seeded links were deleted (store back to 14 links / 36
+analytics keys / 0 orphans). The endpoint returned `404` without the token, so it was never open.
+
+Three runs, 114 real keys available, same request measuring both paths:
+
+| operation | run 1 | run 2 | run 3 | per key |
+|---|---|---|---|---|
+| `get_many(1)` | 20.4 ms | 20.5 ms | 20.2 ms | ~20 ms |
+| `get_many(10)` | 24.4 ms | 25.2 ms | 20.7 ms | ~2.1–2.5 ms |
+| `get_many(50)` | 52.1 ms | 23.8 ms | 41.8 ms | ~0.5–1.0 ms |
+| **`get_many(100)`** | **76.7 ms** | **41.6 ms** | **23.0 ms** | **0.23–0.77 ms** |
+| `gather_reads`, 50 keys (today's path) | 210.4 ms | 194.4 ms | 56.7 ms | — |
+| 5 sequential spin `get`s | 135.9 ms | 99.9 ms | 130.9 ms | 20–27 ms each |
+
+**`get_many(100)` costs about what `get_many(1)` costs.** Per-key cost falls ~90×, from ~20 ms to
+~0.2–0.8 ms, and 100 batched keys beat 50 gathered ones in roughly a third of the wall time. The
+flat profile is the finding: the host is making one call, not K.
+
+**What this is and is not evidence of.** It measures **round trips**, not **quota accounting**. A
+`get_many` of 100 keys plausibly counts as 1 read against the 1,000/second app-wide cap, and the
+latency profile is consistent with that, but Akamai's docs do not say and this experiment cannot
+see quota. **Do not claim the read-cap problem is solved until that is confirmed** — though even
+billed as K, the wall-time win stands on its own.
+
+**Open question that shapes any design, not yet answered: is there a maximum K?** Only 114 keys
+existed to test with. `handle_click_totals` at 100 links × 200 clicks wants ~6,100 keys, so if
+`get_many` caps at some K (or at a request-size limit — Akamai's request/response cap is 10 MiB)
+the implementation needs chunking. Test with a large K before designing.
+
+Two API constraints already measured locally and restated because they are easy to get wrong:
+**missing keys are omitted** from the result, and **order is not preserved** — so a caller must
+build a dict from the returned `(key, value)` pairs and look up by name. Positional zipping
+against the requested list would silently mis-associate values with keys.
