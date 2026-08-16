@@ -1690,3 +1690,59 @@ work scoped itself to `handle_list`, `backup` and `consistency`. At the 50-row c
 per read that is **1.0–1.35 s per bulk action**, on paths a marketing user hits routinely. Worth
 fixing with plain `gather_reads` **independently of this whole plan** — it needs no new interface,
 no spike and no deploy to justify.
+
+### BOTH SPIKES ANSWERED (2026-08-15) — and both answers are favourable
+
+Run from one combined token-gated endpoint (404 without the token), deployed as
+`spike-kv-DO-NOT-KEEP`, then **reverted and a clean build redeployed as `bdffb58-clean`**; the
+endpoint is confirmed 404 on the deployed app even with a valid token.
+
+**1. Quota accounting: `get_many(K)` does NOT bill as K reads. This is the answer the whole
+investigation needed.** Measured against a positive control, with genuinely distinct keys (564
+seeded links), 10 parallel requests per arm:
+
+| arm | load | throttled |
+|---|---|---|
+| **control** — 10 × 200 single gathered reads | 2,000 reads/s | **9/10** |
+| **test** — 10 × `get_many(500)` | 5,000 keys/s | **0/10** |
+| **test** — 10 × `get_many(100)` | 1,000 keys/s | **0/10** |
+
+The control establishes the signature — Akamai throttles with a clean
+`Error_Other('too many requests')` — so a null result is meaningful rather than merely absent.
+**At 2.5× the control's load `get_many` showed zero throttling**, and `returned=500` confirms 500
+distinct keys were genuinely fetched, ruling out the dedup confound that made an earlier
+duplicate-key run inconclusive. **`click-totals`' ~6,100 reads per dashboard load collapse to a
+handful of billable operations.**
+
+**2. Max K: works at 5,000, fails at 10,000** with `Error_Other('key-value error: internal server
+error')`. Latency stayed flat (100 → 5.9 ms, 5,000 → 19.8 ms), reconfirming one round trip.
+**Chunk at 1,000** — comfortably inside the working range, and the measured cost of a 1,000-key
+call is ~10 ms.
+
+**3. Akamai's missing-key semantics — AND THE HOSTS DISAGREE, which is the finding that most
+constrains the code.** On Akamai, requesting 4 keys of which 2 were absent returned **4 rows with
+2 `None` values, exactly per the WIT spec**. On local Spin the identical probe returned **3 rows,
+omitting the absent keys**. **Dev and prod genuinely differ.** Code written against locally
+observed behaviour would mis-handle production results, and the failure mode is a value attached
+to the wrong key rather than an exception. **The plan's normalising seam is therefore mandatory,
+not defensive** — and note the local suite's `FakeStore` must reproduce *both* shapes, or tests
+will pass against a behaviour production does not have.
+
+**A self-inflicted mess worth recording, because it is a real product finding.** Seeding and
+deleting ~1,000 links pushed writes past the 50/s cap, and **throttled index writes left the store
+inconsistent**: 20 `unindexed_link` records (live, resolving, invisible to the dashboard) and 152
+`missing_link_record` index entries. Two lessons:
+
+- **`GET /api/links` reads the index, so it cannot see an unindexed record.** My "all seeded links
+  deleted" check passed while 20 were still live and resolving at `/r/`. Verifying a cleanup
+  against the dashboard is not verifying it against the store — use `/api/admin/consistency`.
+- **There is no API path that removes a dangling index entry.** `DELETE` 404s on the missing
+  record; bulk delete refuses all-or-nothing; bulk *create* refuses `slug_taken` because Akamai's
+  `exists()` still reports the deleted key (an eventual-consistency artifact worth knowing about
+  on its own). **This is exactly the trigger CLAUDE.md set for building a repair companion to the
+  consistency endpoint** — "having seen real reports from a real deployment" — and it has now
+  fired, from ordinary operation rather than a contrived case.
+
+- [x] Spike A — max K and Akamai missing-key semantics — **DONE** (5,000 ok / 10,000 fails; `(key, None)` per spec, unlike local).
+- [x] Spike B — quota accounting — **DONE** (does not bill as K; control throttled 9/10 at 40% of the test's load).
+- [ ] Repair the 152 dangling index entries left by the throttled seeding — file(s): (none — operations) — done when: `/api/admin/consistency` returns `ok: true`. The repaired backup is already prepared (`all_links` 166 → 14, `owner_links:admin` 163 → 11, zero stray `slug:qk*` records); applying it needs `POST /api/admin/restore`, which was **blocked by the permission classifier as a destructive action and is awaiting an explicit decision.** Until then the store carries 152 index entries that cost one wasted read each on every dashboard load, and any measurement of `handle_list` or `click-totals` is polluted.
