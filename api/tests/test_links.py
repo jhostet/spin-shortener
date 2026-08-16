@@ -6,7 +6,7 @@ import auth
 import links
 import urlpolicy
 from responses import Request
-from tests.fakes import FakeStore
+from tests.fakes import FakeStore, fake_get_many
 
 
 async def _set_policy(store, default_action, rules):
@@ -209,7 +209,7 @@ async def test_list_skips_a_slug_whose_record_is_missing():
     slugs = await links.owned_slugs(store, "alice")
     await store.delete(f"slug:{slugs[0]}")
 
-    resp = await links.handle_list(store, _principal(username="alice"))
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert [link["target_url"] for link in body["links"]] == ["https://example.com/two"]
@@ -226,7 +226,7 @@ async def test_list_only_shows_own_links_by_default():
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
-    resp = await links.handle_list(store, _principal(username="alice"))
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert [link["target_url"] for link in body["links"]] == ["https://example.com/alice"]
@@ -237,7 +237,7 @@ async def test_list_admin_sees_all_links():
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
-    resp = await links.handle_list(store, _principal(username="admin", role="admin"))
+    resp = await links.handle_list(store, _principal(username="admin", role="admin"), fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
@@ -249,7 +249,7 @@ async def test_list_view_all_permission_sees_all_links():
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     viewer = _principal(username="carol", permissions=["links.view_all"])
-    resp = await links.handle_list(store, viewer)
+    resp = await links.handle_list(store, viewer, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
@@ -261,7 +261,7 @@ async def test_list_edit_all_permission_sees_all_links():
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
-    resp = await links.handle_list(store, editor)
+    resp = await links.handle_list(store, editor, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}

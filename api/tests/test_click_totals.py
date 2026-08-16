@@ -9,7 +9,7 @@ import json
 
 import analytics
 import auth
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, fake_get_many, fake_list_keys
 
 
 def _principal(username="alice", role="user", permissions=None):
@@ -44,7 +44,7 @@ async def test_sums_shards_and_the_legacy_unsharded_key():
     })
 
     resp = await analytics.handle_click_totals(
-        links, analytics_store, _principal(role="admin"), fake_list_keys
+        links, analytics_store, _principal(role="admin"), fake_list_keys, fake_get_many
     )
     assert resp.status == 200
     assert json.loads(resp.body)["totals"] == {"promo": 11}
@@ -61,7 +61,7 @@ async def test_reads_only_the_shard_keys_that_exist():
     })
 
     await analytics.handle_click_totals(
-        links, analytics_store, _principal(role="admin"), fake_list_keys
+        links, analytics_store, _principal(role="admin"), fake_list_keys, fake_get_many
     )
     count_reads = [k for k in analytics_store.read_keys if k.startswith("count:")]
     assert sorted(count_reads) == ["count:promo:3", "count:promo:41"]
@@ -82,7 +82,7 @@ async def test_never_reads_analytics_for_a_link_the_caller_cannot_see():
     })
 
     resp = await analytics.handle_click_totals(
-        links, analytics_store, _principal(username="alice"), fake_list_keys
+        links, analytics_store, _principal(username="alice"), fake_list_keys, fake_get_many
     )
     assert json.loads(resp.body)["totals"] == {"mine": 3}
     assert not [k for k in analytics_store.read_keys if "theirs" in k]
@@ -97,7 +97,7 @@ async def test_events_keys_are_never_read():
     })
 
     await analytics.handle_click_totals(
-        links, analytics_store, _principal(role="admin"), fake_list_keys
+        links, analytics_store, _principal(role="admin"), fake_list_keys, fake_get_many
     )
     assert not [k for k in analytics_store.read_keys if k.startswith("events:")]
 
@@ -107,7 +107,7 @@ async def test_a_link_with_no_clicks_reports_zero_not_absent():
     the contract honest: the endpoint answers for every visible link."""
     links = FakeStore({"all_links": json.dumps(["quiet"]).encode("utf-8")})
     resp = await analytics.handle_click_totals(
-        links, FakeStore({}), _principal(role="admin"), fake_list_keys
+        links, FakeStore({}), _principal(role="admin"), fake_list_keys, fake_get_many
     )
     assert json.loads(resp.body)["totals"] == {"quiet": 0}
 
@@ -119,7 +119,7 @@ async def test_a_corrupt_shard_costs_only_its_own_clicks():
         "count:promo:2": b"not json at all",
     })
     resp = await analytics.handle_click_totals(
-        links, analytics_store, _principal(role="admin"), fake_list_keys
+        links, analytics_store, _principal(role="admin"), fake_list_keys, fake_get_many
     )
     assert json.loads(resp.body)["totals"] == {"promo": 4}
 
@@ -128,7 +128,7 @@ async def test_no_visible_links_short_circuits_without_enumerating():
     links = FakeStore({})
     analytics_store = RecordingStore({"count:someoneelse:1": _count(9)})
     resp = await analytics.handle_click_totals(
-        links, analytics_store, _principal(username="nobody"), fake_list_keys
+        links, analytics_store, _principal(username="nobody"), fake_list_keys, fake_get_many
     )
     assert json.loads(resp.body)["totals"] == {}
     assert analytics_store.read_keys == []

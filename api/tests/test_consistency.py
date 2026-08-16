@@ -14,7 +14,7 @@ import json
 
 import auth
 import consistency
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, fake_get_many, fake_list_keys
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -28,7 +28,7 @@ def _j(obj) -> bytes:
 async def _analyze(links_data=None, users_data=None):
     links_store = FakeStore(links_data or {})
     users_store = FakeStore(users_data or {})
-    collected = await consistency.collect({"links": links_store, "users": users_store}, fake_list_keys)
+    collected = await consistency.collect({"links": links_store, "users": users_store}, fake_list_keys, fake_get_many)
     return consistency.analyze(collected)
 
 
@@ -339,8 +339,7 @@ async def test_all_clear_on_a_healthy_store():
     }
     users_data = {"user:carol": _j({}), "_meta:usernames": _j(["carol"])}
     collected = await consistency.collect(
-        {"links": FakeStore(links_data), "users": FakeStore(users_data)}, fake_list_keys
-    )
+        {"links": FakeStore(links_data), "users": FakeStore(users_data)}, fake_list_keys, fake_get_many)
     checks, totals = consistency.analyze(collected)
     report = consistency.build_report(checks, totals, collected["scanned"], generated_at="x", generated_by="admin")
     assert report["ok"] is True
@@ -353,8 +352,7 @@ async def test_all_clear_on_a_healthy_store():
 
 async def test_handle_consistency_forbidden_without_users_manage():
     resp = await consistency.handle_consistency(
-        {"links": FakeStore(), "users": FakeStore()}, _principal(role="user", permissions=[]), fake_list_keys,
-    )
+        {"links": FakeStore(), "users": FakeStore()}, _principal(role="user", permissions=[]), fake_list_keys, fake_get_many)
     assert resp.status == 403
     assert json.loads(resp.body) == {"error": "forbidden", "required_permission": "users.manage"}
 
@@ -363,15 +361,13 @@ async def test_handle_consistency_allows_users_manage_without_admin_role():
     resp = await consistency.handle_consistency(
         {"links": FakeStore(), "users": FakeStore()},
         _principal(role="user", permissions=["users.manage"]),
-        fake_list_keys,
-    )
+        fake_list_keys, fake_get_many)
     assert resp.status == 200
 
 
 async def test_handle_consistency_ok_true_on_fresh_stores():
     resp = await consistency.handle_consistency(
-        {"links": FakeStore(), "users": FakeStore()}, _principal(), fake_list_keys,
-    )
+        {"links": FakeStore(), "users": FakeStore()}, _principal(), fake_list_keys, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["ok"] is True
@@ -392,8 +388,7 @@ async def test_handle_consistency_never_leaks_password_hash():
         "_meta:usernames": _j(["alice"]),
     })
     resp = await consistency.handle_consistency(
-        {"links": FakeStore(), "users": users_store}, _principal(), fake_list_keys,
-    )
+        {"links": FakeStore(), "users": users_store}, _principal(), fake_list_keys, fake_get_many)
     assert resp.status == 200
     assert b"password_hash" not in resp.body
     assert b"pbkdf2_sha256" not in resp.body
@@ -431,8 +426,7 @@ async def test_collect_never_even_reads_a_user_record_value():
         "_meta:bootstrapped": b"1",
     })
     collected = await consistency.collect(
-        {"links": FakeStore(), "users": users_store}, fake_list_keys
-    )
+        {"links": FakeStore(), "users": users_store}, fake_list_keys, fake_get_many)
 
     assert not [key for key in users_store.read_keys if key.startswith("user:")]
     # The two shapes that ARE read still are, so this isn't passing by reading

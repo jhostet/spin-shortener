@@ -176,7 +176,7 @@ def validate_bulk_rows(
     return errors
 
 
-async def handle_bulk_create(store, principal, request):
+async def handle_bulk_create(store, principal, request, get_many):
     if len(request.body or b"") > MAX_BULK_BODY_BYTES:
         return json_response(413, {"error": "body_too_large", "max_bytes": MAX_BULK_BODY_BYTES})
 
@@ -221,13 +221,16 @@ async def handle_bulk_create(store, principal, request):
     # has ever drifted (an interrupted write, a KV-explorer edit), trusting it
     # alone for an explicit slug could overwrite a live link record, which is
     # data loss. This is the one place the design deliberately spends N KV
-    # reads instead of one.
+    # reads instead of one — collapsed into a single get_many host call
+    # (docs/plans/batch-kv-reads.md) rather than up to MAX_BULK_ROWS
+    # sequential `exists` probes, existence tested as `is not None`.
     already_flagged = {(err["line"]) for err in row_errors}
-    for row in rows:
-        if row.line in already_flagged or not row.slug:
-            continue
-        if await store.exists(f"slug:{row.slug}"):
-            row_errors.append({"line": row.line, "slug": row.slug, "error": "slug_taken"})
+    candidate_rows = [row for row in rows if row.line not in already_flagged and row.slug]
+    if candidate_rows:
+        existing_values = await get_many(store, [f"slug:{row.slug}" for row in candidate_rows])
+        for row in candidate_rows:
+            if existing_values.get(f"slug:{row.slug}") is not None:
+                row_errors.append({"line": row.line, "slug": row.slug, "error": "slug_taken"})
 
     if row_errors:
         row_errors.sort(key=lambda e: e["line"])
@@ -277,7 +280,7 @@ async def handle_bulk_create(store, principal, request):
     })
 
 
-async def handle_bulk_action(store, users_store, principal, request):
+async def handle_bulk_action(store, users_store, principal, request, get_many):
     try:
         payload = json.loads(request.body or b"{}")
     except json.JSONDecodeError:
@@ -322,13 +325,19 @@ async def handle_bulk_action(store, users_store, principal, request):
         if not tag_list:
             return json_response(400, {"error": "no_tags"})
 
+    # One get_many host call over every slug's record (docs/plans/batch-kv-reads.md)
+    # rather than a sequential links.get_link per slug — up to MAX_BULK_ROWS
+    # (50) round trips collapsed into a handful of chunked calls.
+    fetched = await get_many(store, [f"slug:{slug}" for slug in slugs])
+
     row_errors = []
     records: dict[str, dict] = {}
     for slug in slugs:
-        record = await links.get_link(store, slug)
-        if record is None:
+        raw = fetched.get(f"slug:{slug}")
+        if raw is None:
             row_errors.append({"slug": slug, "error": "not_found"})
             continue
+        record = json.loads(raw)
         # Reassignment deliberately skips the per-row can_edit check — it is
         # gated on users.manage alone (see docs/plans/link-tags-and-ownership.md,
         # "Trade-offs" #7). Requiring can_edit here would break the departed-

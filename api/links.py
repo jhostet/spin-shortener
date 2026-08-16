@@ -12,7 +12,6 @@ import auth
 import tags
 import urlpolicy
 from auth import Principal
-from kvbatch import gather_reads
 from responses import iso_now, json_response, parse_iso8601_utc, to_iso8601_utc
 
 SLUG_ALPHABET = string.ascii_letters + string.digits
@@ -252,19 +251,29 @@ async def handle_create(store, principal: Principal, request):
     return json_response(201, public_link(record))
 
 
-async def handle_list(store, principal: Principal):
+async def handle_list(store, principal: Principal, get_many):
     if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
         slugs = await all_slugs(store)
     else:
         slugs = await owned_slugs(store, principal.username)
-    # One gathered fetch, not a round trip per link. `GET /api/links` has no
-    # pagination, so the sequential form cost ~23 ms per link against a
-    # deployed store — ~2.4 s at 100 links. Bounded, because a large
-    # deployment would otherwise fire one read per link from a single handler
-    # against an app-wide read cap. Order-preserving, so the response stays in
-    # index order.
-    fetched = await gather_reads(get_link(store, slug) for slug in slugs)
-    records = [public_link(record) for record in fetched if record is not None]
+    # One get_many host call (or a handful of MAX_KEYS_PER_GET_MANY-sized
+    # chunks), not a round trip per link (docs/plans/batch-kv-reads.md,
+    # superseding the earlier gather_reads-based fan-out). `GET /api/links`
+    # has no pagination, so the sequential form cost ~23 ms per link against
+    # a deployed store — ~2.4 s at 100 links. Iterating `slugs` (not the
+    # dict) is what keeps the response in index order, since get_many does
+    # not preserve one. A slug present in the index whose record is missing
+    # (an interrupted delete leaves index entries with no backing record) is
+    # skipped, exactly as before. A corrupt record still raises via
+    # json.loads, exactly as get_link used to.
+    keys = [f"slug:{slug}" for slug in slugs]
+    fetched = await get_many(store, keys)
+    records = []
+    for slug in slugs:
+        raw = fetched.get(f"slug:{slug}")
+        if raw is None:
+            continue
+        records.append(public_link(json.loads(raw)))
     return json_response(200, {"links": records})
 
 

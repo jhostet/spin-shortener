@@ -13,6 +13,7 @@ import backup
 import bulk
 import consistency
 import domains
+import kvbatch
 import kvprefix
 import links
 import obs
@@ -20,6 +21,23 @@ import qr
 import urlpolicy
 import users
 from responses import Request, Response, get_header, json_response
+
+# docs/plans/batch-kv-reads.md: the wasi:keyvalue/batch bindings, imported at
+# MODULE scope deliberately — componentize-py bundles only modules reachable
+# from a top-level import, and a function-scoped import produces a bare
+# ModuleNotFoundError that reads like "the interface is unsupported" rather
+# than "the import was in the wrong place" (this is what caused the
+# now-retracted "batch is unreachable" conclusion during planning). The
+# guarded try/except is still a module-scope import statement, so the
+# bundler follows it; if a future toolchain change ever defeats that, drop
+# the guard and take the bare import, which fails loudly at the first local
+# `spin up --build` rather than silently at request time.
+try:
+    from spin_sdk.wit.imports import wasi_keyvalue_batch_0_2_0_draft2 as wasi_batch
+    from spin_sdk.wit.imports import wasi_keyvalue_store_0_2_0_draft2 as wasi_store
+except ImportError:  # toolchain did not bundle it; every caller falls back
+    wasi_batch = None
+    wasi_store = None
 
 # --- Toggleable structured logging (docs/plans/toggleable-logging.md) ---
 #
@@ -71,6 +89,34 @@ async def _kv_keys(store) -> list[str]:
         keys.extend(chunk)
     await fut.read()
     return keys
+
+
+def _make_raw_get_many(collector):
+    """Per-request closure over one LAZILY-opened wasi:keyvalue/store bucket
+    (docs/plans/batch-kv-reads.md). `get_many` needs a
+    `wasi_keyvalue_store.Bucket`, a different WIT resource type from the
+    `spin_key_value.Store` `_dispatch` already opens below, so a second
+    `open` is required — but only paid by a request that actually batches
+    (login, PATCH, every write path never touches this), and never shared
+    across requests: `Handler.handle()` dispatches each request through
+    `componentize_py_async_support.spawn`, so a module-level bucket would be
+    shared across concurrently-dispatched requests, the same reason
+    obs.Collector is never module-level either.
+    """
+    bucket = None
+
+    def raw_get_many(physical_keys):
+        nonlocal bucket
+        if wasi_batch is None or wasi_store is None:
+            raise RuntimeError("wasi:keyvalue/batch not available in this build")
+        if bucket is None:
+            start = time.monotonic_ns()
+            bucket = wasi_store.open(kvprefix.PHYSICAL_STORE)
+            if collector is not None:
+                collector.record("open", "-", time.monotonic_ns() - start, 0)
+        return wasi_batch.get_many(bucket, physical_keys)
+
+    return raw_get_many
 
 
 async def _cookie_secure() -> bool:
@@ -157,6 +203,7 @@ class HttpHandler(Handler):
         users_store = stores["users"]
         analytics_store = stores["analytics"]
         list_keys = kvprefix.scoped_list_keys(_kv_keys, collector)
+        get_many = kvbatch.scoped_get_many(_make_raw_get_many(collector), collector)
         admin_username = await variables.get("admin_bootstrap_username")
         admin_password = await variables.get("admin_bootstrap_password")
         await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
@@ -190,20 +237,20 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             if method == "GET":
-                return await links.handle_list(links_store, result)
+                return await links.handle_list(links_store, result, get_many)
             return await links.handle_create(links_store, result, request)
 
         if path == "/api/links/bulk" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await bulk.handle_bulk_create(links_store, result, request)
+            return await bulk.handle_bulk_create(links_store, result, request, get_many)
 
         if path == "/api/links/bulk-action" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await bulk.handle_bulk_action(links_store, users_store, result, request)
+            return await bulk.handle_bulk_action(links_store, users_store, result, request, get_many)
 
         if path.startswith("/api/links/") and path.endswith("/password") and method == "POST":
             slug = path.removeprefix("/api/links/").removesuffix("/password")
@@ -223,7 +270,7 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await analytics.handle_click_totals(links_store, analytics_store, result, list_keys)
+            return await analytics.handle_click_totals(links_store, analytics_store, result, list_keys, get_many)
 
         if path.startswith("/api/links/") and path.endswith("/analytics") and method == "GET":
             slug = path.removeprefix("/api/links/").removesuffix("/analytics")
@@ -233,7 +280,7 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             num_event_slots = int(await variables.get("analytics_event_slots"))
-            return await analytics.handle_analytics(links_store, analytics_store, result, slug, num_event_slots)
+            return await analytics.handle_analytics(links_store, analytics_store, result, slug, num_event_slots, get_many)
 
         if path.startswith("/api/links/") and path.endswith("/qr") and method == "GET":
             slug = path.removeprefix("/api/links/").removesuffix("/qr")
@@ -318,7 +365,7 @@ class HttpHandler(Handler):
             # would fire on healthy state forever. See
             # docs/plans/kv-consistency-check.md's rejected alternatives.
             return await consistency.handle_consistency(
-                {"links": links_store, "users": users_store}, result, list_keys,
+                {"links": links_store, "users": users_store}, result, list_keys, get_many,
             )
 
         if path == "/api/admin/analytics/orphans" and method == "GET":

@@ -18,20 +18,36 @@ from typing import Optional
 # Fixed emission order for per-op-type fields in the logfmt line. Matches
 # redirect/linkgate/obs.go's kvOpOrder and the plan's sample output — not
 # alphabetical, mirrors the order operations actually happen in.
-_KV_OP_ORDER = ("open", "exists", "get", "set", "delete", "list_keys")
+#
+# "get_many"/"get_many_error" are deliberately NOT mirrored into
+# redirect/linkgate/obs.go (docs/plans/batch-kv-reads.md) — redirect never
+# batches (it reads exactly one key per click), so a Go-side field would be
+# dead code. This is the one place api/obs.py's vocabulary diverges from its
+# Go counterpart; nothing pins the two vocabularies against each other the
+# way api/tests/test_kvprefix.py pins keys.go's prefixes and CountShards.
+_KV_OP_ORDER = ("open", "exists", "get", "get_many", "get_many_error", "set", "delete", "list_keys")
 
 
 class Collector:
     """Accumulates one request's KV operation timing: per operation type, a
-    count, total microseconds and total bytes moved, plus the single
-    slowest operation seen.
+    count, total microseconds, total bytes moved and total KEYS covered, plus
+    the single slowest operation seen.
 
-    record()'s signature is (op_type, namespace, duration_ns, num_bytes) —
-    it has NO parameter that could accept a key. users:session:<token> is a
-    live session credential and `spin aka logs` retains 7 days by default,
-    so a key-logging design would put working session tokens in a
-    week-long retention window. This is the same structural move
+    record()'s signature is (op_type, namespace, duration_ns, num_bytes,
+    num_keys) — it has NO parameter that could accept a key. users:session:
+    <token> is a live session credential and `spin aka logs` retains 7 days
+    by default, so a key-logging design would put working session tokens in
+    a week-long retention window. This is the same structural move
     PrefixedStore makes by having no get_keys method.
+
+    `num_keys` (keyword-defaulted to 1, so every pre-existing call site is
+    unaffected) exists because a single `get_many` operation covers K keys —
+    `kv_ops` has always counted HOST OPERATIONS and must keep doing so, but K
+    must not vanish: once handle_click_totals batches, its `get` count reads
+    1 forever, so the monitoring number CLAUDE.md names for the
+    cached-totals-blob trigger ("a traced get count above ~500") moves to
+    this field, `kv_keys`, at the same threshold. See
+    docs/plans/batch-kv-reads.md's Instrumentation section.
 
     Every caller constructs its own Collector for its own request — there is
     no module-level instance and none should ever be added. A shared
@@ -41,24 +57,27 @@ class Collector:
     """
 
     def __init__(self) -> None:
-        # op_type -> [count, total_us, total_bytes]
+        # op_type -> [count, total_us, total_bytes, total_keys]
         self._stats: dict[str, list[int]] = {}
         self._slow: Optional[tuple[str, str, int]] = None  # (op_type, namespace, us)
 
-    def record(self, op_type: str, namespace: str, duration_ns: int, num_bytes: int = 0) -> None:
+    def record(
+        self, op_type: str, namespace: str, duration_ns: int, num_bytes: int = 0, num_keys: int = 1
+    ) -> None:
         us = duration_ns // 1000  # truncating, matching Go's time.Duration.Microseconds()
-        count, total_us, total_bytes = self._stats.get(op_type, [0, 0, 0])
-        self._stats[op_type] = [count + 1, total_us + us, total_bytes + num_bytes]
+        count, total_us, total_bytes, total_keys = self._stats.get(op_type, [0, 0, 0, 0])
+        self._stats[op_type] = [count + 1, total_us + us, total_bytes + num_bytes, total_keys + num_keys]
         if self._slow is None or us > self._slow[2]:
             self._slow = (op_type, namespace, us)
 
-    def totals(self) -> tuple[int, int, int]:
-        """Returns (ops, total_us, total_bytes) summed across every
-        operation type."""
+    def totals(self) -> tuple[int, int, int, int]:
+        """Returns (ops, total_us, total_bytes, total_keys) summed across
+        every operation type."""
         ops = sum(s[0] for s in self._stats.values())
         us = sum(s[1] for s in self._stats.values())
         num_bytes = sum(s[2] for s in self._stats.values())
-        return ops, us, num_bytes
+        keys = sum(s[3] for s in self._stats.values())
+        return ops, us, num_bytes, keys
 
 
 def route_template(path: str) -> str:
@@ -90,10 +109,16 @@ def route_template(path: str) -> str:
 def render_log_line(fields: list[tuple[str, str]], duration_ns: int, collector: Optional[Collector]) -> str:
     """Renders one "ss "-prefixed logfmt line: the caller-supplied fields in
     order, then dur_us, then (if collector is not None) the KV summary —
-    kv_ops/kv_us/kv_bytes, one field per non-zero-count operation type in
-    _KV_OP_ORDER ("count/total_µs"), and the single slowest operation as
-    "type:namespace:µs". Zero-count operation-type fields are omitted
-    entirely, never emitted as "=0/0".
+    kv_ops/kv_us/kv_bytes[/kv_keys], one field per non-zero-count operation
+    type in _KV_OP_ORDER ("count/total_µs"), and the single slowest
+    operation as "type:namespace:µs". Zero-count operation-type fields are
+    omitted entirely, never emitted as "=0/0".
+
+    kv_keys is emitted immediately after kv_bytes, but ONLY when the key
+    total differs from the op total — so every request that never batches
+    (i.e. every request before docs/plans/batch-kv-reads.md, and every
+    non-batching handler after it) renders a byte-identical line to before
+    this field existed. Its presence at all means a get_many happened.
     """
     parts = ["ss"]
     for key, value in fields:
@@ -103,10 +128,12 @@ def render_log_line(fields: list[tuple[str, str]], duration_ns: int, collector: 
     if collector is None:
         return " ".join(parts)
 
-    ops, us, num_bytes = collector.totals()
+    ops, us, num_bytes, num_keys = collector.totals()
     parts.append(f"kv_ops={ops}")
     parts.append(f"kv_us={us}")
     parts.append(f"kv_bytes={num_bytes}")
+    if num_keys != ops:
+        parts.append(f"kv_keys={num_keys}")
 
     for op_type in _KV_OP_ORDER:
         stat = collector._stats.get(op_type)
@@ -127,7 +154,7 @@ def render_server_timing(handler_duration_ns: int, collector: Optional[Collector
     as floats — 80 µs must render as 0.080, never 80 — because
     Server-Timing's dur parameter is defined in milliseconds.
     """
-    ops, us, _ = collector.totals() if collector is not None else (0, 0, 0)
+    ops, us, _, _ = collector.totals() if collector is not None else (0, 0, 0, 0)
     kv_ms = us / 1000.0
     handler_ms = (handler_duration_ns // 1000) / 1000.0
     return f'kv;dur={kv_ms:.3f};desc="{ops} ops", handler;dur={handler_ms:.3f}'

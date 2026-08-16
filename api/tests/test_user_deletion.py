@@ -22,7 +22,7 @@ import bulk
 import links
 import users
 from responses import Request
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, fake_get_many, fake_list_keys
 
 CONFIGURED_DOMAINS = ["https://a.example.com"]
 
@@ -73,8 +73,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     # The link is reassigned to dave through the bulk tool.
     await _make_user(users_store, "dave", password="davespassword")
     reassign = await bulk.handle_bulk_action(
-        links_store, users_store, admin, _action_request({"slugs": ["carol-private"], "action": "reassign", "owner": "dave"}),
-    )
+        links_store, users_store, admin, _action_request({"slugs": ["carol-private"], "action": "reassign", "owner": "dave"}), fake_get_many)
     assert reassign.status == 200
 
     # carol is now deletable.
@@ -86,7 +85,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     new_carol = _principal("carol", permissions=["links.create_custom_slug"])
 
     # The new carol sees zero links.
-    listing = await links.handle_list(links_store, new_carol)
+    listing = await links.handle_list(links_store, new_carol, fake_get_many)
     assert json.loads(listing.body)["links"] == []
 
     # The new carol cannot edit the old carol-private link.

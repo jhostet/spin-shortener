@@ -34,7 +34,7 @@ import bulk
 import links
 import urlpolicy
 from responses import Request
-from tests.fakes import FakeStore
+from tests.fakes import FakeStore, fake_get_many
 
 VIOLATING_URL = "https://evil.example/x"
 OK_URL = "https://good.example/y"
@@ -116,8 +116,7 @@ async def test_bulk_create_rejects_across_both_policy_configs(policy_config):
 
     text = f"good-one,{OK_URL}\nbad-one,{VIOLATING_URL}\n"
     resp = await bulk.handle_bulk_create(
-        store, _principal(permissions=["links.create_custom_slug"]), _bulk_request({"text": text}),
-    )
+        store, _principal(permissions=["links.create_custom_slug"]), _bulk_request({"text": text}), fake_get_many)
     assert resp.status == 400
     body = json.loads(resp.body)
     assert any(e["error"] == "destination_not_allowed" for e in body["row_errors"])
@@ -138,7 +137,7 @@ async def test_admin_is_not_exempt_from_the_policy(policy_config):
     assert create_resp.status == 400
     assert json.loads(create_resp.body)["error"] == "destination_not_allowed"
 
-    bulk_resp = await bulk.handle_bulk_create(store, _admin(), _bulk_request({"text": VIOLATING_URL + "\n"}))
+    bulk_resp = await bulk.handle_bulk_create(store, _admin(), _bulk_request({"text": VIOLATING_URL + "\n"}), fake_get_many)
     assert bulk_resp.status == 400
     assert json.loads(bulk_resp.body)["row_errors"][0]["error"] == "destination_not_allowed"
 
@@ -159,7 +158,6 @@ async def test_legacy_violator_can_still_be_bulk_disabled():
         store, users_store, _principal(),
         Request(method="POST", uri="/api/links/bulk-action", headers={}, body=json.dumps({
             "slugs": [slug], "action": "disable",
-        }).encode("utf-8")),
-    )
+        }).encode("utf-8")), fake_get_many)
     assert resp.status == 200
     assert (await links.get_link(store, slug))["status"] == "disabled"

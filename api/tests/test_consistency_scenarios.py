@@ -27,7 +27,7 @@ import consistency
 import links
 import users
 from responses import Request
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, fake_get_many, fake_list_keys
 
 CONFIGURED_DOMAINS = ["https://a.example.com"]
 
@@ -75,8 +75,7 @@ def _by_id(checks: list[dict]) -> dict[str, dict]:
 async def _report(links_store, users_store, principal=None) -> dict:
     principal = principal or _principal("admin", role="admin")
     resp = await consistency.handle_consistency(
-        {"links": links_store, "users": users_store}, principal, fake_list_keys,
-    )
+        {"links": links_store, "users": users_store}, principal, fake_list_keys, fake_get_many)
     assert resp.status == 200, resp.body
     return json.loads(resp.body)
 
@@ -247,16 +246,14 @@ async def test_healthy_store_through_real_handlers_reports_all_clear():
     carol_slug = json.loads(created_carol.body)["slug"]
 
     bulk_created = await bulk.handle_bulk_create(
-        links_store, bob, _bulk_create_request({"text": "https://example.com/one\nhttps://example.com/two"}),
-    )
+        links_store, bob, _bulk_create_request({"text": "https://example.com/one\nhttps://example.com/two"}), fake_get_many)
     assert bulk_created.status == 201
     bulk_slugs = [record["slug"] for record in json.loads(bulk_created.body)["links"]]
 
     # Reassign carol's link to bob, so carol will own nothing.
     reassigned = await bulk.handle_bulk_action(
         links_store, users_store, admin,
-        _action_request({"slugs": [carol_slug], "action": "reassign", "owner": "bob"}),
-    )
+        _action_request({"slugs": [carol_slug], "action": "reassign", "owner": "bob"}), fake_get_many)
     assert reassigned.status == 200
 
     # Delete one of the bulk-created links outright.

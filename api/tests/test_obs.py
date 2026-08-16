@@ -3,7 +3,7 @@ import obs
 
 def test_collector_totals_empty():
     c = obs.Collector()
-    assert c.totals() == (0, 0, 0)
+    assert c.totals() == (0, 0, 0, 0)
 
 
 def test_collector_count_and_total_micros():
@@ -12,10 +12,27 @@ def test_collector_count_and_total_micros():
     c.record("get", "links", 7_000, 50)
     c.record("set", "analytics", 12_000, 20)
 
-    ops, us, num_bytes = c.totals()
+    ops, us, num_bytes, num_keys = c.totals()
     assert ops == 3
     assert us == 24
     assert num_bytes == 170
+    assert num_keys == 3  # num_keys defaults to 1 per record() call
+
+
+def test_collector_num_keys_defaults_to_one_so_pre_existing_call_sites_are_unaffected():
+    c = obs.Collector()
+    c.record("get", "links", 1_000, 4)  # no num_keys passed
+    ops, _, _, num_keys = c.totals()
+    assert ops == num_keys == 1
+
+
+def test_collector_num_keys_accumulates_for_get_many():
+    c = obs.Collector()
+    c.record("get_many", "analytics", 10_000, 900, num_keys=65)
+    c.record("get_many", "analytics", 10_000, 900, num_keys=30)
+    ops, _, _, num_keys = c.totals()
+    assert ops == 2       # two host calls
+    assert num_keys == 95  # covering 95 keys total
 
 
 def test_render_log_line_field_format_and_zero_count_omission():
@@ -61,6 +78,26 @@ def test_render_log_line_slowest_operation_updates_to_later_larger_duration():
 
     line = obs.render_log_line([], 50_000, c)
     assert "slow=get:analytics:40" in line
+
+
+def test_render_log_line_omits_kv_keys_when_it_equals_kv_ops():
+    """Every non-batching request (the whole app before this field existed,
+    and every handler that never calls get_many) must render a
+    byte-identical line to before kv_keys existed."""
+    c = obs.Collector()
+    c.record("get", "links", 5_000, 100)
+    c.record("get", "links", 7_000, 50)
+
+    line = obs.render_log_line([("comp", "api")], 20_000, c)
+    assert "kv_keys" not in line
+
+
+def test_render_log_line_emits_kv_keys_immediately_after_kv_bytes_when_it_differs():
+    c = obs.Collector()
+    c.record("get_many", "analytics", 10_000, 900, num_keys=65)
+
+    line = obs.render_log_line([("comp", "api")], 20_000, c)
+    assert "kv_bytes=900 kv_keys=65" in line
 
 
 def test_render_log_line_none_collector_omits_kv_summary_entirely():

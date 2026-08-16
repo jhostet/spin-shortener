@@ -17,7 +17,7 @@ import consistency
 import kvprefix
 import links
 from responses import Request
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, fake_get_many, fake_list_keys
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -168,8 +168,7 @@ async def test_consistency_report_does_not_see_analytics_keys_sharing_the_physic
     list_keys = kvprefix.scoped_list_keys(fake_list_keys)
 
     response = await consistency.handle_consistency(
-        {"links": views["links"], "users": views["users"]}, _principal(), list_keys,
-    )
+        {"links": views["links"], "users": views["users"]}, _principal(), list_keys, fake_get_many)
     assert response.status == 200
     report = json.loads(response.body)
     assert report["ok"] is True

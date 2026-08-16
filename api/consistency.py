@@ -18,7 +18,6 @@ and check 10 needs only the `username` field of a `session:` value.
 
 import json
 
-from kvbatch import gather_reads
 from responses import Response, iso_now, json_response
 
 MAX_FINDINGS_PER_CHECK = 100
@@ -117,7 +116,7 @@ def _parse_session_username(raw: bytes | None) -> str | None:
     return username
 
 
-async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
+async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dict:
     """The only I/O in this module. Returns the raw material `analyze` needs:
 
         {
@@ -158,14 +157,14 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
     unrecognized: list[dict] = []
 
     links_keys = await list_keys(links_store)
-    # One gathered read for the whole store rather than a round trip per key.
-    # Every key is fetched, including ones the loop classifies as
-    # `unrecognized` and discards: an allowlist here would have to restate the
-    # branch conditions below, and a condition that drifted out of it would
-    # silently hand the loop `None` and report a healthy key as unreadable.
-    links_values = dict(
-        zip(links_keys, await gather_reads(links_store.get(key) for key in links_keys))
-    )
+    # One get_many host call for the whole store (docs/plans/batch-kv-reads.md,
+    # superseding the earlier gather_reads-based fan-out) rather than a round
+    # trip per key. Every key is fetched, including ones the loop classifies
+    # as `unrecognized` and discards: an allowlist here would have to restate
+    # the branch conditions below, and a condition that drifted out of it
+    # would silently hand the loop `None` and report a healthy key as
+    # unreadable.
+    links_values = await get_many(links_store, links_keys)
     slug_count = 0
     owner_index_count = 0
     for key in links_keys:
@@ -220,9 +219,7 @@ async def collect(stores_by_name: dict[str, object], list_keys) -> dict:
         key for key in users_keys
         if key == USERNAMES_INDEX_KEY or key.startswith(SESSION_PREFIX)
     ]
-    users_values = dict(
-        zip(users_value_keys, await gather_reads(users_store.get(key) for key in users_value_keys))
-    )
+    users_values = await get_many(users_store, users_value_keys)
     user_count = 0
     session_count = 0
     for key in users_keys:
@@ -425,11 +422,12 @@ async def handle_consistency(
     stores_by_name: dict[str, object],  # {"links": store, "users": store}
     principal,
     list_keys,
+    get_many,
 ) -> Response:
     if not principal.has_permission("users.manage"):
         return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
 
-    collected = await collect(stores_by_name, list_keys)
+    collected = await collect(stores_by_name, list_keys, get_many)
     checks, totals = analyze(collected)
     return json_response(200, build_report(
         checks, totals, collected["scanned"],

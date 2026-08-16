@@ -4,7 +4,7 @@ import analytics
 import auth
 import links
 from responses import Request
-from tests.fakes import FakeStore
+from tests.fakes import FakeStore, fake_get_many
 
 
 def _principal(username="alice", role="user", permissions=None):
@@ -23,7 +23,7 @@ async def _make_link(links_store, owner="alice"):
 async def test_analytics_not_found():
     links_store = FakeStore()
     analytics_store = FakeStore()
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), "doesnotexist", 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), "doesnotexist", 30, fake_get_many)
     assert resp.status == 404
 
 
@@ -31,7 +31,7 @@ async def test_analytics_forbidden_for_non_owner():
     links_store = FakeStore()
     analytics_store = FakeStore()
     slug = await _make_link(links_store, owner="alice")
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(username="bob"), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(username="bob"), slug, 30, fake_get_many)
     assert resp.status == 403
 
 
@@ -39,7 +39,7 @@ async def test_analytics_admin_can_view_others_links():
     links_store = FakeStore()
     analytics_store = FakeStore()
     slug = await _make_link(links_store, owner="alice")
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(username="admin", role="admin"), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(username="admin", role="admin"), slug, 30, fake_get_many)
     assert resp.status == 200
 
 
@@ -51,7 +51,7 @@ async def test_analytics_view_all_permission_can_view_others_links():
     analytics_store = FakeStore()
     slug = await _make_link(links_store, owner="alice")
     viewer = _principal(username="carol", permissions=["links.view_all"])
-    resp = await analytics.handle_analytics(links_store, analytics_store, viewer, slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, viewer, slug, 30, fake_get_many)
     assert resp.status == 200
 
 
@@ -60,7 +60,7 @@ async def test_analytics_edit_all_permission_can_view_others_links():
     analytics_store = FakeStore()
     slug = await _make_link(links_store, owner="alice")
     editor = _principal(username="dave", permissions=["links.edit_all"])
-    resp = await analytics.handle_analytics(links_store, analytics_store, editor, slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, editor, slug, 30, fake_get_many)
     assert resp.status == 200
 
 
@@ -68,7 +68,7 @@ async def test_analytics_no_clicks_yet_returns_zeros():
     links_store = FakeStore()
     analytics_store = FakeStore()
     slug = await _make_link(links_store)
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["total"] == 0
@@ -89,7 +89,7 @@ async def test_analytics_reports_count_and_events():
     await analytics_store.set(f"events:{slug}:0", b"1000|https://ref-a.example/|desktop")
     await analytics_store.set(f"events:{slug}:1", b"2000|https://ref-b.example/|mobile")
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["total"] == 3
@@ -110,7 +110,7 @@ async def test_analytics_skips_malformed_event_entries():
     await analytics_store.set(f"events:{slug}:0", b"not-a-valid-event-format")
     await analytics_store.set(f"events:{slug}:1", b"2000|https://ref-b.example/|mobile")
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert len(body["recent_events"]) == 1
@@ -126,7 +126,7 @@ async def test_analytics_sums_counts_across_shards():
     await analytics_store.set(f"count:{slug}:7", json.dumps({"total": 2, "days": {"2026-01-02": 2}}).encode("utf-8"))
     await analytics_store.set(f"count:{slug}:15", json.dumps({"total": 5, "days": {"2026-01-03": 5}}).encode("utf-8"))
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["total"] == 11
@@ -144,7 +144,7 @@ async def test_analytics_sums_the_legacy_key_alongside_shards():
     await analytics_store.set(f"count:{slug}", json.dumps({"total": 100, "days": {"2025-12-31": 100}}).encode("utf-8"))
     await analytics_store.set(f"count:{slug}:3", json.dumps({"total": 7, "days": {"2025-12-31": 2, "2026-01-01": 5}}).encode("utf-8"))
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     body = json.loads(resp.body)
     assert body["total"] == 107
     assert body["days"] == {"2025-12-31": 102, "2026-01-01": 5}
@@ -161,7 +161,7 @@ async def test_analytics_skips_an_unparseable_shard_without_blanking_the_total()
     await analytics_store.set(f"count:{slug}:2", b"[1, 2, 3]")  # valid JSON, wrong shape
     await analytics_store.set(f"count:{slug}:4", json.dumps({"total": 9, "days": {"2026-01-02": 9}}).encode("utf-8"))
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["total"] == 15
@@ -178,7 +178,7 @@ async def test_analytics_reads_every_shard_up_to_count_shards():
     for shard in range(analytics.COUNT_SHARDS):
         await analytics_store.set(f"count:{slug}:{shard}", json.dumps({"total": 1, "days": {"2026-01-01": 1}}).encode("utf-8"))
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 30, fake_get_many)
     body = json.loads(resp.body)
     assert body["total"] == analytics.COUNT_SHARDS
     assert body["days"] == {"2026-01-01": analytics.COUNT_SHARDS}
@@ -192,7 +192,7 @@ async def test_analytics_only_reads_configured_number_of_slots():
     await analytics_store.set(f"events:{slug}:0", b"1000|https://in-range.example/|desktop")
     await analytics_store.set(f"events:{slug}:5", b"2000|https://out-of-range.example/|desktop")
 
-    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 3)
+    resp = await analytics.handle_analytics(links_store, analytics_store, _principal(), slug, 3, fake_get_many)
     body = json.loads(resp.body)
     assert len(body["recent_events"]) == 1
     assert body["recent_events"][0]["referrer"] == "https://in-range.example/"

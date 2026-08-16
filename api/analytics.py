@@ -2,13 +2,11 @@
 writes into the `analytics` KV store on every successful click.
 """
 
-import asyncio
 import json
 from datetime import datetime, timezone
 
 import links
 from auth import Principal
-from kvbatch import gather_reads
 from links import can_view, get_link, owned_slugs
 from responses import json_response, to_iso8601_utc_ms
 
@@ -97,7 +95,7 @@ def _parse_event(raw: bytes) -> dict | None:
     return {"timestamp": timestamp, "unix_ms": unix_ms, "referrer": referrer, "device_class": device_class}
 
 
-async def handle_click_totals(links_store, analytics_store, principal: Principal, list_keys):
+async def handle_click_totals(links_store, analytics_store, principal: Principal, list_keys, get_many):
     """Click totals for every link the caller can see, for the dashboard's
     Clicks column. Totals only — no per-day map, no events.
 
@@ -116,6 +114,16 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     becomes proportional to real traffic rather than to links x shard count,
     which also means raising COUNT_SHARDS again does not multiply this
     endpoint's cost the way it would have multiplied the naive one.
+
+    Since docs/plans/batch-kv-reads.md, those reads are also issued through
+    `get_many` (kvbatch.scoped_get_many) rather than `gather_reads`: the
+    read COUNT is unchanged (still exactly the shard keys that exist), but
+    it now costs one host call per MAX_KEYS_PER_GET_MANY-sized chunk instead
+    of one host call per key — at the modelled ceiling of ~6,100 keys for a
+    100-link x 200-click dashboard load, a handful of chunked calls instead
+    of thousands of individual round trips. This is a LATENCY fix, not
+    (necessarily) a read-cap fix — see kvbatch.py's docstring and TASKS.md's
+    "BOTH SPIKES ANSWERED" for the measured quota-accounting answer.
 
     Rejected alternative, recorded so it is not re-proposed: maintaining a
     denormalized `analytics:total:<slug>` would make this O(N) reads, but it
@@ -145,8 +153,7 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
             wanted.setdefault(slug, []).append(key)
 
     flat = [key for slug_keys in wanted.values() for key in slug_keys]
-    values = await gather_reads(analytics_store.get(key) for key in flat)
-    by_key = dict(zip(flat, values))
+    by_key = await get_many(analytics_store, flat)
 
     totals = {}
     for slug in visible:
@@ -156,23 +163,21 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     return json_response(200, {"totals": totals})
 
 
-async def handle_analytics(links_store, analytics_store, principal: Principal, slug: str, num_event_slots: int):
+async def handle_analytics(
+    links_store, analytics_store, principal: Principal, slug: str, num_event_slots: int, get_many
+):
     record = await get_link(links_store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
     if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
 
-    # Every read below is independent, so they are issued together rather than
-    # one after another. Sequentially this endpoint costs one KV round trip per
-    # shard plus one per event slot, which is what makes the shard count show up
-    # directly in page latency; concurrently it costs about one round trip in
-    # total, which is what decouples COUNT_SHARDS from how slow this page feels.
-    #
-    # Whether the host actually overlaps them is visible in the logfmt line:
-    # kv_us is the SUM of per-operation durations while dur_us is wall time, so
-    # kv_us >> dur_us means real overlap and kv_us ~= dur_us means the awaits
-    # ran one at a time. Correctness does not depend on the answer.
+    # Every key below is independent, so they are all fetched in one
+    # get_many host call (docs/plans/batch-kv-reads.md) rather than one
+    # round trip per shard plus one per event slot — which is what used to
+    # make COUNT_SHARDS show up directly in page latency. Correctness does
+    # not depend on how many host calls this costs; only kv_ops/kv_keys in
+    # the logfmt line make that visible.
     #
     # The legacy unsharded key goes first — nothing writes it any more, but
     # clicks recorded before sharding landed still live there, so summing it in
@@ -180,13 +185,12 @@ async def handle_analytics(links_store, analytics_store, principal: Principal, s
     count_keys = [f"count:{slug}"] + [f"count:{slug}:{shard}" for shard in range(COUNT_SHARDS)]
     event_keys = [f"events:{slug}:{slot}" for slot in range(num_event_slots)]
 
-    fetched = await asyncio.gather(
-        *(analytics_store.get(key) for key in count_keys + event_keys)
-    )
-    total, days = _merge_counts(fetched[:len(count_keys)])
+    fetched = await get_many(analytics_store, count_keys + event_keys)
+    total, days = _merge_counts(fetched.get(key) for key in count_keys)
 
     events = []
-    for raw in fetched[len(count_keys):]:
+    for key in event_keys:
+        raw = fetched.get(key)
         if raw is None:
             continue
         event = _parse_event(raw)
