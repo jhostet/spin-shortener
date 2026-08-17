@@ -1942,3 +1942,36 @@ while `GET /api/admin/consistency` still reported `unreadable_value: 1` — so t
 skipped, not concealed, and the tool whose job it is still surfaces it. `handle_get` on that slug
 is deliberately left alone; whether it should 404 or 500 is a different question and it fails only
 the one request rather than the whole page.
+
+### DEPLOYED AND TRACED (2026-08-17) — `4cd6c30-repair-and-500fix`
+
+Both changes shipped together, since the 500 was live in production and its fix is a few lines.
+CLI hit its usual readiness timeout; live ~120 s later; all five variables verified.
+
+**The repair was traced against REAL drift, not a clean store** — a clean store only exercises the
+no-op path. Drift was created the same way the original incident happened: six bulk creates and
+six bulk deletes fired concurrently, pushing writes past the 50/s cap. That produced **87
+`unindexed_link` + 87 `unindexed_owner_link`** — 87 live records resolving at `/r/` but **invisible
+in the dashboard**.
+
+| | result |
+|---|---|
+| repair, 174 findings | **13 KV ops, 368 ms wall** |
+| `unindexed_link` | findings 87, repaired 87, blocked 0 |
+| `unindexed_owner_link` | findings 87, repaired 87, blocked 0 |
+| consistency afterwards | **`ok: true`, zero findings** |
+| links visible afterwards | **101** (14 + 87 recovered from invisibility) |
+| no-op repair on a clean store | 9 ops, 155 ms, 0 writes |
+| `GET /api/admin/consistency` (clean) | 9 ops, 154–193 ms |
+
+**174 findings repaired in 13 KV operations is the O(distinct index keys) claim holding on real
+data** — the decision that justified per-check rather than per-finding granularity. Per-finding
+control would have offered the operator 174 checkboxes to express what is physically two writes.
+
+**Cleanup used the paced form deliberately**, sequential batches with a pause rather than the
+concurrent burst that created the drift in the first place — and produced none of its own. Store
+back to 14 links, 37 analytics keys, **zero orphans, zero findings**.
+
+**The 500 fix is live too**: `GET /api/links` returns 200 on the deployed build, and locally, with
+one corrupt record, it returns **5 of 6 links instead of a 500** while the consistency check still
+reports `unreadable_value: 1`.
