@@ -26,6 +26,19 @@ class FakeStore:
         return list(self._data.keys())
 
 
+class WriteRaisingStore(FakeStore):
+    """A FakeStore whose `set`/`delete` raise — used to pin that a read-only
+    handler (e.g. `consistency.handle_consistency`) never writes. `get`,
+    `exists` and `keys()` behave exactly like FakeStore, so this can seed and
+    be read from normally; only a write is fatal."""
+
+    async def set(self, key: str, value: bytes) -> None:
+        raise AssertionError(f"unexpected write: set({key!r})")
+
+    async def delete(self, key: str) -> None:
+        raise AssertionError(f"unexpected write: delete({key!r})")
+
+
 async def fake_list_keys(store) -> list[str]:
     """Stands in for app.py's real `_kv_keys` drain helper (the `get_keys`
     stream/future pair), so backup.py's pure handlers can be exercised without

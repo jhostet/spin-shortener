@@ -14,7 +14,7 @@ import json
 
 import auth
 import consistency
-from tests.fakes import FakeStore, fake_get_many, fake_list_keys
+from tests.fakes import FakeStore, WriteRaisingStore, fake_get_many, fake_list_keys
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -54,6 +54,72 @@ def test_checks_tuple_has_the_twelve_ids_and_severities_in_order():
         ("unreadable_value", "warning"),
         ("unrecognized_key", "info"),
     )
+
+
+def test_repairable_checks_is_exactly_the_eight_in_checks_order():
+    assert consistency.REPAIRABLE_CHECKS == (
+        "unindexed_link",
+        "missing_link_record",
+        "unindexed_owner_link",
+        "orphan_owner_index_entry",
+        "dangling_owner_index",
+        "unindexed_user",
+        "missing_user_record",
+        "orphan_session",
+    )
+    check_ids_in_order = [check_id for check_id, _ in consistency.CHECKS]
+    assert set(consistency.REPAIRABLE_CHECKS) <= set(check_ids_in_order)
+    # Same relative order as CHECKS.
+    positions = [check_ids_in_order.index(c) for c in consistency.REPAIRABLE_CHECKS]
+    assert positions == sorted(positions)
+
+
+def test_build_report_emits_repairable_checks():
+    report = consistency.build_report(
+        [], {"findings": 0, "checks_with_findings": 0, "checks_skipped": 0}, {},
+        generated_at="x", generated_by="admin",
+    )
+    assert report["repairable_checks"] == list(consistency.REPAIRABLE_CHECKS)
+
+
+async def test_analyze_max_findings_none_returns_every_finding_uncapped():
+    links_data = {"all_links": _j([f"ghost{i}" for i in range(120)])}
+    links_store = FakeStore(links_data)
+    users_store = FakeStore({})
+    collected = await consistency.collect({"links": links_store, "users": users_store}, fake_list_keys, fake_get_many)
+    checks, totals = consistency.analyze(collected, max_findings=None)
+    by_id = _by_id(checks)
+    missing = by_id["missing_link_record"]
+    assert missing["count"] == 120
+    assert len(missing["findings"]) == 120
+    assert missing["truncated"] is False
+    assert all(not c["truncated"] for c in checks)
+    assert totals["findings"] == 120
+
+
+async def test_collect_present_slugs_includes_unreadable_records():
+    collected = await consistency.collect(
+        {"links": FakeStore({"slug:bad": b"not-json", "slug:ok": _j({"owner": "carol"})}), "users": FakeStore({})},
+        fake_list_keys, fake_get_many,
+    )
+    assert collected["present_slugs"] == {"bad", "ok"}
+    # "bad" is present but unreadable, so it must NOT appear in link_records.
+    assert "bad" not in collected["link_records"]
+
+
+async def test_collect_sessions_by_username_groups_session_key_names():
+    collected = await consistency.collect(
+        {"links": FakeStore({}), "users": FakeStore({
+            "session:tok1": _j({"username": "nobody"}),
+            "session:tok2": _j({"username": "nobody"}),
+            "session:tok3": _j({"username": "carol"}),
+        })},
+        fake_list_keys, fake_get_many,
+    )
+    assert sorted(collected["sessions_by_username"]["nobody"]) == ["session:tok1", "session:tok2"]
+    assert collected["sessions_by_username"]["carol"] == ["session:tok3"]
+    # session_usernames stays unchanged (a flat list, not grouped).
+    assert sorted(collected["session_usernames"]) == ["carol", "nobody", "nobody"]
 
 
 # --- Each check, in isolation ---
@@ -392,6 +458,37 @@ async def test_handle_consistency_never_leaks_password_hash():
     assert resp.status == 200
     assert b"password_hash" not in resp.body
     assert b"pbkdf2_sha256" not in resp.body
+
+
+async def test_handle_consistency_performs_zero_writes_over_a_store_with_real_drift():
+    """Seeds findings from at least four different checks (unindexed_link,
+    missing_link_record, dangling_owner_index, orphan_session) and exercises
+    `handle_consistency` against stores whose `set`/`delete` raise. If this
+    read-only handler ever gains a write, this test fails loudly instead of
+    the write silently landing.
+
+    Verified live during development that this actually guards something:
+    temporarily adding `await links_store.set("probe", b"1")` inside
+    `consistency.collect` makes this test FAIL (reverted before commit)."""
+    links_store = WriteRaisingStore({
+        "slug:foo": _j({"owner": "carol"}),          # -> unindexed_link
+        "all_links": _j(["ghost"]),                   # -> missing_link_record
+        "owner_links:nobody": _j(["ghost2"]),         # -> dangling_owner_index
+    })
+    users_store = WriteRaisingStore({
+        "session:tok1": _j({"username": "nobody", "csrf_token": "x"}),  # -> orphan_session
+        "_meta:usernames": _j([]),
+    })
+    resp = await consistency.handle_consistency(
+        {"links": links_store, "users": users_store}, _principal(), fake_list_keys, fake_get_many)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    by_id = _by_id(body["checks"])
+    assert by_id["unindexed_link"]["count"] >= 1
+    assert by_id["missing_link_record"]["count"] >= 1
+    assert by_id["dangling_owner_index"]["count"] >= 1
+    assert by_id["orphan_session"]["count"] >= 1
+    assert body["ok"] is False
 
 
 async def test_collect_never_even_reads_a_user_record_value():

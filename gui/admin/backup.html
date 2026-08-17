@@ -67,11 +67,15 @@
           Reads the links and users stores and reports anything out of step —
           a link missing from an index, an index entry with no link, a link
           owned by an account that no longer exists.
-          <strong>It only reports; it never changes anything.</strong>
+          <strong>The check itself only reads.</strong>
+          Where a finding has exactly one safe fix, a Repair button appears
+          with it — nothing is changed until you click it. Findings without a
+          button need a judgement call; each one says what to do instead.
           Most useful straight after a restore. If a finding appears while
           people are actively creating links, run it again — a report taken
           during a write can show a finding that isn't real, and a real one
-          shows up on both runs.
+          shows up on both runs — and prefer a quiet moment for repairs, which
+          share the same write budget as click recording.
         </p>
         <button type="button" id="consistency-btn" class="outline">Run consistency check</button>
         <p id="consistency-error" class="form-error" role="alert"></p>

@@ -24,6 +24,7 @@ import json
 import auth
 import bulk
 import consistency
+import consistencyrepair
 import links
 import users
 from responses import Request
@@ -307,3 +308,67 @@ async def test_motivating_case_unindexed_owner_link_pins_the_user_deletion_gap()
     # the record, so carol is still deletable -- orphaning her own link.
     resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys)
     assert resp.status == 200
+
+
+# --- The 2026-08-15 throttled-write incident, and its repair ---------------
+
+
+def _j(obj) -> bytes:
+    return json.dumps(obj).encode("utf-8")
+
+
+def _repair_request(payload):
+    return Request(
+        method="POST", uri="/api/admin/consistency/repair", headers={},
+        body=json.dumps(payload).encode("utf-8"),
+    )
+
+
+async def test_the_2026_08_15_throttled_write_incident_repairs_in_two_writes():
+    """Reproduces the incident recorded in docs/plans/consistency-repair.md:
+    throttled index writes past Akamai's 50/s cap left 20 unindexed_link, 20
+    unindexed_owner_link, 152 missing_link_record and 152
+    orphan_owner_index_entry findings — 344 findings touching exactly two KV
+    keys (`all_links` and `owner_links:admin`), which is the whole reason a
+    repair here is cheap, bounded and safe."""
+    links_data = {"all_links": _j([f"ghost{i}" for i in range(152)])}
+    for i in range(20):
+        links_data[f"slug:extra{i}"] = _j({"owner": "admin"})
+    links_data["owner_links:admin"] = _j([f"gone{i}" for i in range(152)])
+    users_data = {"user:admin": _j({}), "_meta:usernames": _j(["admin"])}
+
+    links_store = FakeStore(links_data)
+    users_store = FakeStore(users_data)
+    admin = _principal("admin", role="admin")
+
+    report = await consistency.handle_consistency(
+        {"links": links_store, "users": users_store}, admin, fake_list_keys, fake_get_many)
+    assert report.status == 200
+    body = json.loads(report.body)
+    assert body["ok"] is False
+    by_id = _by_id(body["checks"])
+    assert by_id["unindexed_link"]["count"] == 20
+    assert by_id["unindexed_owner_link"]["count"] == 20
+    assert by_id["missing_link_record"]["count"] == 152
+    assert by_id["orphan_owner_index_entry"]["count"] == 152
+
+    repair_resp = await consistencyrepair.handle_repair(
+        {"links": links_store, "users": users_store}, admin,
+        _repair_request({
+            "confirm": "REPAIR",
+            "checks": ["unindexed_link", "missing_link_record", "unindexed_owner_link", "orphan_owner_index_entry"],
+        }),
+        fake_list_keys, fake_get_many,
+    )
+    assert repair_resp.status == 200
+    repair_body = json.loads(repair_resp.body)
+    assert repair_body["writes"] == 2
+    assert repair_body["complete"] is True
+
+    fresh_report = await consistency.handle_consistency(
+        {"links": links_store, "users": users_store}, admin, fake_list_keys, fake_get_many)
+    fresh_body = json.loads(fresh_report.body)
+    assert fresh_body["ok"] is True
+    assert len(fresh_body["checks"]) == 12
+    for check in fresh_body["checks"]:
+        assert check["count"] == 0, check

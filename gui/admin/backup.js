@@ -179,22 +179,70 @@ document.getElementById("restore-btn").addEventListener("click", async () => {
 // back to the raw check id below for an id this map doesn't know, so a check
 // added server-side without a label here renders as itself, not "undefined".
 const CONSISTENCY_CHECK_LABELS = {
-  unindexed_link: { title: "Links missing from the index", meaning: "A link record exists but isn't listed in the all-links index, so it's invisible to the dashboard even though it still resolves." },
-  missing_link_record: { title: "Index entries with no link", meaning: "The all-links index names a slug that has no backing record. Harmless — the dashboard already skips it." },
-  unindexed_owner_link: { title: "Links missing from their owner's index", meaning: "A link's owner record doesn't list it, so it's invisible on that owner's dashboard and deleting the owner would silently orphan it." },
-  owner_index_mismatch: { title: "Links indexed under the wrong owner", meaning: "A link is listed under one owner's index but its record names a different owner, so that owner can't edit or delete it." },
-  orphan_owner_index_entry: { title: "Owner index entries with no link", meaning: "An owner's index names a slug that has no backing record. Harmless — the dashboard already skips it." },
-  unknown_link_owner: { title: "Links owned by a deleted account", meaning: "A link's record names an owner with no user record, so nobody can edit it and its owner can never be contacted." },
-  dangling_owner_index: { title: "Owner indexes for deleted accounts", meaning: "An owner index still lists links for a username with no user record. If that username is ever recreated, it would inherit these links." },
-  unindexed_user: { title: "Users missing from the username index", meaning: "A user record exists but isn't listed in the usernames index, so the account can sign in but is invisible to user administration." },
-  missing_user_record: { title: "Username index entries with no user", meaning: "The usernames index names a user with no backing record. Harmless — recreating that username resolves it." },
-  orphan_session: { title: "Sessions for deleted accounts", meaning: "A session names a username with no user record. Inert for now, but it would resolve again if that username were ever recreated." },
-  unreadable_value: { title: "Unreadable values", meaning: "A key's value couldn't be parsed into its expected shape. It's excluded from every other check, which can mask other findings — fix or remove it and run again." },
-  unrecognized_key: { title: "Unrecognized keys", meaning: "A key matches none of the known shapes for this store. It may be junk, or a new key type that this check needs to be taught about." },
+  unindexed_link: {
+    title: "Links missing from the index",
+    meaning: "A link record exists but isn't listed in the all-links index, so it's invisible to the dashboard even though it still resolves.",
+    fix: "Adds these slugs back to the all-links index.",
+  },
+  missing_link_record: {
+    title: "Index entries with no link",
+    meaning: "The all-links index names a slug that has no backing record. Harmless — the dashboard already skips it.",
+    fix: "Removes these slugs from the all-links index.",
+  },
+  unindexed_owner_link: {
+    title: "Links missing from their owner's index",
+    meaning: "A link's owner record doesn't list it, so it's invisible on that owner's dashboard and deleting the owner would silently orphan it.",
+    fix: "Adds these slugs back to their owner's index.",
+  },
+  owner_index_mismatch: {
+    title: "Links indexed under the wrong owner",
+    meaning: "A link is listed under one owner's index but its record names a different owner, so that owner can't edit or delete it.",
+    fix: "Reassign or delete these links from the dashboard's owner filter.",
+  },
+  orphan_owner_index_entry: {
+    title: "Owner index entries with no link",
+    meaning: "An owner's index names a slug that has no backing record. Harmless — the dashboard already skips it.",
+    fix: "Removes these slugs from the owner's index.",
+  },
+  unknown_link_owner: {
+    title: "Links owned by a deleted account",
+    meaning: "A link's record names an owner with no user record, so nobody can edit it and its owner can never be contacted.",
+    fix: "Reassign or delete these links from the dashboard's owner filter.",
+  },
+  dangling_owner_index: {
+    title: "Owner indexes for deleted accounts",
+    meaning: "An owner index still lists links for a username with no user record. If that username is ever recreated, it would inherit these links.",
+    fix: "Deletes the owner index for these usernames.",
+  },
+  unindexed_user: {
+    title: "Users missing from the username index",
+    meaning: "A user record exists but isn't listed in the usernames index, so the account can sign in but is invisible to user administration.",
+    fix: "Adds these usernames back to the usernames index.",
+  },
+  missing_user_record: {
+    title: "Username index entries with no user",
+    meaning: "The usernames index names a user with no backing record. Harmless — recreating that username resolves it.",
+    fix: "Removes these usernames from the usernames index.",
+  },
+  orphan_session: {
+    title: "Sessions for deleted accounts",
+    meaning: "A session names a username with no user record. Inert for now, but it would resolve again if that username were ever recreated.",
+    fix: "Deletes these sessions.",
+  },
+  unreadable_value: {
+    title: "Unreadable values",
+    meaning: "A key's value couldn't be parsed into its expected shape. It's excluded from every other check, which can mask other findings — fix or remove it and run again.",
+    fix: "Inspect the key with the KV explorer and repair or delete it by hand.",
+  },
+  unrecognized_key: {
+    title: "Unrecognized keys",
+    meaning: "A key matches none of the known shapes for this store. It may be junk, or a new key type that this check needs to be taught about.",
+    fix: "Inspect the key with the KV explorer — do not delete it without understanding what wrote it.",
+  },
 };
 
 function consistencyCheckLabel(checkId) {
-  return CONSISTENCY_CHECK_LABELS[checkId] || { title: checkId, meaning: "" };
+  return CONSISTENCY_CHECK_LABELS[checkId] || { title: checkId, meaning: "", fix: "" };
 }
 
 function renderConsistencyFindings(findings) {
@@ -216,8 +264,25 @@ function renderConsistencyFindings(findings) {
   return `<ul class="finding-list">${items}</ul>`;
 }
 
-function renderConsistencyCheck(check, { showSkippedNote } = {}) {
-  const { title, meaning } = consistencyCheckLabel(check.check);
+function renderBlockedEntries(blocked) {
+  if (!blocked || !blocked.length) return "";
+  const items = blocked
+    .map((b) => {
+      const parts = [];
+      if (b.slug) parts.push(slugChip(String(b.slug), { linked: true }));
+      if (b.username) parts.push(`<span class="finding-field"><span class="finding-key">username</span> ${escapeHtml(b.username)}</span>`);
+      parts.push(`<span class="finding-field"><span class="finding-key">reason</span> ${escapeHtml(b.reason)}</span>`);
+      if (b.next_step) {
+        parts.push(`<span class="finding-field"><span class="finding-key">next step</span> Repair ${escapeHtml(consistencyCheckLabel(b.next_step).title)} first, then run this again</span>`);
+      }
+      return `<li>${parts.join(" ")}</li>`;
+    })
+    .join("");
+  return `<p><strong>Blocked — needs a judgement call:</strong></p><ul class="finding-list">${items}</ul>`;
+}
+
+function renderConsistencyCheck(check, { showSkippedNote, repairableChecks = [], blockedByCheck = {} } = {}) {
+  const { title, meaning, fix } = consistencyCheckLabel(check.check);
   const heading = showSkippedNote
     ? `<h3>${escapeHtml(title)}</h3>`
     : `<h3>${escapeHtml(title)} — ${check.count}</h3>`;
@@ -228,12 +293,18 @@ function renderConsistencyCheck(check, { showSkippedNote } = {}) {
   const truncatedHtml = check.truncated
     ? `<p>Showing the first ${check.max_findings_per_check} of ${check.count}.</p>`
     : "";
-  return `${heading}${meaningHtml}${renderConsistencyFindings(check.findings)}${truncatedHtml}`;
+  const canRepair = repairableChecks.includes(check.check) && check.count > 0 && !check.skipped;
+  const fixHtml = fix ? `<p class="form-note">${escapeHtml(fix)}</p>` : "";
+  const repairButtonHtml = canRepair
+    ? `<button type="button" class="outline repair-btn" data-check="${escapeHtml(check.check)}">Repair</button>`
+    : "";
+  const blockedHtml = renderBlockedEntries(blockedByCheck[check.check]);
+  return `${heading}${meaningHtml}${renderConsistencyFindings(check.findings)}${truncatedHtml}${fixHtml}${repairButtonHtml}${blockedHtml}`;
 }
 
-function renderConsistencyReport(report) {
-  const resultEl = document.getElementById("consistency-result");
+let latestConsistencyReport = null;
 
+function buildConsistencyReportHtml(report, { blockedByCheck = {} } = {}) {
   if (report.ok) {
     const totalKeys = Object.values(report.scanned || {}).reduce((sum, s) => sum + (s.keys || 0), 0);
     const ran = report.checks || [];
@@ -244,7 +315,7 @@ function renderConsistencyReport(report) {
     const checkList = ran
       .map((c) => `<li>${escapeHtml(consistencyCheckLabel(c.check).title)}${c.skipped ? " <em>(not checked)</em>" : ""}</li>`)
       .join("");
-    resultEl.innerHTML = `
+    return `
       <p class="form-success">
         All ${ran.length} check${ran.length === 1 ? "" : "s"} passed — ${totalKeys} keys scanned across the links and users stores.
       </p>
@@ -253,25 +324,38 @@ function renderConsistencyReport(report) {
         <ul>${checkList}</ul>
       </details>
     `;
-    return;
   }
 
+  const repairableChecks = report.repairable_checks || [];
   const needsAttention = report.checks.filter((c) => c.severity === "warning" && c.count > 0 && !c.skipped);
   const informational = report.checks.filter((c) => c.severity === "info" && c.count > 0 && !c.skipped);
   const notChecked = report.checks.filter((c) => c.skipped);
 
+  const repairableWithFindings = report.checks.filter(
+    (c) => repairableChecks.includes(c.check) && c.count > 0 && !c.skipped
+  );
+
   const sections = [];
+  if (repairableWithFindings.length >= 2) {
+    sections.push(`<button type="button" class="outline" id="repair-all-btn">Repair all repairable findings</button>`);
+  }
+  const renderOpts = (extra) => ({ repairableChecks, blockedByCheck, ...extra });
   if (needsAttention.length) {
-    sections.push(`<h2>Needs attention</h2>${needsAttention.map((c) => renderConsistencyCheck({ ...c, max_findings_per_check: report.max_findings_per_check })).join("")}`);
+    sections.push(`<h2>Needs attention</h2>${needsAttention.map((c) => renderConsistencyCheck({ ...c, max_findings_per_check: report.max_findings_per_check }, renderOpts())).join("")}`);
   }
   if (informational.length) {
-    sections.push(`<h2>Informational</h2>${informational.map((c) => renderConsistencyCheck({ ...c, max_findings_per_check: report.max_findings_per_check })).join("")}`);
+    sections.push(`<h2>Informational</h2>${informational.map((c) => renderConsistencyCheck({ ...c, max_findings_per_check: report.max_findings_per_check }, renderOpts())).join("")}`);
   }
   if (notChecked.length) {
     sections.push(`<h2>Not checked</h2>${notChecked.map((c) => renderConsistencyCheck(c, { showSkippedNote: true })).join("")}`);
   }
 
-  resultEl.innerHTML = sections.join("");
+  return sections.join("");
+}
+
+function renderConsistencyReport(report, opts) {
+  latestConsistencyReport = report;
+  document.getElementById("consistency-result").innerHTML = buildConsistencyReportHtml(report, opts);
 }
 
 document.getElementById("consistency-btn").addEventListener("click", async () => {
@@ -287,6 +371,118 @@ document.getElementById("consistency-btn").addEventListener("click", async () =>
   }
 
   renderConsistencyReport(data);
+});
+
+// Call-site override map for POST /admin/consistency/repair's error codes —
+// the same pattern PURGE_ERROR_MESSAGES follows, and necessary for the same
+// reason: BACKUP_ERROR_MESSAGES.confirmation_required reads "Type REPLACE
+// exactly to confirm", which is wrong for a confirmation set programmatically
+// rather than typed.
+const REPAIR_ERROR_MESSAGES = {
+  confirmation_required: "Something went wrong confirming this action — try again.",
+  no_checks: "There's nothing selected to repair.",
+  unknown_check: "That check doesn't exist.",
+  check_not_repairable: "That finding needs a judgement call — see its note for what to do instead.",
+  duplicate_check: "The same check appeared twice in this request.",
+};
+
+let repairStopped = false;
+
+async function onRepairClick(checkIds) {
+  const report = latestConsistencyReport;
+  if (!report) return;
+  const byId = Object.fromEntries(report.checks.map((c) => [c.check, c]));
+  const totalFindings = checkIds.reduce((sum, id) => sum + (byId[id] ? byId[id].count : 0), 0);
+  const confirmed = await confirmDialog(
+    `Repair ${totalFindings} finding${totalFindings === 1 ? "" : "s"} across ${checkIds.length} check${checkIds.length === 1 ? "" : "s"}? This rewrites index keys and can't be undone.`,
+    { confirmLabel: "Repair" },
+  );
+  if (!confirmed) return;
+  await runConsistencyRepair(checkIds);
+}
+
+async function runConsistencyRepair(checkIds) {
+  repairStopped = false;
+  const errorEl = document.getElementById("consistency-error");
+  const resultEl = document.getElementById("consistency-result");
+  errorEl.textContent = "";
+
+  let totalWrites = 0;
+  const blockedByCheck = {};
+  let lastData = null;
+
+  resultEl.innerHTML = `<p id="repair-progress" aria-live="polite">Repairing…</p><button type="button" id="repair-stop-btn" class="outline">Stop</button>`;
+  document.getElementById("repair-stop-btn").onclick = () => { repairStopped = true; };
+
+  // Chunked loop, modelled on runOrphanPurge: re-detects and re-plans every
+  // pass rather than trusting anything from a previous pass or the report
+  // the operator was looking at.
+  for (;;) {
+    const { ok, data } = await api.post("/admin/consistency/repair", { confirm: "REPAIR", checks: checkIds });
+    if (!ok) {
+      errorEl.textContent = friendlyError(data, "Could not repair these findings.", REPAIR_ERROR_MESSAGES);
+      return;
+    }
+    lastData = data;
+    totalWrites += data.writes;
+    for (const b of data.blocked) {
+      (blockedByCheck[b.check] = blockedByCheck[b.check] || []).push(b);
+    }
+    document.getElementById("repair-progress").textContent = `Repaired ${totalWrites} writes so far…`;
+    if (data.complete || repairStopped) break;
+    if (data.writes === 0) {
+      document.getElementById("repair-progress").textContent = "Repair made no progress.";
+      document.getElementById("repair-stop-btn").hidden = true;
+      return;
+    }
+  }
+
+  // De-duplicate blocked entries accumulated across passes — the same
+  // still-blocked finding is reported again on every re-detecting pass.
+  for (const checkId of Object.keys(blockedByCheck)) {
+    const seen = new Set();
+    blockedByCheck[checkId] = blockedByCheck[checkId].filter((b) => {
+      const key = JSON.stringify(b);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  const { ok, data: freshReport } = await api.get("/admin/consistency");
+  if (!ok) {
+    errorEl.textContent = friendlyError(freshReport, "Could not run the consistency check.", BACKUP_ERROR_MESSAGES);
+    return;
+  }
+
+  const totalRepaired = lastData.checks.reduce((sum, c) => sum + c.repaired, 0);
+  const summaryHtml = repairStopped
+    ? `<p>Stopped. Repaired ${totalWrites} write${totalWrites === 1 ? "" : "s"} so far.</p>`
+    : `<p class="form-success">Repaired ${totalRepaired} finding${totalRepaired === 1 ? "" : "s"} in ${totalWrites} write${totalWrites === 1 ? "" : "s"}.</p>`;
+
+  latestConsistencyReport = freshReport;
+  document.getElementById("consistency-result").innerHTML =
+    summaryHtml + buildConsistencyReportHtml(freshReport, { blockedByCheck });
+}
+
+// Event delegation, not per-render listener attachment: repair buttons are
+// rendered dynamically (inside innerHTML swaps), so one listener on the
+// container that survives every re-render is simpler and cannot double-fire.
+document.getElementById("consistency-result").addEventListener("click", (e) => {
+  const repairBtn = e.target.closest(".repair-btn");
+  if (repairBtn) {
+    onRepairClick([repairBtn.dataset.check]);
+    return;
+  }
+  if (e.target.closest("#repair-all-btn")) {
+    const report = latestConsistencyReport;
+    if (!report) return;
+    const repairableChecks = report.repairable_checks || [];
+    const ids = report.checks
+      .filter((c) => repairableChecks.includes(c.check) && c.count > 0 && !c.skipped)
+      .map((c) => c.check);
+    onRepairClick(ids);
+  }
 });
 
 // Call-site override map, passed as friendlyError's third argument exactly

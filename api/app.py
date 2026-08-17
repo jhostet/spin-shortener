@@ -12,6 +12,7 @@ import auth
 import backup
 import bulk
 import consistency
+import consistencyrepair
 import domains
 import kvbatch
 import kvprefix
@@ -366,6 +367,18 @@ class HttpHandler(Handler):
             # docs/plans/kv-consistency-check.md's rejected alternatives.
             return await consistency.handle_consistency(
                 {"links": links_store, "users": users_store}, result, list_keys, get_many,
+            )
+
+        if path == "/api/admin/consistency/repair" and method == "POST":
+            result = await _require_session(users_store, request)
+            if isinstance(result, Response):
+                return result
+            # The analytics view is deliberately NOT passed here either, for
+            # the same reason the read-only endpoint above doesn't receive
+            # it: orphaned analytics is normal state with its own shipped
+            # tool (docs/plans/analytics-orphan-purge.md).
+            return await consistencyrepair.handle_repair(
+                {"links": links_store, "users": users_store}, result, request, list_keys, get_many,
             )
 
         if path == "/api/admin/analytics/orphans" and method == "GET":

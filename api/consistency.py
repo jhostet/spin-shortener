@@ -53,7 +53,26 @@ CHECKS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _parse_str_list(raw: bytes | None) -> list[str] | None:
+# The eight checks with exactly one safe, derivable, automatic repair, in
+# CHECKS order — consistencyrepair.py's whole mandate. Named here, not in the
+# repairing module, so `build_report` can publish it without `consistency`
+# importing its repairing sibling (which imports `consistency`). See
+# docs/plans/consistency-repair.md for the per-check verdict and why the
+# other four (owner_index_mismatch, unknown_link_owner, unreadable_value,
+# unrecognized_key) are never repaired.
+REPAIRABLE_CHECKS: tuple[str, ...] = (
+    "unindexed_link",
+    "missing_link_record",
+    "unindexed_owner_link",
+    "orphan_owner_index_entry",
+    "dangling_owner_index",
+    "unindexed_user",
+    "missing_user_record",
+    "orphan_session",
+)
+
+
+def parse_str_list(raw: bytes | None) -> list[str] | None:
     """None for both an absent key and a malformed value — callers
     distinguish the two by checking `raw is None` themselves."""
     if raw is None:
@@ -127,8 +146,11 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
           "usernames": list[str] | None,            # None only if unreadable
           "user_records": set[str],                 # from user: KEY NAMES only
           "session_usernames": list[str],           # from session: values
+          "sessions_by_username": {username: [session KEY names]},
           "unreadable": [{"store": str, "key": str}],
           "unrecognized": [{"store": str, "key": str}],
+          "present_slugs": set[str],                # every slug: key name seen,
+                                                      # readable or not
           "scanned": {...},
         }
 
@@ -155,6 +177,7 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     unreadable_owners: set[str] = set()
     unreadable: list[dict] = []
     unrecognized: list[dict] = []
+    present_slugs: set[str] = set()
 
     links_keys = await list_keys(links_store)
     # One get_many host call for the whole store (docs/plans/batch-kv-reads.md,
@@ -170,7 +193,7 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     for key in links_keys:
         if key == ALL_SLUGS_INDEX_KEY:
             raw = links_values[key]
-            parsed = _parse_str_list(raw)
+            parsed = parse_str_list(raw)
             if raw is not None and parsed is None:
                 unreadable.append({"store": "links", "key": key})
                 all_links = None
@@ -178,17 +201,21 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
                 all_links = parsed
         elif key.startswith(SLUG_PREFIX):
             slug_count += 1
+            slug = key[len(SLUG_PREFIX):]
+            present_slugs.add(slug)  # readable or not — see consistencyrepair.py's
+            # present_slugs guard: a corrupt-but-present record must never be
+            # treated as absent by a removal repair.
             raw = links_values[key]
             record = _parse_link_record(raw)
             if raw is not None and record is None:
                 unreadable.append({"store": "links", "key": key})
             elif record is not None:
-                link_records[key[len(SLUG_PREFIX):]] = record
+                link_records[slug] = record
         elif key.startswith(OWNER_LINKS_PREFIX):
             owner_index_count += 1
             username = key[len(OWNER_LINKS_PREFIX):]
             raw = links_values[key]
-            parsed = _parse_str_list(raw)
+            parsed = parse_str_list(raw)
             if raw is not None and parsed is None:
                 unreadable.append({"store": "links", "key": key})
                 unreadable_owners.add(username)
@@ -207,6 +234,7 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     usernames: list[str] | None = []
     user_records: set[str] = set()
     session_usernames: list[str] = []
+    sessions_by_username: dict[str, list[str]] = {}
 
     users_keys = await list_keys(users_store)
     # Deliberately NOT every key, unlike the links store above: a `user:`
@@ -225,7 +253,7 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     for key in users_keys:
         if key == USERNAMES_INDEX_KEY:
             raw = users_values[key]
-            parsed = _parse_str_list(raw)
+            parsed = parse_str_list(raw)
             if raw is not None and parsed is None:
                 unreadable.append({"store": "users", "key": key})
                 usernames = None
@@ -244,6 +272,7 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
                 unreadable.append({"store": "users", "key": key})
             elif username is not None:
                 session_usernames.append(username)
+                sessions_by_username.setdefault(username, []).append(key)
         else:
             unrecognized.append({"store": "users", "key": key})
 
@@ -255,8 +284,10 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
         "usernames": usernames,
         "user_records": user_records,
         "session_usernames": session_usernames,
+        "sessions_by_username": sessions_by_username,
         "unreadable": unreadable,
         "unrecognized": unrecognized,
+        "present_slugs": present_slugs,
         "scanned": {
             "links": {"keys": len(links_keys), "records": slug_count, "owner_indexes": owner_index_count},
             "users": {"keys": len(users_keys), "records": user_count, "sessions": session_count},
@@ -270,12 +301,19 @@ def _finding_sort_key(finding: dict) -> tuple[str, str, str]:
     return (finding.get("slug", ""), finding.get("username", ""), finding.get("key", ""))
 
 
-def analyze(collected: dict) -> tuple[list[dict], dict]:
+def analyze(collected: dict, max_findings: int | None = MAX_FINDINGS_PER_CHECK) -> tuple[list[dict], dict]:
     """Pure. Returns (checks, totals). One entry per CHECKS member, always
     all twelve, in CHECKS order, each
     {"check", "severity", "count", "truncated", "skipped", "findings"}.
-    Findings are sorted deterministically and capped at MAX_FINDINGS_PER_CHECK
-    while `count` stays the true, untruncated total."""
+    Findings are sorted deterministically and capped at `max_findings` while
+    `count` stays the true, untruncated total.
+
+    `max_findings=None` means no cap at all: every finding is returned and
+    `truncated` is `False` for every check. The default preserves today's
+    report behaviour byte for byte. **The repair path always calls
+    `analyze(collected, max_findings=None)`** — consistencyrepair.py needs
+    every finding, not just the first `MAX_FINDINGS_PER_CHECK` of each check
+    (see docs/plans/consistency-repair.md, rejected alternative #10)."""
     link_records: dict[str, dict] = collected["link_records"]
     all_links: list[str] | None = collected["all_links"]
     owner_index: dict[str, list[str]] = collected["owner_index"]
@@ -378,14 +416,16 @@ def analyze(collected: dict) -> tuple[list[dict], dict]:
         raw_findings = findings_by_check[check_id]
         raw_findings.sort(key=_finding_sort_key)
         count = len(raw_findings)
-        truncated = count > MAX_FINDINGS_PER_CHECK
+        truncated = max_findings is not None and count > max_findings
         checks.append({
             "check": check_id,
             "severity": severity,
             "count": count,
             "truncated": truncated,
             "skipped": is_skipped,
-            "findings": [] if is_skipped else raw_findings[:MAX_FINDINGS_PER_CHECK],
+            "findings": [] if is_skipped else (
+                raw_findings if max_findings is None else raw_findings[:max_findings]
+            ),
         })
         if not is_skipped:
             total_findings += count
@@ -414,6 +454,7 @@ def build_report(checks: list[dict], totals: dict, scanned: dict, *, generated_a
         "totals": totals,
         "truncated": any(check["truncated"] for check in checks),
         "max_findings_per_check": MAX_FINDINGS_PER_CHECK,
+        "repairable_checks": list(REPAIRABLE_CHECKS),
         "checks": checks,
     }
 
