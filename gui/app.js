@@ -149,6 +149,13 @@ function confirmDialog(message, { confirmLabel = "Delete", cancelLabel = "Cancel
 // rather than ever surfacing the raw machine code to a user.
 const ERROR_MESSAGES = {
   invalid_credentials: "Incorrect username or password.",
+  // A stored record that won't parse. Named rather than left to the generic
+  // fallback because the generic one ("something went wrong, try again")
+  // is actively wrong here: retrying never helps, and the only fix is a
+  // delete. Points at the tool that reports it as unreadable_value.
+  link_record_unreadable:
+    "This link's stored record is corrupt and can't be read. Deleting the link is the only fix — "
+    + "its details can't be recovered. An admin can confirm it with the store consistency check.",
   cannot_delete_self: "You can't delete your own account while logged in as it.",
   cannot_disable_self: "You can't disable your own account while logged in as it.",
   invalid_target_url: "Enter a valid destination URL (including https://).",

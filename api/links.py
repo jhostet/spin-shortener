@@ -123,9 +123,31 @@ async def move_slugs_between_owners(
         await store.set(f"owner_links:{old_owner}", json.dumps(owned_old).encode("utf-8"))
 
 
+class UnreadableLinkError(Exception):
+    """A `slug:` record exists but its value will not parse.
+
+    Distinct from "absent" on purpose. Before this existed, `get_link` let
+    `json.loads` raise, every one of its six callers inherited that, and the
+    handler turned it into `500 internal_error` — which tells an operator to
+    retry a transient fault when it is a permanent data fault only they can
+    fix. Every other surface already knew better: `redirect` treats an
+    unparseable record as not-found and 404s (`lookupLink`), `handle_list`
+    skips it, and `GET /api/admin/consistency` names it `unreadable_value`.
+    """
+
+    def __init__(self, slug: str):
+        super().__init__(slug)
+        self.slug = slug
+
+
 async def get_link(store, slug: str) -> dict | None:
     raw = await store.get(f"slug:{slug}")
-    return json.loads(raw) if raw else None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise UnreadableLinkError(slug) from exc
 
 
 def is_valid_target_url(target_url: str) -> bool:
@@ -395,7 +417,39 @@ async def handle_delete(store, principal: Principal, slug: str, purge_analytics=
     deletion into a 500 — the link is already gone, and the response must
     say so regardless of what happened to its analytics.
     """
-    record = await get_link(store, slug)
+    # Delete is the ONE path that must still work on an unreadable record,
+    # and it is deliberately not left to the central 422. A corrupt record is
+    # already dead everywhere else — `redirect` 404s it, the list skips it,
+    # nothing can edit it — so refusing to delete it would make it permanent:
+    # on a deployed app the KV explorer is dev-only, leaving a hand-edited
+    # backup restore as the only remedy. Deletion is the repair.
+    try:
+        record = await get_link(store, slug)
+    except UnreadableLinkError:
+        # Ownership is unknowable, so the ownership-based check cannot run.
+        # Fail closed on the wider permission rather than guessing: only a
+        # principal who may edit ANY link may delete one whose owner cannot
+        # be read.
+        if not (principal.role == "admin" or principal.has_permission("links.edit_all")):
+            return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
+        await store.delete(f"slug:{slug}")
+        # Only `all_links` can be corrected here — the per-owner index is
+        # keyed by an owner this record can no longer name. That leaves one
+        # `orphan_owner_index_entry`, which is deliberate rather than sloppy:
+        # it is exactly what `POST /api/admin/consistency/repair` fixes in a
+        # click, and the alternative (enumerating every owner_links key to
+        # find the slug) would put an O(users) scan on the ordinary delete
+        # path to serve a rare case.
+        remaining = [s for s in await all_slugs(store) if s != slug]
+        await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(remaining).encode("utf-8"))
+        return json_response(200, {
+            "ok": True,
+            "record_was_unreadable": True,
+            "hint": "The record could not be parsed, so its owner index entry could not be "
+                    "identified. Run the store consistency check and repair "
+                    "orphan_owner_index_entry to finish tidying up.",
+        })
+
     if record is None:
         return json_response(404, {"error": "not_found"})
     if not can_edit(principal, record):

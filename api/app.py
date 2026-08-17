@@ -154,6 +154,22 @@ class HttpHandler(Handler):
         err = False
         try:
             response = await self._dispatch(request, collector)
+        except links.UnreadableLinkError as exc:
+            # Caught here rather than at each of get_link's six call sites,
+            # so every read path answers the same way with no per-handler
+            # boilerplate. 422 rather than 500: the request was well-formed
+            # and the fault is permanent stored data, so retrying is useless
+            # — and rather than 404, which would claim the link does not
+            # exist when a record is sitting right there needing attention.
+            # `error` names the one tool that can explain it; the operator is
+            # otherwise told nothing actionable.
+            response = json_response(422, {
+                "error": "link_record_unreadable",
+                "slug": exc.slug,
+                "hint": "This link's stored record is corrupt. Run the store consistency check "
+                        "(Store maintenance), which reports it as unreadable_value. Deleting the "
+                        "link is the only repair; its content cannot be recovered.",
+            })
         except Exception:
             err = True
             response = json_response(500, {"error": "internal_error"})

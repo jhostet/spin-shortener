@@ -1939,9 +1939,8 @@ test `test_list_skips_a_record_that_cannot_be_parsed` **fails with a `JSONDecode
 un-fixed code**, so it catches the bug rather than passing beside it. Verified live: with one
 corrupt record, `GET /api/links` went **500 → 200**, returning **5 of 6** links instead of none,
 while `GET /api/admin/consistency` still reported `unreadable_value: 1` — so the bad record is
-skipped, not concealed, and the tool whose job it is still surfaces it. `handle_get` on that slug
-is deliberately left alone; whether it should 404 or 500 is a different question and it fails only
-the one request rather than the whole page.
+skipped, not concealed, and the tool whose job it is still surfaces it. `handle_get` and the other four read paths are closed too — see the section below, where the
+framing of that deferral turned out to be wrong.
 
 ### DEPLOYED AND TRACED (2026-08-17) — `4cd6c30-repair-and-500fix`
 
@@ -1975,3 +1974,41 @@ back to 14 links, 37 analytics keys, **zero orphans, zero findings**.
 **The 500 fix is live too**: `GET /api/links` returns 200 on the deployed build, and locally, with
 one corrupt record, it returns **5 of 6 links instead of a 500** while the consistency check still
 reports `unreadable_value: 1`.
+
+## An unreadable record now says what is wrong, and can be deleted (2026-08-17)
+
+Picked up as "make `handle_get` say what's actually wrong rather than 500". **The framing of the
+deferred task was wrong in two ways, both found by reading the code rather than the task line.**
+
+**First, it was never just `handle_get`.** Six call sites share `get_link`, so an unreadable record
+500'd the detail page, edit, password-set, QR, per-link analytics — **and delete**.
+
+**Second, and the reason this stopped being cosmetic: a corrupt record could not be deleted.**
+`handle_delete` calls `get_link` first, so it raised before deleting anything. The record was
+therefore **permanent**: dead at `/r/{slug}` (confirmed — `redirect`'s `lookupLink` treats a parse
+failure as not-found and 404s), skipped by the list, uneditable, unreadable, and **unremovable**,
+with the KV explorer dev-only and a hand-edited backup restore the sole remedy on a deployment.
+That is the same shape as the dangling-index gap found two days earlier: a state the product can
+enter and cannot leave.
+
+**The status-code question in the task line was also the wrong question.** 404 would claim the link
+does not exist while a record sits there needing attention; 500 says "transient, retry" about a
+permanent data fault. The answer is neither — a **named** error the GUI can explain.
+
+- [x] Distinguish "absent" from "unreadable" — file(s): api/links.py — done when: `get_link` raises a defined error rather than a bare `JSONDecodeError` — **DONE**, `UnreadableLinkError` carrying the slug; absent still returns plain `None`.
+- [x] Answer every read path with a specific error — file(s): api/app.py, gui/app.js — done when: no read path returns `internal_error` for a corrupt record — **DONE**, caught **once** in `handle_request` rather than at six call sites, returning **422 `link_record_unreadable`** with a hint naming the consistency check. Live: detail, QR and analytics all return **422 (were 500)**.
+- [x] Make an unreadable record deletable — file(s): api/links.py, api/tests/test_links.py — done when: an admin can delete it and the store is left consistent-or-repairable — **DONE.** Live: `DELETE` returns **200** with `record_was_unreadable: true`, the record is gone and `all_links` corrected.
+
+**Two decisions inside the delete path worth keeping.** Ownership is unknowable for a corrupt
+record, so the usual owner-or-admin check cannot run — it **fails closed onto the wider permission**
+(admin or `links.edit_all`), never a guess, pinned by a test asserting the owner themselves gets
+403. And only `all_links` is corrected, because the per-owner index is keyed by an owner the record
+can no longer name; that knowingly leaves one `orphan_owner_index_entry`, which is **deliberate
+rather than sloppy** — it is precisely what the repair tool shipped hours earlier fixes in one
+click, and the alternative would put an O(users) scan on the ordinary delete path to serve a rare
+case.
+
+**Verified end to end locally, including the leftover from this session's own testing.** With a
+corrupted record: `/r/` 404, list 200, detail/QR/analytics 422, `DELETE` 200, then repair →
+**`ok: true`, zero findings**. The `bx1` record corrupted during the earlier 500-fix check was
+cleaned up through the new path itself.

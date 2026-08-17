@@ -1054,3 +1054,59 @@ async def test_update_legacy_violator_stays_editable_via_tags_patch():
     resp = await links.handle_update(store, _principal(), slug, _request({"tags": ["q4"]}))
     assert resp.status == 200
     assert json.loads(resp.body)["tags"] == ["q4"]
+
+
+async def test_get_link_raises_a_named_error_for_an_unreadable_record():
+    """`get_link` must distinguish "absent" from "present but unparseable".
+    Before this, both six callers and the handler saw a bare JSONDecodeError
+    and answered `500 internal_error`, which tells an operator to retry a
+    transient fault when it is permanent stored data only they can fix."""
+    store = FakeStore()
+    await store.set("slug:broken", b"{not json")
+    try:
+        await links.get_link(store, "broken")
+    except links.UnreadableLinkError as exc:
+        assert exc.slug == "broken"
+    else:
+        raise AssertionError("expected UnreadableLinkError")
+
+    # Absent is still plain None, not an error — the distinction is the point.
+    assert await links.get_link(store, "absent") is None
+
+
+async def test_delete_still_works_on_an_unreadable_record():
+    """Deletion is the ONE path that must survive a corrupt record, because
+    it is the repair. Everything else already treats such a link as dead
+    (`redirect` 404s it, the list skips it, editing cannot read it), so
+    refusing to delete would make it permanent — the KV explorer is dev-only,
+    leaving a hand-edited backup restore as the only remedy on a deployment.
+    """
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
+    slug = (await links.owned_slugs(store, "alice"))[0]
+    await store.set(f"slug:{slug}", b"{corrupt")
+
+    admin = _principal(username="root", role="admin")
+    resp = await links.handle_delete(store, admin, slug)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["record_was_unreadable"] is True
+    assert await store.get(f"slug:{slug}") is None
+    # all_links is corrected; the owner index is knowingly left to the repair
+    # tool, because the record can no longer name its owner.
+    assert slug not in await links.all_slugs(store)
+
+
+async def test_delete_of_an_unreadable_record_fails_closed_without_edit_all():
+    """Ownership is unknowable for a corrupt record, so the ordinary
+    owner-or-admin check cannot run. It must fall back to the WIDER
+    permission, not to a guess — otherwise an unreadable record would be
+    deletable by anyone who asked."""
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
+    slug = (await links.owned_slugs(store, "alice"))[0]
+    await store.set(f"slug:{slug}", b"{corrupt")
+
+    resp = await links.handle_delete(store, _principal(username="alice"), slug)
+    assert resp.status == 403
+    assert await store.get(f"slug:{slug}") is not None
