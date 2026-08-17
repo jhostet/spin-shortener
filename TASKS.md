@@ -357,6 +357,8 @@ All items below are complete-and-shipped-adjacent or deliberately deferred — n
 - [x] **Add a Clicks column to the links table — DONE 2026-08-10, see the "Clicks column, timestamp resolution" section above for the read-cost design that made it viable.** Raised 2026-08-08 by the 10th Impeccable critique and deferred **by user decision** as a product call rather than a fix. `PRODUCT.md` names click analytics as a headline feature, and it is invisible from the list surface: `#links-table`'s columns are Short link, Owner, Destination, Created, Status, Starts, Expires. Comparing four links in one campaign costs four page loads of `links/detail.html`, a page that is otherwise 60% empty labels. The critique's sharper framing is worth keeping: *if the table carried clicks plus a small 7-day trend, would the detail page still need to exist* — or would it become the QR/edit/deep-analytics surface it is actually good at? **Note the read cost before designing:** `GET /api/links` returns link records only, so clicks need either a per-link analytics fetch (64 shards × N links of KV reads — not free even now that reads are gathered) or a new aggregate endpoint. Do not assume the existing per-link analytics endpoint scales to a whole table.
 - [x] **Decide whether bulk actions are desktop-only, and say so either way — DECIDED 2026-08-10: desktop-only, and the page now says so (`#bulk-desktop-only`).** The tap-target half was already fixed separately; what remained was the silence, and that is closed. Raised 2026-08-08 by the same critique. Measured: below 480px `#links-table`'s select-checkbox column computes to width 0, so row selection and therefore all six bulk actions (Enable, Disable, Delete, Add tag, Remove tag, Reassign) are **unreachable on a phone**, silently. The mobile collapse doesn't shrink the feature, it removes it, with no message. Two honest options: make the checkbox column survive the collapse, or state on the page that bulk needs a wider screen. The current state — hiding the control and saying nothing — is the third. Related but separate: the checkbox is 20×20px against the app's own documented 44px floor **even on desktop**, which is a fix rather than a decision and belongs to the open P2 tap-target item.
 
+- [ ] **Concurrent bulk creates lose index updates, and retry cannot fix it — MEASURED 2026-08-17.** Raised by the write-throttle trace (see `### DEPLOYED AND TRACED (2026-08-17)` below), which set out to confirm "a throttled bulk run leaves zero `unindexed_link`" and found the opposite under concurrency. **The control run is the important part: 4 concurrent 5-row creates, ~28 writes, far under the 50/s cap, all four `201` with zero retries and zero write failures — and still 5 `unindexed_link`.** A later 2-request, ~10-write run lost an entire request's 3 additions, so the threshold is roughly "any two overlapping bulk creates", not "a busy store". Reproduce either with `dev/bulk-concurrent.sh`. `links:all_links` and `links:owner_links:<owner>` are read-modify-write with no compare-and-swap, so concurrent requests clobber each other's index additions; last writer wins. This is **independent of throttling** and therefore untouched by every retry constant in `api/kvretry.py`. **Both incidents that motivated the write-throttle work were reproduced with concurrent bulk creates**, so this is a demonstrated contributor to them, not a hypothetical. Options, none costed yet and none obviously right: serialise index writes behind a single owner; make `all_links` derivable rather than authoritative (it is already only an index — `handle_list` tolerates missing entries, and the consistency repair rebuilds it in one write); shard the index the way the click counter was sharded; or accept it and lean on the repair tool, which fixed 65 findings in 2 writes. **Do not reach for retry — the control run proves nothing was failing.**
+- [ ] **Find out what Akamai's actual KV write-failure message is — `write_error` reports `other`, not `throttled` (2026-08-17).** Every failed write in the traced run classified as `other`. The classifier is not at fault: `str()` on a faithful reconstruction of `Err(Error_Other(value='too many requests'))` does surface the message, so `api/tests/fakes.py`'s stand-in is accurate and the substring match would fire on it. Akamai's real message is therefore different, **and nothing anywhere logs the exception string** — not the log line, not the response. Control flow is deliberately unaffected (every write error retries regardless), so this is an observability gap, not a correctness one: an incident report says `other` and names nothing. Fix needs a diagnostic build surfacing `repr(exc.cause)` on the partial response or in the log line, deployed, and one concurrent bulk run to capture it — then either widen `classify_write_error`'s match or record that the message is unstable. Note the standing rule this must not break: the match is **observability-only** and must never become control flow.
 - [x] Set up CI to run `go test ./linkgate/...` and `uv run pytest` (both components) automatically — see "CI setup (Jenkins)" below.
 - [x] Consolidate `redirect`/`api` from three named KV stores (`links`, `users`, `analytics`) to a single `"default"` store with key-prefixing (`links:`/`users:`/`analytics:`) — required before an actual Akamai Functions deploy, since Akamai only supports one auto-provisioned `"default"` store and no `runtime-config.toml`. See CLAUDE.md's "Deployment: known Akamai Functions blocker" section for the confirmed finding and exact prefix scheme. Touches `spin.toml`, `redirect/main.go`'s `kv.Open` calls, `api/app.py`'s `key_value.open` calls, and every key literal across both components' non-test and test code. — **SCHEDULED 2026-08-04**, see `docs/plans/kv-store-consolidation.md`. A prefixing *view* (`api/kvprefix.py`, `redirect/linkgate/keys.go`) was chosen over flattening the prefixes into every key literal across both components — the view confines the change to `app.py` plus one new module per language and keeps every existing test as a regression suite for the refactor, at the honest cost of an indirection layer between what business logic writes (`slug:abc`) and what the store actually holds (`links:slug:abc`). See the plan's "Trade-offs and rejected alternatives" #1 for the full argument. — **COMPLETED 2026-08-05 (6221e5a) and running in production since.** Deployed to Akamai Functions the same day; the single `"default"` store works there, and `get_keys` on it was later confirmed working by a live consistency check. See the `## KV store consolidation` section below for the build-out and the deploy verification.
 - [ ] Implement SAML and/or OIDC as additional auth providers — the seam is real and documented in `docs/auth-providers.md` (the `initiate`/`handle_callback` interface, `oauth_state` KV bookkeeping, JIT user provisioning), but neither provider is built. Needs a specific XML-signature (SAML) or JWT/JWKS (OIDC) validation library that works under componentize-py's pure-Python-only WASI constraint.
@@ -2072,7 +2074,7 @@ successful run's response is byte-identical to today; only a partial one is `207
 - [x] Render partial bulk results and the repair next-step in the dashboard — file(s): gui/dashboard.js — done when: both bulk flows branch on `data.partial` before their success path, a partial create names the created/not-created split and leaves the textarea untouched while rendering `not_created` through the existing `renderBulkErrorTable`, a partial action narrows the selection to `not_applied` so the same button retries exactly the failures, `index_updated: false` additionally shows "Some links are not yet listed in the dashboard..." with a link to admin/backup.html shown ONLY to a viewer holding `users.manage` (and the missing permission named otherwise), `BULK_ERROR_MESSAGES` gains a `write_failed` entry, every new message renders through the existing `.form-error` class, and `git diff DESIGN.md .impeccable/design.json gui/theme.css` is empty — note: the map is actually named `BULK_ROW_MESSAGES` in this file (not `BULK_ERROR_MESSAGES` as the plan's prose calls it); `write_failed` was added there, matching the existing naming. Added a shared `narrowSelectionTo(slugs)` helper (used by all three bulk-action flows: delete/enable/disable, tag/untag, reassign) and a shared `renderIndexNotUpdatedWarning()` helper, since three call sites needed identical logic. Verified with `node --check gui/dashboard.js` (syntax only — no JS unit test suite exists for this file) and a read-through against `api/bulk.py`'s response shape; a live browser exercise of the partial path is deferred to the end-to-end verification task, since it needs the same fault-injection setup that task performs anyway. `git diff --stat DESIGN.md .impeccable/design.json gui/theme.css` empty.
 - [x] Document write-throttle resilience in CLAUDE.md (depends on every task above) — file(s): CLAUDE.md — done when: a new peer section records that throttling arrives as `Err(Error_Other(value='too many requests'))` with no dedicated variant, that every write error is treated as retryable because a pure module cannot import the WIT error types and a message rewording must not silently disable retries, that `classify_write_error`'s string match is observability-only, that `asyncio.sleep(d>0)` raises inside the component because `_Loop.call_later` is unimplemented and which sleep primitive the spike selected, the four `kvretry` constants with their ~11.2 s worst-case arithmetic at the measured 75 ms/write and the raise-only-with-evidence rule, that a throttled bulk run now indexes exactly what landed and therefore no longer produces `unindexed_link`, the `207`/`partial` contract and the sentence "validation is all-or-nothing; execution is best-effort and fully reported", that `purge_slug_analytics` and `backup.handle_restore` deliberately do NOT retry and why, that writes are still never gathered or batched, and that `redirect` is untouched; the "Bulk link management" section's all-or-nothing paragraph is amended to say validation rather than execution; and `git diff redirect/ DESIGN.md .impeccable/design.json` is empty — note: the new "Write-throttle resilience" section documents `200`/`"partial": true` throughout (not `207`), explicitly calling out that the plan's original `207` argument didn't survive the Decisions-taken correction (`gui/app.js`'s `apiCall` maps every 2xx to `ok: true`, so 200 and 207 are indistinguishable to every caller in this codebase) — the task line's own wording still says "the `207`/`partial` contract" because it was written before that correction; documenting the shipped `200` behavior is what's correct here, not the task line's literal `207`. Placed the new section between "KV backup and restore" and "Toggleable structured logging" (both are reliability-adjacent). `git diff --stat redirect/ DESIGN.md .impeccable/design.json` empty.
 - [x] End-to-end manual verification of write-throttle resilience — file(s): (none — verification step) — done when: against a real `SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD=<pw> SPIN_VARIABLE_COOKIE_SECURE=false spin up --build --runtime-config-file runtime-config.toml`, a TEMPORARY fault injection in api/kvprefix.py (raise on the Nth `set`) has been used to drive a 20-row bulk create into a partial result in the browser, the dashboard shows the created/not-created split, `GET /api/admin/consistency` reports ZERO `unindexed_link` findings afterwards, a second injection failing only `links:all_links` produces `index_updated: false` with the Store maintenance link visible to an admin, one click of Repair all clears the store to `ok: true`, the injection is reverted with `git diff api/kvprefix.py` empty, and with no injection the bulk create/delete/tag/reassign flows plus restore and the orphan purge all behave byte-identically to before — note: ran without `--runtime-config-file` (so KV persisted across the three restarts this required, deliberately — needed a stable admin session/store across the record-write-fault, index-write-fault and no-fault passes). **Injection design deviated from the literal "raise on the Nth `set`" wording**: implemented as a two-mode toggle, `_SPIKE_FAULT_KEY` (persistently fail one exact physical key, every call including every retry attempt) alongside a simpler `_SPIKE_FAULT_NTH` (fail exactly once, the Nth `set` call ever) — the pure "Nth call" form cannot demonstrate retry-exhaustion/abandon-and-index-what-landed at all, because `kvretry`'s retry re-issues the identical `set` and only ONE call in the whole sequence would ever equal a fixed N, so the very next retry attempt silently succeeds and swallows the fault. `_SPIKE_FAULT_KEY` is what actually exercises exhaustion. **Scenario 1** (record-write fault): used `_SPIKE_FAULT_KEY = "links:slug:row10"` against a 20-row bulk create (custom slugs `row01`..`row20`, admin bypasses the custom-slug permission) — driven via `curl` with a browser-equivalent session (see below for the browser-driven repeat of the second scenario). Result: `count: 9`, `not_created` listed exactly `row10`..`row20` (11 rows) as `write_failed`, `index_updated: true`, `next_step: "resubmit"` — then `GET /api/admin/consistency` returned `"ok": true` with every check at 0, confirming zero `unindexed_link` findings. **Scenario 2** (index-write fault, driven through the actual browser via Playwright): used `_SPIKE_FAULT_KEY = "links:all_links"`, logged in through the real login form (not a raw fetch — see the repo's own login-form memory note), submitted 5 rows (`bfault01`..`bfault05`) through the dashboard's bulk-create panel. Observed exactly: banner "Created 5 of 5 links. 0 rows could not be written because the store was busy...", plus "Some links are not yet listed in the dashboard... **Open Store maintenance to repair it.**" (the admin-visible variant, confirming the `canManageUsers()` gate). Followed the link to `admin/backup.html`, ran the consistency check (`unindexed_link: 5`, `unindexed_owner_link: 5`), clicked "Repair all repairable findings" (confirmed the dialog), and — because the fault was still persistently active — the repair correctly **failed loud** with "The store was busy — some repairs could not be written. Wait a moment and run the check again," and a re-run showed the findings unchanged rather than falsely cleared. This is a stronger proof than a clean repair would have been: it confirms `apply_repairs` itself is fault-aware and doesn't lie about success under a live throttle. Disabled the fault (`_SPIKE_FAULT_KEY = None`), restarted, and repaired for real: `keys_written: 2`, both checks to 0, `GET /api/admin/consistency` → `ok: true`. **No-fault pass**: bulk create, bulk-action tag/disable/delete, `GET /api/admin/consistency` (clean), `GET /api/admin/backup` → `POST /api/admin/restore` of the same backup (200, `signed_out: true`, no `partial`/`write_error` fields — byte-identical success shape), `GET /api/admin/analytics/orphans` and `POST /api/admin/analytics/purge` (`write_failed: false`, `complete: true`) — all behaved normally. Reverted with `git checkout -- api/kvprefix.py`; `git diff --stat api/kvprefix.py` empty. Rebuilt (`uv run componentize-py ... -o app.wasm`, "Component built successfully") and re-ran `cd api && uv run pytest` — 668 passed, unchanged. **One anomaly noted, not resolved as a regression**: the Playwright browser session logged one console error, `500 @ /api/links`, timing unclear relative to the test steps. A direct `curl` reproduction of `GET /api/links` immediately afterward, in the same store state, returned a clean `200`. This repo's own memory notes that the Playwright MCP browser's console history is shared across agent sessions and has produced at least one false regression before; given the immediate clean reproduction, this is most likely a stale cross-session console artifact rather than a real bug introduced by this work, but it was not tracked down further and is disclosed here rather than silently dropped.
-- [ ] Deploy and trace a real throttled bulk run on Akamai — file(s): (none — measurement) — done when: a build carrying this work is deployed with `app_version` and `log_debug_token` set and confirmed live via `X-SS-Version`, concurrent bulk creates are fired past the 50 writes/second cap the same way the 2026-08-17 incident was reproduced, an `X-SS-Debug` trace shows `write_retry` (and `write_failed` if exhausted), the response is a `207` rather than a `500`, `GET /api/admin/consistency` afterwards reports zero `unindexed_link`, the modelled ~11.2 s worst case is compared against real wall time, and the numbers are recorded in TASKS.md
+- [x] Deploy and trace a real throttled bulk run on Akamai — file(s): (none — measurement) — done when: a build carrying this work is deployed with `app_version` and `log_debug_token` set and confirmed live via `X-SS-Version`, concurrent bulk creates are fired past the 50 writes/second cap the same way the 2026-08-17 incident was reproduced, an `X-SS-Debug` trace shows `write_retry` (and `write_failed` if exhausted), the response is a `207` rather than a `500`, `GET /api/admin/consistency` afterwards reports zero `unindexed_link`, the modelled ~11.2 s worst case is compared against real wall time, and the numbers are recorded in TASKS.md — **note: done, and one done-when clause came back FALSE.** Deployed `751f368-throttle-resilience`, live after 100 s. Retry, the `200`-with-`partial` contract and the timing all confirmed. **But "zero `unindexed_link` afterwards" is false under concurrency, and a control run isolated the cause as a lost update rather than throttling** — see the results section below, which is the real output of this task.
 
 **Verified independently before commit, including a mutation test of the load-bearing rule.**
 Suites: api **668** (baseline 629, +39), gui-pages 71, `redirect/linkgate` green with
@@ -2104,6 +2106,78 @@ the same store state. The Playwright MCP shares one browser across agents and it
 is cross-agent, which has produced exactly one false regression in this repo before. Treat it as a
 stale artifact — but it was right to report it rather than assume.
 
+### DEPLOYED AND TRACED (2026-08-17) — `751f368-throttle-resilience`
+
+Deployed with all five variables re-supplied; live after **100 s**, with the CLI's usual false
+negative (`failed to wait for deployment to go live`) on the way. Health checks passed before any
+data was touched: login worked, `/api/auth/me` reported the real `fwf.app` domain and no
+`localhost`, `GET /api/links` returned 200. Store baseline: **14 links, 37 analytics keys,
+`ok: true` with zero findings.**
+
+**What the work claims, and what the trace shows: the retry half is confirmed, the drift half is
+not.**
+
+**Confirmed — the `500` is gone and retry fires.** Six concurrent 50-row bulk creates (300 links,
+~306 writes). **All six returned `200` with `"partial": true`; not one `500`.** Traced log lines
+carried exactly the intended signature — `write_retry=3/475169`, `write_retry=4/767968`, and
+`write_failed=1/0` on every request (one exhaustion each, then the loop breaks):
+
+```
+ss comp=api route=/api/links/bulk method=POST status=200 dur_us=1280166 kv_ops=19 kv_us=1251755
+   open=2/1436 exists=1/22504 get=6/200345 get_many=1/244304 set=4/100600
+   write_retry=4/682566 write_failed=1/0 slow=write_retry:-:270597
+```
+
+**Timing beat the model by ~8×.** Handler duration 1.07–1.40 s, wall 1.9 s for all six, against the
+modelled ~11.2 s worst case and Akamai's 30-second limit. The model was pessimistic because the
+abandon-on-exhaustion rule fires early: each request broke after its first exhausted write rather
+than retrying all 50 rows to death.
+
+**FALSIFIED — "a throttled bulk run leaves zero `unindexed_link`" does not hold under concurrency.**
+Afterwards: **37 `unindexed_link` + 28 `unindexed_owner_link`**, despite `index_updated: true` on
+all six responses. All 50 records that landed were written; only 13 reached `all_links`.
+
+**A control run isolated the cause, and it is NOT throttling.** Four concurrent **5**-row creates
+(20 links, ~28 writes — comfortably under the 50/s cap). All four returned **`201`**, no partial,
+and their log lines carry **no `write_retry` or `write_failed` field at all** (the renderer omits
+zero-count op types, so absence is proof, not silence). **Still 5 `unindexed_link`.**
+
+**The threshold is lower than that, and it is embarrassingly low.** A later run of just **2
+concurrent 3-row creates — 6 links, ~10 writes, 0.7 s wall** — lost one request's three additions
+outright: `GET /api/links` returned only `vfy1x01..03`, and the consistency check reported exactly
+`unindexed_link: 3`. Two overlapping bulk creates are enough. This was not a designed experiment;
+it was the smoke-test of the shipped `dev/bulk-concurrent.sh`, which is itself the point — the
+race reproduces on nearly any concurrent pair, so it is very unlikely to be rare in real use.
+
+**The mechanism is a lost update on the shared index key, which no amount of retry can fix.**
+`links:all_links` and `links:owner_links:<owner>` are read-modify-write with no compare-and-swap,
+so concurrent requests each read the index, add their own slugs and write back — last writer wins
+and everyone else's additions vanish. The 6×50 run's signature is exact: **13 links became visible,
+matching request 2's `count=13` to the link.** This is per-request-correct behaviour producing
+store-level drift.
+
+**Consequence for the claim in CLAUDE.md, now qualified there:** retry plus index-what-landed fixes
+the **single-request** failure mode, and it demonstrably does. It does not make *concurrent* bulk
+creates structurally safe. **Both incidents this work was built for (2026-08-15, 2026-08-17) were
+reproduced with concurrent bulk creates**, so the lost update is a demonstrated contributor to
+them that remains unaddressed — a new Future-work entry records the options.
+
+**`write_error` came back `other`, not `throttled` — the label is wrong and the reason is open.**
+The classifier is not at fault: `str()` on a faithful reconstruction of the real
+`Err(Error_Other(value='too many requests'))` does surface the message (verified directly — the
+dataclass's single arg reaches `Exception.__str__`), so `api/tests/fakes.py`'s stand-in is
+accurate and the match would fire on that message. **Akamai's actual failure message is therefore
+something else, and nothing logs it** — the exception string appears in no log line or response
+field. Control flow is unaffected by design (every write error is retried regardless of label),
+which is precisely the degradation-resistance the plan argued for; the cost is that an incident
+report says `other` and tells the operator nothing. Chasing it needs a build that surfaces
+`repr(exc.cause)` — filed as Future work rather than done here, since it is a diagnostic deploy.
+
+**The repair tool cleaned up its own test, as predicted.** 65 findings repaired in **2 writes** —
+the O(distinct index keys) property, confirmed live rather than modelled. Cleanup used paced
+sequential batches (now known to be load-bearing, not caution): store returned to exactly **14
+links, 37 analytics keys, 0 orphan slugs, `ok: true`**.
+
 ---
 
 # START HERE — session handoff, 2026-08-17
@@ -2114,16 +2188,46 @@ have.
 
 ## Where things stand
 
-- **Repo:** `main` clean and pushed, HEAD = `5944082` ("Make bulk writes survive KV throttling").
-- **Deployed:** `fd61a51-unreadable-records` — **two commits behind HEAD.** The write-throttle
-  resilience work is built, tested (api 668 / gui-pages 71 / Go green) and committed, but **NOT
-  deployed.**
-- **Store:** clean — 14 links, ~37 analytics keys, zero orphans, `GET /api/admin/consistency`
-  returns `ok: true` with zero findings.
+- **Repo:** `main` clean, HEAD = the write-throttle trace commit.
+- **Deployed:** `751f368-throttle-resilience` — **HEAD is live.** Deployed and traced 2026-08-17;
+  results in `### DEPLOYED AND TRACED (2026-08-17)` above.
+- **Store:** clean and back at baseline — 14 links, 37 analytics keys, 0 orphan slugs,
+  `GET /api/admin/consistency` returns `ok: true` with zero findings.
 
-## The immediate job: deploy, then trace a throttled run
+## What the trace settled, and what it opened
 
-**Deploy.** Variables live in the operator's chmod-600 file outside the repo — see the
+**Settled:** retry works on the deployed build (`write_retry=3–4`, `write_failed=1` per request),
+the bare `500` is gone (six concurrent 50-row creates all returned `200` with `"partial": true`),
+and timing beat the model by ~8× (1.07–1.40 s handler against a modelled ~11.2 s worst case).
+
+**Opened, and this is the finding that matters:** the claim "a throttled bulk run leaves zero
+`unindexed_link`" is **false under concurrency, for a reason that has nothing to do with
+throttling.** A control run of 4 concurrent 5-row creates — ~28 writes, far under the 50/s cap,
+four clean `201`s, **zero retries and zero write failures** — still left 5 `unindexed_link`.
+`links:all_links` is a read-modify-write with no compare-and-swap, so concurrent requests clobber
+each other's index additions. **Retry cannot touch this and neither can any `kvretry` constant.**
+Two new Future-work entries carry it: the lost-update race itself (with four uncosted options),
+and the separate `write_error=other` observability gap (Akamai's real write-failure message is
+unknown and nothing logs it).
+
+**The reproduction is committed, not left in a temp dir:** `dev/bulk-concurrent.sh <requests>
+<rows> <prefix>`, alongside `dev/click-load.sh` and carrying the same kind of warning header. It
+logs in, sends `X-CSRF-Token` and `X-SS-Debug`, prints each response's
+`partial`/`count`/`index_updated`/`write_error` plus `Server-Timing`, and tells you which regime
+you are in (`6 50` crosses the cap and exercises retry; `4 5` stays under it and isolates the lost
+update). **Run both before concluding anything about drift** — that is the mistake this whole
+section exists to prevent. Read the log lines back with
+`spin aka logs --app-name "$APP_NAME" --since 15m -n 200 | grep -o 'ss comp=api[^"]*'`.
+
+**Cleanup after any such run, and note the pleasing symmetry:** delete the junk links *paced*
+(sequential batches — a concurrent burst is what causes the drift, now proven rather than
+suspected), then `POST /api/admin/consistency/repair` with
+`{"checks":[...],"confirm":"REPAIR"}` for anything left, and confirm `ok: true`. The tool built to
+fix the original incident is what cleans up after its own test — it fixed 65 findings in 2 writes.
+
+## Deploying (for reference — deploys are the user's call)
+
+Variables live in the operator's chmod-600 file outside the repo — see the
 `deploy-secrets-location` memory; read it, do not re-ask for the values. All five must be
 re-supplied every time or the omitted one silently reverts to its `spin.toml` default (the
 `public_base_urls` → `localhost` trap):
@@ -2134,37 +2238,18 @@ spin aka app deploy --app-id "$APP_ID" --build --no-confirm \
   --variable cookie_secure=true \
   --variable public_base_urls="$APP_URL" \
   --variable log_debug_token="$SPIN_VARIABLE_LOG_DEBUG_TOKEN" \
-  --variable app_version=5944082-throttle-resilience
+  --variable app_version=<sha>-<label>
 ```
 
 **The CLI will exit 1 with `failed to wait for deployment to go live`. That is a FALSE NEGATIVE
-and has been on every deploy this month — do NOT redeploy.** Poll instead until
-`curl -sI "$APP_URL/" | grep -i x-ss-version` reports the label you passed; it has taken 100–120 s
-each time. A request made during that window returns the OLD build and will mislead you.
+and has been on every deploy this month, including 2026-08-17's — do NOT redeploy.** Poll instead
+until `curl -sI "$APP_URL/" | grep -i x-ss-version` reports the label you passed; it took **100 s**
+on 2026-08-17, consistent with the 100–120 s seen before. A request made during that window
+returns the OLD build and will mislead you.
 
 Then verify, in this order: login works (`admin_bootstrap_password` survived), `/api/auth/me`
 reports the real `fwf.app` domain and **no `localhost`** (`public_base_urls` survived), and
 `GET /api/links` returns 200.
-
-**Trace** — the open task is `Deploy and trace a real throttled bulk run on Akamai` (search
-TASKS.md for that line; it carries the full done-when). The essentials:
-
-- **The 50 writes/second cap only exists on Akamai.** A local `spin up` sqlite store will not
-  throttle, so this measurement cannot be taken anywhere else — that is why the task exists.
-- **Reproduce a throttle the way the incidents did:** fire several bulk creates *concurrently*
-  (six parallel 50-row requests did it twice). One bulk action alone runs at ~13 writes/second and
-  will not trip the cap.
-- **What the trace should show** with `X-SS-Debug: $SPIN_VARIABLE_LOG_DEBUG_TOKEN`: `write_retry`
-  ops in the log line, and on exhaustion a **`200` response carrying `"partial": true`** — never a
-  bare `500`, which is what this work replaced.
-- **The point of the test is the store afterwards:** a throttled run must leave **zero
-  `unindexed_link` findings**, because the handler indexes exactly what landed. That is the whole
-  claim; check `GET /api/admin/consistency` immediately after.
-
-**Cleanup after tracing, and note the pleasing symmetry:** the test creates junk links and may
-create drift. Delete the links *paced* (sequential batches with a pause — a concurrent burst is
-what causes drift), then run `POST /api/admin/consistency/repair` for anything left, and confirm
-`ok: true`. The tool built to fix the original incident is what cleans up after its own test.
 
 ## Other work that is decided but NOT built
 
