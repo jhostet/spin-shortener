@@ -264,8 +264,24 @@ async def handle_list(store, principal: Principal, get_many):
     # dict) is what keeps the response in index order, since get_many does
     # not preserve one. A slug present in the index whose record is missing
     # (an interrupted delete leaves index entries with no backing record) is
-    # skipped, exactly as before. A corrupt record still raises via
-    # json.loads, exactly as get_link used to.
+    # skipped, exactly as before.
+    #
+    # An UNREADABLE record is skipped too, and that is a fix rather than a
+    # nicety: this used to let json.loads raise, which turned one corrupt
+    # record into a 500 for the WHOLE page — the entire links table gone,
+    # not the one row. Measured live 2026-08-17 against a deliberately
+    # corrupted record, and it is the same policy already applied one line
+    # above to a record that is missing entirely: a link this handler cannot
+    # read is a link it cannot list, and neither case is worth failing the
+    # other N links over.
+    #
+    # Nothing is hidden by skipping. `GET /api/admin/consistency` reports the
+    # same record as `unreadable_value`, which is deliberately NOT
+    # auto-repairable (the intended content of a corrupt value is
+    # unknowable), so the operator still learns about it from the tool whose
+    # job that is. On a deployed app that report is the ONLY way to find out:
+    # the KV explorer is dev-only, so before this fix a corrupt record left
+    # the dashboard dead with no in-product signal of why.
     keys = [f"slug:{slug}" for slug in slugs]
     fetched = await get_many(store, keys)
     records = []
@@ -273,7 +289,11 @@ async def handle_list(store, principal: Principal, get_many):
         raw = fetched.get(f"slug:{slug}")
         if raw is None:
             continue
-        records.append(public_link(json.loads(raw)))
+        try:
+            record = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        records.append(public_link(record))
     return json_response(200, {"links": records})
 
 

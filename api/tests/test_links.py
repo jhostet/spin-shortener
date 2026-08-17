@@ -215,6 +215,33 @@ async def test_list_skips_a_slug_whose_record_is_missing():
     assert [link["target_url"] for link in body["links"]] == ["https://example.com/two"]
 
 
+async def test_list_skips_a_record_that_cannot_be_parsed():
+    """The sibling case to the test above, and a real bug rather than a
+    hypothetical: measured live on 2026-08-17, ONE corrupt `slug:` record made
+    `GET /api/links` return 500, so the entire links table disappeared instead
+    of the single bad row — while every link still resolved at /r/{slug},
+    because `redirect` never reads through this path. So the service looked
+    healthy with its management UI dead, and on a deployed app there was no
+    remedy: the KV explorer is dev-only.
+
+    Skipping is the same policy already applied to a record that is missing
+    entirely, and nothing is concealed by it — the consistency check reports
+    the same record as `unreadable_value`, which is deliberately not
+    auto-repairable because a corrupt value's intended content is unknowable.
+    """
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
+
+    slugs = await links.owned_slugs(store, "alice")
+    await store.set(f"slug:{slugs[0]}", b"{not valid json at all")
+
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert [link["target_url"] for link in body["links"]] == ["https://example.com/two"]
+
+
 async def test_get_not_found():
     store = FakeStore()
     resp = await links.handle_get(store, _principal(), "doesnotexist")

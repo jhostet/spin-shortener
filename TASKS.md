@@ -1931,4 +1931,14 @@ One accidental piece of good news: the consistency check and the repair endpoint
 the corrupt record and reported accurately, so the diagnostic still works while the primary UI is
 broken.
 
-- [ ] Make `handle_list` skip an unparseable record instead of 500ing the whole page — file(s): api/links.py, api/tests/test_links.py — done when: a store containing one corrupt `slug:` record still returns every other link, the corrupt one is omitted rather than raising, and a test pins it. **`handle_list` already skips a slug whose record is missing**, so skipping one that is unreadable is the same policy applied to a neighbouring failure — and the consistency check already reports the corrupt record as `unreadable_value`, so nothing is hidden by skipping it. Consider whether `handle_get` should 404 or 500 for the same record, which is a different question.
+- [x] Make `handle_list` skip an unparseable record instead of 500ing the whole page — file(s): api/links.py, api/tests/test_links.py — done when: a store containing one corrupt `slug:` record still returns every other link, the corrupt one is omitted rather than raising, and a test pins it. **`handle_list` already skips a slug whose record is missing**, so skipping one that is unreadable is the same policy applied to a neighbouring failure — and the consistency check already reports the corrupt record as `unreadable_value`, so nothing is hidden by skipping it. Consider whether `handle_get` should 404 or 500 for the same record, which is a different question.
+
+**FIXED 2026-08-17, and mutation-verified.** `handle_list` now wraps the per-record `json.loads`
+and skips a record it cannot parse, exactly as it already skipped one that was absent. The new
+test `test_list_skips_a_record_that_cannot_be_parsed` **fails with a `JSONDecodeError` against the
+un-fixed code**, so it catches the bug rather than passing beside it. Verified live: with one
+corrupt record, `GET /api/links` went **500 → 200**, returning **5 of 6** links instead of none,
+while `GET /api/admin/consistency` still reported `unreadable_value: 1` — so the bad record is
+skipped, not concealed, and the tool whose job it is still surfaces it. `handle_get` on that slug
+is deliberately left alone; whether it should 404 or 500 is a different question and it fails only
+the one request rather than the whole page.
