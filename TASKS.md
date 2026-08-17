@@ -1505,7 +1505,7 @@ measured 74–91 ms here against **23.9 ms at a comparable store size on 2026-08
 just absolute values. Treat the 11× read/write asymmetry as measured-in-this-window, and re-measure
 before leaning on it for any new design.
 
-- [ ] Decide whether a multi-second delete needs user feedback beyond the disabled button — file(s): gui/dashboard.js — done when: either a progress affordance exists or the decision to leave it is recorded with its reasoning. **Note this reopens nothing:** the closed decision was that `analytics_purge`'s *result* is not rendered, which is different from whether the *wait* is communicated. At 1.9 s measured (and ~7 s at the ceiling) on the app's most common corrective action, for non-technical users, a silent pause may read as a hang.
+- [x] (Duplicate — superseded by the completed entry immediately below; ticked so it stops reading as open.) Decide whether a multi-second delete needs user feedback beyond the disabled button — file(s): gui/dashboard.js — done when: either a progress affordance exists or the decision to leave it is recorded with its reasoning. **Note this reopens nothing:** the closed decision was that `analytics_purge`'s *result* is not rendered, which is different from whether the *wait* is communicated. At 1.9 s measured (and ~7 s at the ceiling) on the app's most common corrective action, for non-technical users, a silent pause may read as a hang.
 
 - [x] Decide whether a multi-second delete needs user feedback beyond the disabled button — file(s): gui/dashboard.js, gui/dashboard.css — done when: either a progress affordance exists or the decision to leave it is recorded — **DONE: added, using `aria-busy`.** A disabled button says "not clickable", not "working"; at the measured 1.9 s (and ~7 s at the ceiling) a silent pause on the app's most common corrective action reads as a hang. Pico styles `[aria-busy=true]` natively via a `::before` carrying a `data:` SVG the CSP's `img-src` already permits, so this needed **no new token and no new asset** — and it announces the busy state to assistive tech, which `disabled` alone does not. **This does not reopen the closed decision that the purge RESULT is never rendered** — that is the outcome; this is the wait.
 
@@ -2103,3 +2103,87 @@ a single stray `500 @ /api/links` in a Playwright console that it could not repr
 the same store state. The Playwright MCP shares one browser across agents and its console history
 is cross-agent, which has produced exactly one false regression in this repo before. Treat it as a
 stale artifact — but it was right to report it rather than assume.
+
+---
+
+# START HERE — session handoff, 2026-08-17
+
+**Read this section first; it is the most recent state of the world.** Everything above is
+history. Written deliberately at a session boundary, so nothing below assumes context you do not
+have.
+
+## Where things stand
+
+- **Repo:** `main` clean and pushed, HEAD = `5944082` ("Make bulk writes survive KV throttling").
+- **Deployed:** `fd61a51-unreadable-records` — **two commits behind HEAD.** The write-throttle
+  resilience work is built, tested (api 668 / gui-pages 71 / Go green) and committed, but **NOT
+  deployed.**
+- **Store:** clean — 14 links, ~37 analytics keys, zero orphans, `GET /api/admin/consistency`
+  returns `ok: true` with zero findings.
+
+## The immediate job: deploy, then trace a throttled run
+
+**Deploy.** Variables live in the operator's chmod-600 file outside the repo — see the
+`deploy-secrets-location` memory; read it, do not re-ask for the values. All five must be
+re-supplied every time or the omitted one silently reverts to its `spin.toml` default (the
+`public_base_urls` → `localhost` trap):
+
+```
+spin aka app deploy --app-id "$APP_ID" --build --no-confirm \
+  --variable admin_bootstrap_password="$SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD" \
+  --variable cookie_secure=true \
+  --variable public_base_urls="$APP_URL" \
+  --variable log_debug_token="$SPIN_VARIABLE_LOG_DEBUG_TOKEN" \
+  --variable app_version=5944082-throttle-resilience
+```
+
+**The CLI will exit 1 with `failed to wait for deployment to go live`. That is a FALSE NEGATIVE
+and has been on every deploy this month — do NOT redeploy.** Poll instead until
+`curl -sI "$APP_URL/" | grep -i x-ss-version` reports the label you passed; it has taken 100–120 s
+each time. A request made during that window returns the OLD build and will mislead you.
+
+Then verify, in this order: login works (`admin_bootstrap_password` survived), `/api/auth/me`
+reports the real `fwf.app` domain and **no `localhost`** (`public_base_urls` survived), and
+`GET /api/links` returns 200.
+
+**Trace** — the open task is `Deploy and trace a real throttled bulk run on Akamai` (search
+TASKS.md for that line; it carries the full done-when). The essentials:
+
+- **The 50 writes/second cap only exists on Akamai.** A local `spin up` sqlite store will not
+  throttle, so this measurement cannot be taken anywhere else — that is why the task exists.
+- **Reproduce a throttle the way the incidents did:** fire several bulk creates *concurrently*
+  (six parallel 50-row requests did it twice). One bulk action alone runs at ~13 writes/second and
+  will not trip the cap.
+- **What the trace should show** with `X-SS-Debug: $SPIN_VARIABLE_LOG_DEBUG_TOKEN`: `write_retry`
+  ops in the log line, and on exhaustion a **`200` response carrying `"partial": true`** — never a
+  bare `500`, which is what this work replaced.
+- **The point of the test is the store afterwards:** a throttled run must leave **zero
+  `unindexed_link` findings**, because the handler indexes exactly what landed. That is the whole
+  claim; check `GET /api/admin/consistency` immediately after.
+
+**Cleanup after tracing, and note the pleasing symmetry:** the test creates junk links and may
+create drift. Delete the links *paced* (sequential batches with a pause — a concurrent burst is
+what causes drift), then run `POST /api/admin/consistency/repair` for anything left, and confirm
+`ok: true`. The tool built to fix the original incident is what cleans up after its own test.
+
+## Other work that is decided but NOT built
+
+- **Stop re-fetching click totals on mutation-driven dashboard reloads.** Decided 2026-08-12
+  (leave decoupled, add **no** refresh control) and **never implemented** — `loadLinks()` in
+  `gui/dashboard.js` still calls `loadClickTotals()` unconditionally, so all nine mutation call
+  sites re-pay a full-store enumeration plus the whole read fan-out for data that provably cannot
+  have changed. The task line and its verification step are both still open above.
+
+## Standing rules worth carrying over
+
+- **Deploys are the user's call.** Do not deploy without being asked.
+- **The `fwf.app` deployment is a disposable test site** — reshape its data freely for
+  measurements; the caution costs accuracy. See the `deployed-app-is-a-test-site` memory.
+- **Seeding links alone measures nothing about analytics** — an unclicked link creates no count
+  keys. Seed *clicks*. A 9,000-link run once reported a false all-clear this way.
+- **A module in the venv proves nothing about the built component.** componentize-py bundles only
+  what a **module-scope** import reaches; a function-scoped import fails with a bare
+  `ModuleNotFoundError` that reads like "unsupported". This produced one published-and-retracted
+  conclusion already.
+- **Editing anything under `gui/` requires restarting `spin up`** — `spin_static_fs` serves a
+  startup snapshot, and a correct fix will keep reproducing the old error at the old line numbers.
