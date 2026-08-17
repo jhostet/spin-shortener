@@ -431,7 +431,13 @@ async function runConsistencyRepair(checkIds) {
     document.getElementById("repair-progress").textContent = `Repaired ${totalWrites} writes so far…`;
     if (data.complete || repairStopped) break;
     if (data.writes === 0) {
-      document.getElementById("repair-progress").textContent = "Repair made no progress.";
+      // docs/plans/write-throttle-resilience.md: write_failed names the
+      // cause (the store is throttling writes) rather than leaving the
+      // operator with an unexplained symptom.
+      document.getElementById("repair-progress").textContent =
+        data.write_failed && data.write_failed.length
+          ? "The store was busy — some repairs could not be written. Wait a moment and run the check again."
+          : "Repair made no progress.";
       document.getElementById("repair-stop-btn").hidden = true;
       return;
     }
@@ -570,6 +576,7 @@ async function runOrphanPurge(initialReport) {
   let slugs = report.orphans.map((o) => o.slug);
   const totalKeysAtStart = report.totals.orphan_keys;
   let deleted = 0;
+  let noProgress = false;
 
   while (slugs.length && !orphanPurgeStopped) {
     const chunk = slugs.slice(0, 50);
@@ -579,8 +586,27 @@ async function runOrphanPurge(initialReport) {
       break;
     }
     deleted += data.deleted_keys;
-    slugs = data.remaining_slugs.concat(slugs.slice(50));
+    const nextSlugs = data.remaining_slugs.concat(slugs.slice(50));
+    // docs/plans/write-throttle-resilience.md: before write-failure reporting
+    // existed, `plan_purge` always planned at least one slug, so progress was
+    // guaranteed and this loop could never spin. A throttled delete can now
+    // return "0 deleted, same slugs remaining" — without this guard that is
+    // an infinite loop, mirroring the repair loop's existing one above.
+    if (data.deleted_keys === 0 && JSON.stringify(nextSlugs) === JSON.stringify(slugs)) {
+      noProgress = true;
+      slugs = nextSlugs;
+      break;
+    }
+    slugs = nextSlugs;
     progressEl.textContent = `Deleted ${deleted} of ${totalKeysAtStart} keys…`;
+  }
+
+  if (noProgress) {
+    progressEl.textContent = "The store was busy — wait a moment and try Find again.";
+    stopBtn.hidden = true;
+    findBtn.disabled = false;
+    purgeBtn.disabled = false;
+    return;
   }
 
   // A truncated report means more orphans existed than the report showed —

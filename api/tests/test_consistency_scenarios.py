@@ -25,6 +25,7 @@ import auth
 import bulk
 import consistency
 import consistencyrepair
+import kvretry
 import links
 import users
 from responses import Request
@@ -247,14 +248,14 @@ async def test_healthy_store_through_real_handlers_reports_all_clear():
     carol_slug = json.loads(created_carol.body)["slug"]
 
     bulk_created = await bulk.handle_bulk_create(
-        links_store, bob, _bulk_create_request({"text": "https://example.com/one\nhttps://example.com/two"}), fake_get_many)
+        links_store, bob, _bulk_create_request({"text": "https://example.com/one\nhttps://example.com/two"}), fake_get_many, kvretry.direct)
     assert bulk_created.status == 201
     bulk_slugs = [record["slug"] for record in json.loads(bulk_created.body)["links"]]
 
     # Reassign carol's link to bob, so carol will own nothing.
     reassigned = await bulk.handle_bulk_action(
         links_store, users_store, admin,
-        _action_request({"slugs": [carol_slug], "action": "reassign", "owner": "bob"}), fake_get_many)
+        _action_request({"slugs": [carol_slug], "action": "reassign", "owner": "bob"}), fake_get_many, kvretry.direct)
     assert reassigned.status == 200
 
     # Delete one of the bulk-created links outright.
@@ -358,8 +359,7 @@ async def test_the_2026_08_15_throttled_write_incident_repairs_in_two_writes():
             "confirm": "REPAIR",
             "checks": ["unindexed_link", "missing_link_record", "unindexed_owner_link", "orphan_owner_index_entry"],
         }),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert repair_resp.status == 200
     repair_body = json.loads(repair_resp.body)
     assert repair_body["writes"] == 2

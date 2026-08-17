@@ -15,6 +15,7 @@ import analyticsorphans
 import backup
 import consistency
 import kvprefix
+import kvretry
 import links
 from responses import Request
 from tests.fakes import FakeStore, fake_get_many, fake_list_keys
@@ -204,8 +205,7 @@ async def test_orphan_purge_through_views_touches_only_targeted_analytics_keys()
         body=json.dumps({"confirm": "PURGE", "slugs": ["keepme", "killme"]}).encode("utf-8"),
     )
     response = await analyticsorphans.handle_orphan_purge(
-        views["links"], views["analytics"], _principal(), request, list_keys,
-    )
+        views["links"], views["analytics"], _principal(), request, list_keys, kvretry.direct)
     assert response.status == 200
     body = json.loads(response.body)
     assert body["purged_slugs"] == ["killme"]

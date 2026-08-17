@@ -9,7 +9,8 @@ import json
 import auth
 import consistency
 import consistencyrepair as repair
-from tests.fakes import FakeStore, fake_get_many, fake_list_keys
+import kvretry
+from tests.fakes import FakeStore, ThrottlingStore, fake_get_many, fake_list_keys, recording_sleep
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -332,7 +333,7 @@ async def test_apply_repairs_writes_links_before_users():
         "links": {"deltas": {"all_links": {"add": ["z"], "remove": []}}, "deletes": []},
         "users": {"deltas": {}, "deletes": ["session:tok"]},
     }
-    await repair.apply_repairs({"links": links_store, "users": users_store}, plan)
+    await repair.apply_repairs({"links": links_store, "users": users_store}, plan, kvretry.direct)
     assert order == ["links", "users"]
 
 
@@ -342,12 +343,12 @@ async def test_apply_repairs_reads_before_writing_and_is_idempotent():
         "links": {"deltas": {"all_links": {"add": ["y"], "remove": []}}, "deletes": []},
         "users": {"deltas": {}, "deletes": []},
     }
-    result = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan)
+    result = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan, kvretry.direct)
     assert result["keys_written"] == 1
     assert json.loads(await links_store.get("all_links")) == ["x", "y"]
 
     # A second identical application is a no-op: the delta is already applied.
-    result2 = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan)
+    result2 = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan, kvretry.direct)
     assert result2["keys_written"] == 0
 
 
@@ -357,7 +358,7 @@ async def test_apply_repairs_skips_a_key_that_became_unparseable_since_collectio
         "links": {"deltas": {"all_links": {"add": ["y"], "remove": []}}, "deletes": []},
         "users": {"deltas": {}, "deletes": []},
     }
-    result = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan)
+    result = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan, kvretry.direct)
     assert result["keys_written"] == 0
     assert result["write_skipped"] == [{"store": "links", "key": "all_links", "reason": "index_unreadable_at_write"}]
 
@@ -385,8 +386,60 @@ async def test_apply_repairs_never_touches_a_user_record_key():
         "links": {"deltas": {}, "deletes": []},
         "users": {"deltas": {"_meta:usernames": {"add": ["alice"], "remove": []}}, "deletes": ["session:tok"]},
     }
-    await repair.apply_repairs({"links": FakeStore(), "users": users_store}, plan)
+    await repair.apply_repairs({"links": FakeStore(), "users": users_store}, plan, kvretry.direct)
     assert not [op for op in users_store.touched if op[1].startswith("user:")]
+
+
+async def test_apply_repairs_stops_on_write_failed_and_reports_the_key():
+    """docs/plans/write-throttle-resilience.md: a repair against a
+    throttled store must STOP rather than continue to the next key, and
+    report exactly which key failed."""
+    links_store = ThrottlingStore({"all_links": _j(["x"])}, fail_times={"all_links": 10})
+    users_store = FakeStore()
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    plan = {
+        "links": {"deltas": {"all_links": {"add": ["y"], "remove": []}}, "deletes": []},
+        "users": {"deltas": {"_meta:usernames": {"add": ["z"], "remove": []}}, "deletes": []},
+    }
+    result = await repair.apply_repairs({"links": links_store, "users": users_store}, plan, write)
+    assert result["keys_written"] == 0
+    assert result["write_failed"] == [{"store": "links", "key": "all_links", "reason": "write_failed"}]
+    # The users store's delta must never even have been attempted — the
+    # links-store failure stops the whole applier before it reaches "users".
+    assert await users_store.get("_meta:usernames") is None
+
+
+async def test_apply_repairs_write_failed_defaults_to_empty_list_on_success():
+    links_store = FakeStore({"all_links": _j(["x"])})
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    plan = {
+        "links": {"deltas": {"all_links": {"add": ["y"], "remove": []}}, "deletes": []},
+        "users": {"deltas": {}, "deletes": []},
+    }
+    result = await repair.apply_repairs({"links": links_store, "users": FakeStore()}, plan, write)
+    assert result["write_failed"] == []
+
+
+async def test_handle_repair_against_throttled_store_reports_failed_key_and_complete_false():
+    links_store = ThrottlingStore(
+        {"slug:foo": _j({"owner": "carol"}), "all_links": _j([]), "owner_links:carol": _j([])},
+        fail_times={"all_links": 10},
+    )
+    users_store = FakeStore({"user:carol": _j({}), "_meta:usernames": _j(["carol"])})
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    from responses import Request
+
+    resp = await repair.handle_repair(
+        {"links": links_store, "users": users_store}, _principal(),
+        Request(method="POST", uri="/x", headers={}, body=b'{"confirm":"REPAIR","checks":["unindexed_link"]}'),
+        fake_list_keys, fake_get_many, write)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["complete"] is False
+    assert body["write_failed"] == [{"store": "links", "key": "all_links", "reason": "write_failed"}]
 
 
 async def test_no_gather_or_batch_deletes_anywhere_in_the_module():
@@ -418,8 +471,7 @@ async def test_handle_repair_forbidden_without_users_manage():
         {"links": links_store, "users": users_store},
         _principal(role="user", permissions=[]),
         Request(method="POST", uri="/api/admin/consistency/repair", headers={}, body=b'{"confirm":"REPAIR","checks":["unindexed_link"]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 403
 
 
@@ -429,8 +481,7 @@ async def test_handle_repair_invalid_json():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b"not json"),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_json"
 
@@ -441,8 +492,7 @@ async def test_handle_repair_confirmation_required():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b'{"checks":["unindexed_link"]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "confirmation_required"
 
@@ -453,8 +503,7 @@ async def test_handle_repair_no_checks():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b'{"confirm":"REPAIR","checks":[]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body["error"] == "no_checks"
@@ -467,8 +516,7 @@ async def test_handle_repair_duplicate_check():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b'{"confirm":"REPAIR","checks":["unindexed_link","unindexed_link"]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "duplicate_check"
 
@@ -479,8 +527,7 @@ async def test_handle_repair_unknown_check():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b'{"confirm":"REPAIR","checks":["nope"]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "unknown_check"
 
@@ -491,8 +538,7 @@ async def test_handle_repair_check_not_repairable():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b'{"confirm":"REPAIR","checks":["owner_index_mismatch"]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "check_not_repairable"
 
@@ -508,7 +554,7 @@ async def test_handle_repair_success_and_idempotence():
         )
 
     resp = await repair.handle_repair(
-        {"links": links_store, "users": users_store}, _principal(), make_request(), fake_list_keys, fake_get_many)
+        {"links": links_store, "users": users_store}, _principal(), make_request(), fake_list_keys, fake_get_many, kvretry.direct)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["writes"] == 1
@@ -522,7 +568,7 @@ async def test_handle_repair_success_and_idempotence():
 
     # Second identical request writes nothing and still reports complete.
     resp2 = await repair.handle_repair(
-        {"links": links_store, "users": users_store}, _principal(), make_request(), fake_list_keys, fake_get_many)
+        {"links": links_store, "users": users_store}, _principal(), make_request(), fake_list_keys, fake_get_many, kvretry.direct)
     body2 = json.loads(resp2.body)
     assert body2["writes"] == 0
     assert body2["complete"] is True
@@ -540,7 +586,6 @@ async def test_handle_repair_never_leaks_password_hash():
     resp = await repair.handle_repair(
         {"links": links_store, "users": users_store}, _principal(),
         Request(method="POST", uri="/x", headers={}, body=b'{"confirm":"REPAIR","checks":["unindexed_link"]}'),
-        fake_list_keys, fake_get_many,
-    )
+        fake_list_keys, fake_get_many, kvretry.direct)
     assert b"password_hash" not in resp.body
     assert b"pbkdf2_sha256" not in resp.body

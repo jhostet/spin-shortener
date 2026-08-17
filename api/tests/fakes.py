@@ -97,3 +97,71 @@ def fake_raw_get_many(data: dict[str, bytes], *, none_for_missing: bool = False,
         return list(reversed(pairs))
 
     return raw_get_many
+
+
+class KvThrottleError(Exception):
+    """Stands in for the real `Err(Error_Other(value='too many requests'))`
+    that a throttled `spin_sdk.key_value` write raises. `componentize_py_types`
+    (which defines the real `Err`/`Error_Other` dataclasses) is injected by
+    componentize-py at build time and doesn't exist in the host venv, so a
+    test cannot construct the real thing — but its `str()` is reproduced
+    exactly (docs/plans/write-throttle-resilience.md confirmed this against a
+    faithful reconstruction of the two generated dataclasses), which is all
+    `kvretry.classify_write_error` ever looks at."""
+
+    def __init__(self):
+        super().__init__("Error_Other(value='too many requests')")
+
+
+class KvOtherError(Exception):
+    """Stands in for a non-throttle write failure, e.g. `Err(Error_AccessDenied())`."""
+
+    def __init__(self):
+        super().__init__("Error_AccessDenied()")
+
+
+class ThrottlingStore(FakeStore):
+    """A FakeStore whose `set`/`delete` fail for chosen keys a chosen number
+    of times before succeeding (or forever, if `fail_times` is `None`) — used
+    to simulate a throttled write for `kvretry`/bulk/backup/repair/purge
+    tests. `fail_times` maps key -> remaining-failures-before-success; a key
+    absent from the map never fails.
+    """
+
+    def __init__(self, initial: Optional[dict[str, bytes]] = None, *, fail_times: Optional[dict[str, int]] = None,
+                 error_factory=KvThrottleError):
+        super().__init__(initial)
+        self._fail_times: dict[str, int] = dict(fail_times or {})
+        self._error_factory = error_factory
+        self.set_attempts: dict[str, int] = {}
+        self.delete_attempts: dict[str, int] = {}
+
+    async def _maybe_fail(self, key: str, counts: dict[str, int]) -> None:
+        counts[key] = counts.get(key, 0) + 1
+        remaining = self._fail_times.get(key)
+        if remaining is None:
+            return
+        if remaining > 0:
+            self._fail_times[key] = remaining - 1
+            raise self._error_factory()
+
+    async def set(self, key: str, value: bytes) -> None:
+        await self._maybe_fail(key, self.set_attempts)
+        await super().set(key, value)
+
+    async def delete(self, key: str) -> None:
+        await self._maybe_fail(key, self.delete_attempts)
+        await super().delete(key)
+
+
+def recording_sleep():
+    """Returns `(sleep, delays_list)` — a fake `kvretry` sleep primitive that
+    records every requested delay (nanoseconds) into `delays_list` and
+    returns immediately, so a retry backoff *schedule* can be asserted
+    without any test ever actually waiting."""
+    delays: list[int] = []
+
+    async def sleep(nanoseconds: int) -> None:
+        delays.append(nanoseconds)
+
+    return sleep, delays

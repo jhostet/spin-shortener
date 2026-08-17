@@ -19,6 +19,7 @@ import json
 
 import auth
 import bulk
+import kvretry
 import links
 import users
 from responses import Request
@@ -73,7 +74,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     # The link is reassigned to dave through the bulk tool.
     await _make_user(users_store, "dave", password="davespassword")
     reassign = await bulk.handle_bulk_action(
-        links_store, users_store, admin, _action_request({"slugs": ["carol-private"], "action": "reassign", "owner": "dave"}), fake_get_many)
+        links_store, users_store, admin, _action_request({"slugs": ["carol-private"], "action": "reassign", "owner": "dave"}), fake_get_many, kvretry.direct)
     assert reassign.status == 200
 
     # carol is now deletable.

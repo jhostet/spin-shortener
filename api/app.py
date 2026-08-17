@@ -16,6 +16,7 @@ import consistencyrepair
 import domains
 import kvbatch
 import kvprefix
+import kvretry
 import links
 import obs
 import qr
@@ -39,6 +40,22 @@ try:
 except ImportError:  # toolchain did not bundle it; every caller falls back
     wasi_batch = None
     wasi_store = None
+
+# docs/plans/write-throttle-resilience.md: the WASI clock backing kvretry's
+# injected `sleep`, imported at MODULE scope for the same reason as
+# wasi_batch above — componentize-py bundles only modules reachable from a
+# top-level import, and this exact module was confirmed to survive the
+# bundler and to actually sleep (task 1's spike: a temporary token-gated
+# handler measured `wait_for(500_000_000)` at ~502.6ms, not ~0 and not a
+# trap; `await asyncio.sleep(0.1)` was separately confirmed to raise
+# NotImplementedError, exactly as componentize_py_async_support._Loop's
+# unimplemented call_later/call_at/time predict).
+try:
+    from spin_sdk.wit.imports import (
+        wasi_clocks_monotonic_clock_0_3_0_rc_2026_03_15 as wasi_clock,
+    )
+except ImportError:  # toolchain did not bundle it; falls back to a no-op
+    wasi_clock = None
 
 # --- Toggleable structured logging (docs/plans/toggleable-logging.md) ---
 #
@@ -118,6 +135,16 @@ def _make_raw_get_many(collector):
         return wasi_batch.get_many(bucket, physical_keys)
 
     return raw_get_many
+
+
+async def _sleep_ns(nanoseconds: int) -> None:
+    """kvretry's injected sleep (docs/plans/write-throttle-resilience.md). A
+    documented no-op when the binding is absent — retries then collapse to
+    immediate re-issue, spaced only by the ~75ms measured KV round trip,
+    rather than raising or blocking forever."""
+    if wasi_clock is None:
+        return
+    await wasi_clock.wait_for(nanoseconds)
 
 
 async def _cookie_secure() -> bool:
@@ -221,6 +248,7 @@ class HttpHandler(Handler):
         analytics_store = stores["analytics"]
         list_keys = kvprefix.scoped_list_keys(_kv_keys, collector)
         get_many = kvbatch.scoped_get_many(_make_raw_get_many(collector), collector)
+        write = kvretry.make_writer(_sleep_ns, collector)
         admin_username = await variables.get("admin_bootstrap_username")
         admin_password = await variables.get("admin_bootstrap_password")
         await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
@@ -255,19 +283,19 @@ class HttpHandler(Handler):
                 return result
             if method == "GET":
                 return await links.handle_list(links_store, result, get_many)
-            return await links.handle_create(links_store, result, request)
+            return await links.handle_create(links_store, result, request, write)
 
         if path == "/api/links/bulk" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await bulk.handle_bulk_create(links_store, result, request, get_many)
+            return await bulk.handle_bulk_create(links_store, result, request, get_many, write)
 
         if path == "/api/links/bulk-action" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await bulk.handle_bulk_action(links_store, users_store, result, request, get_many)
+            return await bulk.handle_bulk_action(links_store, users_store, result, request, get_many, write)
 
         if path.startswith("/api/links/") and path.endswith("/password") and method == "POST":
             slug = path.removeprefix("/api/links/").removesuffix("/password")
@@ -276,7 +304,7 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await links.handle_set_password(links_store, result, slug, request)
+            return await links.handle_set_password(links_store, result, slug, request, write)
 
         # Deliberately NOT /api/links/clicks: "clicks" is a legal custom slug
         # (CUSTOM_SLUG_PATTERN allows it), so that path would be shadowed by
@@ -318,7 +346,7 @@ class HttpHandler(Handler):
             if method == "GET":
                 return await links.handle_get(links_store, result, slug)
             if method == "PATCH":
-                return await links.handle_update(links_store, result, slug, request)
+                return await links.handle_update(links_store, result, slug, request, write)
             # Inline analytics purge (docs/plans/inline-analytics-purge-on-delete.md):
             # single-link delete purges the deleted slug's analytics keys in
             # the same request, unlike bulk delete (api/bulk.py), which
@@ -328,6 +356,7 @@ class HttpHandler(Handler):
                 links_store, result, slug,
                 purge_analytics=lambda s: analyticsorphans.purge_slug_analytics(
                     analytics_store, s, list_keys),
+                write=write,
             )
 
         if path == "/api/users" and method in ("GET", "POST"):
@@ -394,7 +423,7 @@ class HttpHandler(Handler):
             # it: orphaned analytics is normal state with its own shipped
             # tool (docs/plans/analytics-orphan-purge.md).
             return await consistencyrepair.handle_repair(
-                {"links": links_store, "users": users_store}, result, request, list_keys, get_many,
+                {"links": links_store, "users": users_store}, result, request, list_keys, get_many, write,
             )
 
         if path == "/api/admin/analytics/orphans" and method == "GET":
@@ -410,7 +439,7 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             return await analyticsorphans.handle_orphan_purge(
-                links_store, analytics_store, result, request, list_keys,
+                links_store, analytics_store, result, request, list_keys, write,
             )
 
         if path == "/api/admin/url-policy/violations" and method == "GET":

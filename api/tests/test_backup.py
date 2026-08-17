@@ -4,7 +4,7 @@ import json
 import auth
 import backup
 from responses import Request
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, ThrottlingStore, fake_list_keys
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -528,6 +528,57 @@ async def test_handle_restore_invalid_backup_rejected():
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_backup_format"
+
+
+async def test_handle_restore_no_write_parameter_and_no_kvretry_import():
+    """docs/plans/write-throttle-resilience.md: restore is report-only,
+    deliberately no retry — a full-cap restore already can't finish inside
+    Akamai's 30-second handler limit, so sleeps would only make a doomed
+    request slower."""
+    import inspect
+    source = inspect.getsource(backup)
+    assert "import kvretry" not in source
+    sig = inspect.signature(backup.handle_restore)
+    assert "write" not in sig.parameters
+
+
+async def test_handle_restore_throttled_write_reports_partial_instead_of_500():
+    links_store = ThrottlingStore(
+        {"slug:old": b'{"slug": "old"}', "all_links": b'["old"]'},
+        fail_times={"slug:new": 1},
+    )
+    doc = await _export_doc({"links": FakeStore({"slug:new": b'{"slug": "new"}', "all_links": b'["new"]'})})
+
+    resp = await backup.handle_restore(
+        {"links": links_store, "users": FakeStore()}, _principal(),
+        _restore_request({"confirm": "REPLACE", "backup": doc}),
+        fake_list_keys, 30,
+    )
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["ok"] is False
+    assert body["partial"] is True
+    assert body["stopped_at_store"] == "links"
+    assert body["write_error"] == "throttled"
+    assert body["next_step"] == "retry_restore"
+    assert body["restored"] == {}
+    assert body["pruned"] == {}
+
+
+async def test_handle_restore_success_response_byte_identical_to_today():
+    links_store = FakeStore({"slug:old": b'{"slug": "old"}', "all_links": b'["old"]'})
+    doc = await _export_doc({"links": FakeStore({"slug:new": b'{"slug": "new"}', "all_links": b'["new"]'})})
+
+    resp = await backup.handle_restore(
+        {"links": links_store, "users": FakeStore()}, _principal(),
+        _restore_request({"confirm": "REPLACE", "backup": doc}),
+        fake_list_keys, 30,
+    )
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert set(body.keys()) == {"ok", "restored", "pruned", "signed_out", "next_step"}
+    assert body["ok"] is True
+    assert body["next_step"] == "bootstrap_admin"
 
 
 async def test_handle_restore_links_only_signed_out_false_users_untouched():

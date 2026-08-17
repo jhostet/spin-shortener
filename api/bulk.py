@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 
 import auth
+import kvretry
 import links
 import tags
 import urlpolicy
@@ -176,7 +177,7 @@ def validate_bulk_rows(
     return errors
 
 
-async def handle_bulk_create(store, principal, request, get_many):
+async def handle_bulk_create(store, principal, request, get_many, write):
     if len(request.body or b"") > MAX_BULK_BODY_BYTES:
         return json_response(413, {"error": "body_too_large", "max_bytes": MAX_BULK_BODY_BYTES})
 
@@ -255,7 +256,9 @@ async def handle_bulk_create(store, principal, request, get_many):
 
     now = iso_now()
     created_records = []
-    for row, slug, custom in assigned:
+    not_created = []
+    write_failure = None  # (exc, line, slug) of whichever write first failed
+    for idx, (row, slug, custom) in enumerate(assigned):
         record = {
             "slug": slug,
             "target_url": row.target_url,
@@ -269,18 +272,53 @@ async def handle_bulk_create(store, principal, request, get_many):
             "created_at": now,
             "updated_at": now,
         }
-        await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+        try:
+            await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+        except kvretry.WriteFailed as exc:
+            # THE LOAD-BEARING LINE (docs/plans/write-throttle-resilience.md):
+            # abandon the rest rather than keep hammering a throttled store,
+            # then index EXACTLY what landed below. This is what makes a
+            # throttled bulk create produce zero unindexed_link findings,
+            # instead of retrying harder into the same cap.
+            write_failure = (exc, row.line, slug)
+            not_created = [
+                {"line": r.line, "slug": s, "error": "write_failed"}
+                for r, s, _ in assigned[idx:]
+            ]
+            break
         created_records.append(record)
 
-    await links.add_slugs_to_indexes(store, principal.username, [r["slug"] for r in created_records])
+    index_updated = True
+    if created_records:
+        try:
+            await links.add_slugs_to_indexes(
+                store, principal.username, [r["slug"] for r in created_records], write)
+        except kvretry.WriteFailed as exc:
+            index_updated = False
+            write_failure = write_failure or (exc, None, None)
 
-    return json_response(201, {
+    if write_failure is None:
+        return json_response(201, {
+            "count": len(created_records),
+            "links": [links.public_link(r) for r in created_records],
+        })
+
+    exc, _, _ = write_failure
+    next_step = "consistency_repair" if not index_updated else "resubmit"
+    return json_response(200, {
+        "ok": False,
+        "partial": True,
         "count": len(created_records),
         "links": [links.public_link(r) for r in created_records],
+        "not_created": not_created,
+        "index_updated": index_updated,
+        "write_error": kvretry.classify_write_error(exc.cause),
+        "next_step": next_step,
+        "row_count": len(rows),
     })
 
 
-async def handle_bulk_action(store, users_store, principal, request, get_many):
+async def handle_bulk_action(store, users_store, principal, request, get_many, write):
     try:
         payload = json.loads(request.body or b"{}")
     except json.JSONDecodeError:
@@ -356,14 +394,25 @@ async def handle_bulk_action(store, users_store, principal, request, get_many):
     if row_errors:
         return json_response(400, {"error": "bulk_validation_failed", "row_errors": row_errors})
 
+    applied: list[str] = []
+    write_failure = None  # (exc,) of whichever write first failed
+
     if action in ACTION_STATUSES:
+        # No index step: enable/disable are structurally incapable of drift.
         new_status = ACTION_STATUSES[action]
         now = iso_now()
         for slug, record in records.items():
             record["status"] = new_status
             record["updated_at"] = now
-            await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+            try:
+                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+            except kvretry.WriteFailed as exc:
+                write_failure = (exc,)
+                break
+            applied.append(slug)
+        index_updated = True
     elif action in ("tag", "untag"):
+        # No index step: tags live inside the record, not in a separate index.
         now = iso_now()
         for slug, record in records.items():
             if action == "tag":
@@ -371,26 +420,76 @@ async def handle_bulk_action(store, users_store, principal, request, get_many):
             else:
                 record["tags"] = tags.remove_tags(record.get("tags", []), tag_list)
             record["updated_at"] = now
-            await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+            try:
+                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+            except kvretry.WriteFailed as exc:
+                write_failure = (exc,)
+                break
+            applied.append(slug)
+        index_updated = True
     elif action == "reassign":
         # Records first, then the owner indexes — an interruption here leaves
         # a duplicate (visible in both dashboards), never a disappearance.
         now = iso_now()
         slugs_by_old_owner: dict[str, list[str]] = {}
         for slug, record in records.items():
-            slugs_by_old_owner.setdefault(record["owner"], []).append(slug)
+            old_owner = record["owner"]
             record["owner"] = new_owner
             record["updated_at"] = now
-            await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
-        await links.move_slugs_between_owners(store, slugs_by_old_owner, new_owner)
+            try:
+                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+            except kvretry.WriteFailed as exc:
+                write_failure = (exc,)
+                break
+            slugs_by_old_owner.setdefault(old_owner, []).append(slug)
+            applied.append(slug)
+        index_updated = True
+        if applied:
+            try:
+                await links.move_slugs_between_owners(store, slugs_by_old_owner, new_owner, write)
+            except kvretry.WriteFailed as exc:
+                index_updated = False
+                write_failure = write_failure or (exc,)
     else:  # delete
         slugs_by_owner: dict[str, list[str]] = {}
         for slug, record in records.items():
-            await store.delete(f"slug:{slug}")
+            try:
+                await write(lambda s=slug: store.delete(f"slug:{s}"))
+            except kvretry.WriteFailed as exc:
+                write_failure = (exc,)
+                break
             slugs_by_owner.setdefault(record["owner"], []).append(slug)
-        await links.remove_slugs_from_indexes(store, slugs_by_owner)
+            applied.append(slug)
+        index_updated = True
+        if applied:
+            try:
+                await links.remove_slugs_from_indexes(store, slugs_by_owner, write)
+            except kvretry.WriteFailed as exc:
+                index_updated = False
+                write_failure = write_failure or (exc,)
 
-    result = {"ok": True, "action": action, "count": len(slugs)}
+    if write_failure is None:
+        result = {"ok": True, "action": action, "count": len(slugs)}
+        if action in ("tag", "untag"):
+            result["tags"] = tag_list
+        elif action == "reassign":
+            result["owner"] = new_owner
+        return json_response(200, result)
+
+    (exc,) = write_failure
+    not_applied = [s for s in slugs if s not in applied]
+    next_step = "consistency_repair" if not index_updated else "resubmit"
+    result = {
+        "ok": False,
+        "partial": True,
+        "action": action,
+        "count": len(applied),
+        "applied": applied,
+        "not_applied": not_applied,
+        "index_updated": index_updated,
+        "write_error": kvretry.classify_write_error(exc.cause),
+        "next_step": next_step,
+    }
     if action in ("tag", "untag"):
         result["tags"] = tag_list
     elif action == "reassign":

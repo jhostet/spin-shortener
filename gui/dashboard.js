@@ -265,6 +265,21 @@ function getSelectableVisibleSlugs() {
   return getVisibleLinks().filter(canEditLink).map((link) => link.slug);
 }
 
+// Sets selectedSlugs to exactly `slugs` and reflects it in the currently
+// rendered checkboxes — used by every bulk flow's partial-write branch
+// (docs/plans/write-throttle-resilience.md) to narrow the selection to
+// `not_applied` after a `loadLinks()` re-render (which clears selectedSlugs
+// as a side effect, per renderLinksTable's own comment), so clicking the
+// same bulk button again retries exactly the failures.
+function narrowSelectionTo(slugs) {
+  selectedSlugs = new Set(slugs);
+  document.querySelectorAll("#links-body .row-select").forEach((cb) => {
+    cb.checked = selectedSlugs.has(cb.dataset.slug);
+  });
+  updateSelectAllState();
+  updateBulkBar();
+}
+
 function updateSelectAllState() {
   const selectAll = document.getElementById("select-all-links");
   const selectableSlugs = getSelectableVisibleSlugs();
@@ -770,6 +785,24 @@ async function handleBulkAction(action) {
     return;
   }
 
+  if (data.partial) {
+    // docs/plans/write-throttle-resilience.md: names what applied, and
+    // narrows the selection to not_applied so clicking the same button
+    // again retries exactly the failures — a better next move than any
+    // sentence alone.
+    const verb = action === "delete" ? "Deleted" : action === "enable" ? "Enabled" : "Disabled";
+    errorEl.textContent =
+      `${verb} ${data.count} of ${slugs.length} links. The store was busy for the rest — ` +
+      `they're still selected below so you can try again.`;
+    if (data.index_updated === false) {
+      errorsEl.innerHTML = renderIndexNotUpdatedWarning();
+      errorsEl.hidden = false;
+    }
+    await loadLinks();
+    narrowSelectionTo(data.not_applied || []);
+    return;
+  }
+
   const verb = action === "delete" ? "Deleted" : action === "enable" ? "Enabled" : "Disabled";
   successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
   successEl.hidden = false;
@@ -817,6 +850,20 @@ async function handleBulkTag(action) {
   }
 
   const verb = action === "tag" ? "Tagged" : "Untagged";
+
+  if (data.partial) {
+    errorEl.textContent =
+      `${verb} ${data.count} of ${slugs.length} links. The store was busy for the rest — ` +
+      `they're still selected below so you can try again.`;
+    if (data.index_updated === false) {
+      errorsEl.innerHTML = renderIndexNotUpdatedWarning();
+      errorsEl.hidden = false;
+    }
+    await loadLinks();
+    narrowSelectionTo(data.not_applied || []);
+    return;
+  }
+
   successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
   successEl.hidden = false;
   document.getElementById("bulk-tag-input").value = "";
@@ -862,6 +909,19 @@ async function handleBulkReassign() {
     return;
   }
 
+  if (data.partial) {
+    errorEl.textContent =
+      `Reassigned ${data.count} of ${slugs.length} links to "${owner}". The store was busy for the rest — ` +
+      `they're still selected below so you can try again.`;
+    if (data.index_updated === false) {
+      errorsEl.innerHTML = renderIndexNotUpdatedWarning();
+      errorsEl.hidden = false;
+    }
+    await loadLinks();
+    narrowSelectionTo(data.not_applied || []);
+    return;
+  }
+
   successEl.textContent = `Reassigned ${data.count} link${data.count === 1 ? "" : "s"} to "${owner}".`;
   successEl.hidden = false;
   loadLinks();
@@ -880,7 +940,25 @@ const BULK_ROW_MESSAGES = {
   custom_slug_forbidden: "You don't have permission to choose your own short links — leave the first column blank.",
   invalid_target_url: "Not a valid destination URL (include https://). If this is a header row, delete it.",
   destination_not_allowed: "This destination isn't allowed by the site's URL policy.",
+  // docs/plans/write-throttle-resilience.md: the one row-error code that can
+  // appear on a PARTIAL (200 ok:false) response rather than only on a 400
+  // bulk_validation_failed one — renders through the same renderBulkErrorTable
+  // / renderRowErrorList either way, no new function needed.
+  write_failed: "The store was busy and this row wasn't written. Try again.",
 };
+
+// Shared by every bulk flow's `index_updated: false` branch
+// (docs/plans/write-throttle-resilience.md): the affected records exist and
+// resolve at /r/{slug}, they're just invisible in the dashboard until the
+// store's index is repaired. Renders through the existing .form-error class
+// — no new token, following DESIGN.md's decision not to invent a distinct
+// warning color for "needs attention but isn't broken".
+function renderIndexNotUpdatedWarning() {
+  const repairLink = canManageUsers()
+    ? ` <a href="admin/backup.html">Open Store maintenance to repair it.</a>`
+    : " Ask an administrator to run the store consistency repair (requires the users.manage permission).";
+  return `<p class="form-error">Some links are not yet listed in the dashboard. They work, but they're invisible here until the store index is repaired.${repairLink}</p>`;
+}
 
 // Mirrors api/bulk.py's MAX_BULK_BODY_BYTES so a large file can be rejected
 // before FileReader ever reads it. The server is authoritative — a drift
@@ -984,6 +1062,23 @@ document.getElementById("bulk-form").addEventListener("submit", async (e) => {
         invalid_password: "Link passwords must be at least 4 characters.",
       });
     }
+    return;
+  }
+
+  if (data.partial) {
+    // docs/plans/write-throttle-resilience.md: the store was busy partway
+    // through — some rows landed, some didn't. The textarea is deliberately
+    // NOT cleared (same reasoning as too_many_rows above) so the operator
+    // can re-submit exactly the rows listed in not_created, and no success
+    // banner is shown since the submission did not fully succeed.
+    const notCreated = data.not_created || [];
+    errorEl.textContent =
+      `Created ${data.count} of ${data.row_count} links. ${notCreated.length} row${notCreated.length === 1 ? "" : "s"} ` +
+      `could not be written because the store was busy. The list below has been left as you submitted it — ` +
+      `re-submit only the rows listed here.`;
+    errorsEl.innerHTML = renderBulkErrorTable(notCreated) + (data.index_updated === false ? renderIndexNotUpdatedWarning() : "");
+    errorsEl.hidden = false;
+    loadLinks();
     return;
   }
 

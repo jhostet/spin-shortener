@@ -25,7 +25,16 @@ from typing import Optional
 # dead code. This is the one place api/obs.py's vocabulary diverges from its
 # Go counterpart; nothing pins the two vocabularies against each other the
 # way api/tests/test_kvprefix.py pins keys.go's prefixes and CountShards.
-_KV_OP_ORDER = ("open", "exists", "get", "get_many", "get_many_error", "set", "delete", "list_keys")
+#
+# "write_retry"/"write_failed" (docs/plans/write-throttle-resilience.md) are
+# the SECOND such divergence, for the same reason: `redirect` is explicitly
+# out of scope for the write-retry seam (its analytics writes stay
+# best-effort lossy, mechanism M2), so a Go-side field would also be dead
+# code. Nothing pins these two against redirect/linkgate/obs.go either.
+_KV_OP_ORDER = (
+    "open", "exists", "get", "get_many", "get_many_error", "set", "delete",
+    "write_retry", "write_failed", "list_keys",
+)
 
 
 class Collector:

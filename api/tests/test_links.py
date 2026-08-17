@@ -3,10 +3,11 @@ import json
 import pytest
 
 import auth
+import kvretry
 import links
 import urlpolicy
 from responses import Request
-from tests.fakes import FakeStore, fake_get_many
+from tests.fakes import FakeStore, ThrottlingStore, fake_get_many, recording_sleep
 
 
 async def _set_policy(store, default_action, rules):
@@ -373,7 +374,7 @@ async def test_delete_without_purge_analytics_is_byte_identical_to_today():
 
     resp = await links.handle_delete(store, owner, slug)
     assert resp.status == 200
-    assert json.loads(resp.body) == {"ok": True}
+    assert json.loads(resp.body) == {"ok": True, "index_updated": True}
 
 
 async def test_delete_with_purge_analytics_includes_the_result_in_the_response():
@@ -390,6 +391,7 @@ async def test_delete_with_purge_analytics_includes_the_result_in_the_response()
     assert resp.status == 200
     assert json.loads(resp.body) == {
         "ok": True,
+        "index_updated": True,
         "analytics_purge": {"status": "complete", "found_keys": 3, "deleted_keys": 3},
     }
 
@@ -968,6 +970,56 @@ async def test_index_write_once_property_for_bulk_style_batch(monkeypatch):
     assert len(set_calls) == 2
 
 
+# --- Injectable `write` (docs/plans/write-throttle-resilience.md) ---
+
+
+def _recording_writer():
+    """A writer that behaves exactly like kvretry.direct (calls straight
+    through, no retry) but records the policy every call site passed, so a
+    test can assert every write in these three helpers is INDEX_WRITE."""
+    policies = []
+
+    async def write(make_coro, policy=kvretry.RECORD_WRITE):
+        policies.append(policy)
+        await make_coro()
+
+    return write, policies
+
+
+async def test_add_slugs_to_indexes_default_write_is_direct_and_unaffected():
+    # No writer passed at all — the ~20 existing seeding call sites in this
+    # file (and elsewhere) must keep working exactly as before.
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["s1"])
+    assert await links.owned_slugs(store, "alice") == ["s1"]
+
+
+async def test_add_slugs_to_indexes_routes_every_write_through_index_write_policy():
+    store = FakeStore()
+    write, policies = _recording_writer()
+    await links.add_slugs_to_indexes(store, "alice", ["s1", "s2"], write)
+    assert policies and all(p is kvretry.INDEX_WRITE for p in policies)
+    assert await links.owned_slugs(store, "alice") == ["s1", "s2"]
+
+
+async def test_remove_slugs_from_indexes_routes_every_write_through_index_write_policy():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
+    write, policies = _recording_writer()
+    await links.remove_slugs_from_indexes(store, {"alice": ["a1"]}, write)
+    assert policies and all(p is kvretry.INDEX_WRITE for p in policies)
+    assert await links.owned_slugs(store, "alice") == ["a2"]
+
+
+async def test_move_slugs_between_owners_routes_every_write_through_index_write_policy():
+    store = FakeStore()
+    await links.add_slugs_to_indexes(store, "alice", ["a1"])
+    write, policies = _recording_writer()
+    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob", write)
+    assert policies and all(p is kvretry.INDEX_WRITE for p in policies)
+    assert await links.owned_slugs(store, "bob") == ["a1"]
+
+
 # --- Destination URL policy enforcement ---
 
 
@@ -1110,3 +1162,96 @@ async def test_delete_of_an_unreadable_record_fails_closed_without_edit_all():
     resp = await links.handle_delete(store, _principal(username="alice"), slug)
     assert resp.status == 403
     assert await store.get(f"slug:{slug}") is not None
+
+
+# --- Write-throttle resilience for single-link handlers (docs/plans/write-throttle-resilience.md) ---
+
+
+async def test_handle_create_success_shape_unchanged_with_a_real_writer():
+    store = FakeStore()
+    sleep, delays = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}), write)
+    assert resp.status == 201
+    assert delays == []
+
+
+async def test_handle_create_throttled_index_write_reports_partial_link_still_created():
+    store = ThrottlingStore(fail_times={"all_links": 10})
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}), write)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["ok"] is False
+    assert body["partial"] is True
+    assert body["index_updated"] is False
+    assert body["next_step"] == "consistency_repair"
+    assert body["link"]["target_url"] == "https://example.com/x"
+    assert await store.exists(f"slug:{body['link']['slug']}") is True
+
+
+async def test_handle_update_retries_a_throttled_write_and_still_succeeds():
+    store = ThrottlingStore(fail_times={})
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+    store._fail_times[f"slug:{slug}"] = 2  # fails twice, succeeds on the 3rd (RECORD_WRITE.attempts == 3)
+
+    sleep, delays = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await links.handle_update(store, owner, slug, _request({"status": "disabled"}), write)
+    assert resp.status == 200
+    assert len(delays) == 2
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["status"] == "disabled"
+
+
+async def test_handle_set_password_retries_a_throttled_write_and_still_succeeds():
+    store = ThrottlingStore(fail_times={})
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+    store._fail_times[f"slug:{slug}"] = 2
+
+    sleep, delays = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await links.handle_set_password(store, owner, slug, _request({"password": "longenough"}), write)
+    assert resp.status == 200
+    assert len(delays) == 2
+
+
+async def test_handle_delete_throttled_index_write_reports_index_updated_false():
+    store = ThrottlingStore(fail_times={})
+    owner = _principal(username="alice")
+    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    slug = json.loads(created.body)["slug"]
+    store._fail_times["owner_links:alice"] = 10  # persistently fails the owner index write
+
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await links.handle_delete(store, owner, slug, write=write)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["ok"] is True
+    assert body["index_updated"] is False
+    # The record itself is still gone — only the index write failed.
+    assert await store.exists(f"slug:{slug}") is False
+
+
+async def test_handle_delete_unreadable_record_branch_unchanged_by_write_param():
+    """The unreadable-record delete branch never threads `write` at all — it
+    is unaffected by this task, confirmed with a real retrying writer passed
+    in (which would show up as retries/delays if it were somehow reached)."""
+    store = ThrottlingStore(fail_times={})
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
+    slug = (await links.owned_slugs(store, "alice"))[0]
+    await store.set(f"slug:{slug}", b"{corrupt")
+
+    sleep, delays = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await links.handle_delete(store, _principal(role="admin"), slug, write=write)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["record_was_unreadable"] is True
+    assert delays == []

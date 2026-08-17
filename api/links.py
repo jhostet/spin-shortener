@@ -9,6 +9,7 @@ import string
 from urllib.parse import urlparse
 
 import auth
+import kvretry
 import tags
 import urlpolicy
 from auth import Principal
@@ -55,46 +56,56 @@ async def all_slugs(store) -> list[str]:
     return json.loads(raw) if raw else []
 
 
-async def add_slugs_to_indexes(store, owner: str, slugs: list[str]) -> None:
+async def add_slugs_to_indexes(store, owner: str, slugs: list[str], write=kvretry.direct) -> None:
     """One read+write of `all_links`, one of `owner_links:<owner>`, for any
-    number of slugs. Order-preserving, skips slugs already present."""
+    number of slugs. Order-preserving, skips slugs already present.
+
+    `write` (docs/plans/write-throttle-resilience.md) defaults to
+    `kvretry.direct` (call through, no retry) so the ~20 existing test call
+    sites that use this helper purely to seed fixtures are unaffected. A real
+    caller (`bulk.py`, `links.handle_create`) passes a request-scoped writer
+    built by `kvretry.make_writer`, and each `store.set` is retried under
+    `kvretry.INDEX_WRITE` — every key this function touches IS an index.
+    """
     slugs_index = await all_slugs(store)
     for slug in slugs:
         if slug not in slugs_index:
             slugs_index.append(slug)
-    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8"))
+    await write(lambda: store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8")), kvretry.INDEX_WRITE)
 
     owned = await owned_slugs(store, owner)
     for slug in slugs:
         if slug not in owned:
             owned.append(slug)
-    await store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8"))
+    await write(lambda: store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8")), kvretry.INDEX_WRITE)
 
 
-async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]]) -> None:
+async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]], write=kvretry.direct) -> None:
     """One read+write of `all_links` total, plus one per distinct owner. Takes
     a per-owner mapping because a `links.edit_all` user can delete links
-    belonging to several owners in a single action."""
+    belonging to several owners in a single action. See `add_slugs_to_indexes`
+    for the `write` parameter's default and rationale."""
     all_to_remove = {slug for slugs in slugs_by_owner.values() for slug in slugs}
     slugs_index = await all_slugs(store)
     slugs_index = [slug for slug in slugs_index if slug not in all_to_remove]
-    await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8"))
+    await write(lambda: store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8")), kvretry.INDEX_WRITE)
 
     for owner, slugs in slugs_by_owner.items():
         to_remove = set(slugs)
         owned = await owned_slugs(store, owner)
         owned = [slug for slug in owned if slug not in to_remove]
-        await store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8"))
+        await write(lambda o=owner, ow=owned: store.set(f"owner_links:{o}", json.dumps(ow).encode("utf-8")), kvretry.INDEX_WRITE)
 
 
 async def move_slugs_between_owners(
-    store, slugs_by_old_owner: dict[str, list[str]], new_owner: str
+    store, slugs_by_old_owner: dict[str, list[str]], new_owner: str, write=kvretry.direct
 ) -> None:
     """Reassignment's index half. One read+write of `owner_links:<new_owner>`,
     plus one per distinct old owner — the same one-read-one-write-per-index
     shape as add_slugs_to_indexes/remove_slugs_from_indexes, because Spin KV
     has no compare-and-swap and a per-slug read-modify-write would multiply
-    the race window by N.
+    the race window by N. See `add_slugs_to_indexes` for the `write`
+    parameter's default and rationale.
 
     Deliberately never reads or writes `all_links`: a reassignment does not
     change all_links membership, and calling remove_slugs_from_indexes here
@@ -106,13 +117,13 @@ async def move_slugs_between_owners(
     to). Both halves are idempotent, so re-running with the same arguments
     converges rather than compounding.
     """
-    all_slugs = [slug for slugs in slugs_by_old_owner.values() for slug in slugs]
+    all_slugs_to_move = [slug for slugs in slugs_by_old_owner.values() for slug in slugs]
 
     owned_new = await owned_slugs(store, new_owner)
-    for slug in all_slugs:
+    for slug in all_slugs_to_move:
         if slug not in owned_new:
             owned_new.append(slug)
-    await store.set(f"owner_links:{new_owner}", json.dumps(owned_new).encode("utf-8"))
+    await write(lambda: store.set(f"owner_links:{new_owner}", json.dumps(owned_new).encode("utf-8")), kvretry.INDEX_WRITE)
 
     for old_owner, slugs in slugs_by_old_owner.items():
         if old_owner == new_owner:
@@ -120,7 +131,10 @@ async def move_slugs_between_owners(
         to_remove = set(slugs)
         owned_old = await owned_slugs(store, old_owner)
         owned_old = [slug for slug in owned_old if slug not in to_remove]
-        await store.set(f"owner_links:{old_owner}", json.dumps(owned_old).encode("utf-8"))
+        await write(
+            lambda o=old_owner, ow=owned_old: store.set(f"owner_links:{o}", json.dumps(ow).encode("utf-8")),
+            kvretry.INDEX_WRITE,
+        )
 
 
 class UnreadableLinkError(Exception):
@@ -200,7 +214,7 @@ def can_edit(principal: Principal, record: dict) -> bool:
     return record["owner"] == principal.username or principal.has_permission("links.edit_all")
 
 
-async def handle_create(store, principal: Principal, request):
+async def handle_create(store, principal: Principal, request, write=kvretry.direct):
     try:
         payload = json.loads(request.body or b"{}")
     except json.JSONDecodeError:
@@ -268,8 +282,27 @@ async def handle_create(store, principal: Principal, request):
         "created_at": now,
         "updated_at": now,
     }
-    await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
-    await add_slugs_to_indexes(store, principal.username, [slug])
+    # docs/plans/write-throttle-resilience.md: retried under RECORD_WRITE. If
+    # the record write itself is exhausted, nothing has been written and
+    # kvretry.WriteFailed propagates uncaught, same as any other write
+    # failure did before this — no special handling, since there is nothing
+    # to report a partial result about.
+    await write(lambda: store.set(f"slug:{slug}", json.dumps(record).encode("utf-8")), kvretry.RECORD_WRITE)
+
+    # The one drift-capable path in this function: the record now exists at
+    # /r/{slug} regardless of what happens next, so an exhausted index write
+    # must be reported rather than silently dropped — a one-row version of
+    # the bulk-create incidents this plan exists for.
+    try:
+        await add_slugs_to_indexes(store, principal.username, [slug], write)
+    except kvretry.WriteFailed:
+        return json_response(200, {
+            "ok": False,
+            "partial": True,
+            "link": public_link(record),
+            "index_updated": False,
+            "next_step": "consistency_repair",
+        })
     return json_response(201, public_link(record))
 
 
@@ -331,7 +364,7 @@ async def handle_get(store, principal: Principal, slug: str):
 UPDATABLE_FIELDS = {"target_url", "status", "start_at", "end_at", "tags"}
 
 
-async def handle_update(store, principal: Principal, slug: str, request):
+async def handle_update(store, principal: Principal, slug: str, request, write=kvretry.direct):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
@@ -396,11 +429,14 @@ async def handle_update(store, principal: Principal, slug: str, request):
         record["tags"] = tag_list
 
     record["updated_at"] = iso_now()
-    await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+    # Single write, no index — retry only (docs/plans/write-throttle-resilience.md).
+    # An exhausted write propagates kvretry.WriteFailed uncaught, same as any
+    # other write failure did before this.
+    await write(lambda: store.set(f"slug:{slug}", json.dumps(record).encode("utf-8")), kvretry.RECORD_WRITE)
     return json_response(200, public_link(record))
 
 
-async def handle_delete(store, principal: Principal, slug: str, purge_analytics=None):
+async def handle_delete(store, principal: Principal, slug: str, purge_analytics=None, write=kvretry.direct):
     """`purge_analytics`, when passed, is an injected async callable
     `slug -> dict` (see analyticsorphans.purge_slug_analytics), invoked here
     rather than imported directly — analytics.py already imports links, so
@@ -454,21 +490,29 @@ async def handle_delete(store, principal: Principal, slug: str, purge_analytics=
         return json_response(404, {"error": "not_found"})
     if not can_edit(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
-    await store.delete(f"slug:{slug}")
-    await remove_slugs_from_indexes(store, {record["owner"]: [slug]})
+    # docs/plans/write-throttle-resilience.md: retried under RECORD_WRITE. If
+    # exhausted, nothing has been deleted and kvretry.WriteFailed propagates
+    # uncaught, same as any other write failure did before this.
+    await write(lambda: store.delete(f"slug:{slug}"), kvretry.RECORD_WRITE)
+
+    index_updated = True
+    try:
+        await remove_slugs_from_indexes(store, {record["owner"]: [slug]}, write)
+    except kvretry.WriteFailed:
+        index_updated = False
 
     if purge_analytics is None:
-        return json_response(200, {"ok": True})
+        return json_response(200, {"ok": True, "index_updated": index_updated})
 
     try:
         analytics_purge = await purge_analytics(slug)
     except Exception:
         analytics_purge = {"status": "failed", "found_keys": 0, "deleted_keys": 0}
 
-    return json_response(200, {"ok": True, "analytics_purge": analytics_purge})
+    return json_response(200, {"ok": True, "index_updated": index_updated, "analytics_purge": analytics_purge})
 
 
-async def handle_set_password(store, principal: Principal, slug: str, request):
+async def handle_set_password(store, principal: Principal, slug: str, request, write=kvretry.direct):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
@@ -489,5 +533,6 @@ async def handle_set_password(store, principal: Principal, slug: str, request):
         record["password_hash"] = None
 
     record["updated_at"] = iso_now()
-    await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+    # Single write, no index — retry only (docs/plans/write-throttle-resilience.md).
+    await write(lambda: store.set(f"slug:{slug}", json.dumps(record).encode("utf-8")), kvretry.RECORD_WRITE)
     return json_response(200, public_link(record))

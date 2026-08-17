@@ -6,8 +6,9 @@ import json
 
 import analyticsorphans as orphans_mod
 import auth
+import kvretry
 from responses import Request
-from tests.fakes import FakeStore, fake_list_keys
+from tests.fakes import FakeStore, ThrottlingStore, fake_list_keys, recording_sleep
 
 
 def _principal(username="admin", role="admin", permissions=None):
@@ -248,8 +249,7 @@ async def test_handle_orphan_report_truncates_at_max_and_totals_stay_exact():
 async def test_handle_orphan_purge_requires_users_manage():
     resp = await orphans_mod.handle_orphan_purge(
         FakeStore(), FakeStore(), _principal(role="user", permissions=[]),
-        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys, kvretry.direct)
     assert resp.status == 403
 
 
@@ -258,8 +258,7 @@ async def test_handle_orphan_purge_requires_confirmation():
     analytics_store = FakeStore({"count:killme:1": _count(1)})
     resp = await orphans_mod.handle_orphan_purge(
         links_store, analytics_store, _principal(),
-        _purge_request({"slugs": ["killme"]}), fake_list_keys,
-    )
+        _purge_request({"slugs": ["killme"]}), fake_list_keys, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "confirmation_required"
     assert await analytics_store.exists("count:killme:1") is True
@@ -268,8 +267,7 @@ async def test_handle_orphan_purge_requires_confirmation():
 async def test_handle_orphan_purge_rejects_no_slugs():
     for payload in ({"confirm": "PURGE"}, {"confirm": "PURGE", "slugs": []}, {"confirm": "PURGE", "slugs": [1]}):
         resp = await orphans_mod.handle_orphan_purge(
-            FakeStore(), FakeStore(), _principal(), _purge_request(payload), fake_list_keys,
-        )
+            FakeStore(), FakeStore(), _principal(), _purge_request(payload), fake_list_keys, kvretry.direct)
         assert resp.status == 400
         assert json.loads(resp.body)["error"] == "no_slugs"
 
@@ -277,8 +275,7 @@ async def test_handle_orphan_purge_rejects_no_slugs():
 async def test_handle_orphan_purge_rejects_duplicate_slug():
     resp = await orphans_mod.handle_orphan_purge(
         FakeStore(), FakeStore(), _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["a", "a"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["a", "a"]}), fake_list_keys, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "duplicate_slug"
 
@@ -287,8 +284,7 @@ async def test_handle_orphan_purge_rejects_too_many_slugs():
     slugs = [f"slug{i:04d}" for i in range(orphans_mod.MAX_PURGE_SLUGS + 1)]
     resp = await orphans_mod.handle_orphan_purge(
         FakeStore(), FakeStore(), _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": slugs}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": slugs}), fake_list_keys, kvretry.direct)
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body["error"] == "too_many_slugs"
@@ -299,8 +295,7 @@ async def test_handle_orphan_purge_rejects_too_many_slugs():
 async def test_handle_orphan_purge_rejects_invalid_slug():
     resp = await orphans_mod.handle_orphan_purge(
         FakeStore(), FakeStore(), _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["a:b"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["a:b"]}), fake_list_keys, kvretry.direct)
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body["error"] == "invalid_slug"
@@ -318,8 +313,7 @@ async def test_handle_orphan_purge_skips_a_slug_whose_link_record_exists():
 
     resp = await orphans_mod.handle_orphan_purge(
         links_store, analytics_store, _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["keepme", "killme"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["keepme", "killme"]}), fake_list_keys, kvretry.direct)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["purged_slugs"] == ["killme"]
@@ -331,8 +325,7 @@ async def test_handle_orphan_purge_skips_a_slug_whose_link_record_exists():
 async def test_handle_orphan_purge_reports_no_analytics_keys_for_an_already_clean_slug():
     resp = await orphans_mod.handle_orphan_purge(
         FakeStore(), FakeStore(), _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["neverclicked"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["neverclicked"]}), fake_list_keys, kvretry.direct)
     body = json.loads(resp.body)
     assert body["ok"] is True
     assert body["purged_slugs"] == []
@@ -349,8 +342,7 @@ async def test_handle_orphan_purge_bounds_deletes_by_budget_and_reports_remainin
         })
         resp = await orphans_mod.handle_orphan_purge(
             FakeStore(), analytics_store, _principal(),
-            _purge_request({"confirm": "PURGE", "slugs": ["aaa", "bbb"]}), fake_list_keys,
-        )
+            _purge_request({"confirm": "PURGE", "slugs": ["aaa", "bbb"]}), fake_list_keys, kvretry.direct)
         body = json.loads(resp.body)
         assert body["complete"] is False
         assert body["remaining_slugs"] == ["bbb"]
@@ -364,14 +356,12 @@ async def test_purging_the_same_slugs_twice_is_a_no_op_the_second_time():
     analytics_store = FakeStore({"count:killme:1": _count(9), "count:killme:2": _count(1)})
     first = await orphans_mod.handle_orphan_purge(
         FakeStore(), analytics_store, _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys, kvretry.direct)
     assert json.loads(first.body)["purged_slugs"] == ["killme"]
 
     second = await orphans_mod.handle_orphan_purge(
         FakeStore(), analytics_store, _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys, kvretry.direct)
     body2 = json.loads(second.body)
     assert body2["purged_slugs"] == []
     assert body2["deleted_keys"] == 0
@@ -389,12 +379,49 @@ async def test_handle_orphan_purge_deletes_sequentially_never_gathered():
     analytics_store = RecordingStore({f"count:killme:{i}": _count(1) for i in range(5)})
     resp = await orphans_mod.handle_orphan_purge(
         FakeStore(), analytics_store, _principal(),
-        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys,
-    )
+        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys, kvretry.direct)
     body = json.loads(resp.body)
     assert body["deleted_keys"] == 5
     delete_ops = [key for kind, key in analytics_store.ops if kind == "delete"]
     assert sorted(delete_ops) == sorted(f"count:killme:{i}" for i in range(5))
+
+
+async def test_handle_orphan_purge_throttled_delete_puts_slug_back_in_remaining():
+    """docs/plans/write-throttle-resilience.md: a throttled delete must stop
+    (never keep hammering the store), report write_failed, and put the
+    failing slug — plus anything not yet attempted — back into
+    remaining_slugs so the GUI's existing chunk loop picks it up."""
+    analytics_store = ThrottlingStore(
+        {"count:aaa:1": _count(1), "count:bbb:1": _count(1)},
+        fail_times={"count:bbb:1": 10},
+    )
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await orphans_mod.handle_orphan_purge(
+        FakeStore(), analytics_store, _principal(),
+        _purge_request({"confirm": "PURGE", "slugs": ["aaa", "bbb"]}), fake_list_keys, write)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["purged_slugs"] == ["aaa"]
+    assert body["deleted_keys"] == 1
+    assert body["remaining_slugs"] == ["bbb"]
+    assert body["write_failed"] is True
+    assert body["complete"] is False
+    # The successfully-purged key really is gone; the throttled one is not.
+    assert await analytics_store.exists("count:aaa:1") is False
+    assert await analytics_store.exists("count:bbb:1") is True
+
+
+async def test_handle_orphan_purge_no_write_failure_reports_write_failed_false():
+    analytics_store = FakeStore({"count:killme:1": _count(1)})
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    resp = await orphans_mod.handle_orphan_purge(
+        FakeStore(), analytics_store, _principal(),
+        _purge_request({"confirm": "PURGE", "slugs": ["killme"]}), fake_list_keys, write)
+    body = json.loads(resp.body)
+    assert body["write_failed"] is False
+    assert body["complete"] is True
 
 
 # --- purge_slug_analytics ---------------------------------------------------

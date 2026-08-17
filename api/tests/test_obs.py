@@ -100,6 +100,50 @@ def test_render_log_line_emits_kv_keys_immediately_after_kv_bytes_when_it_differ
     assert "kv_bytes=900 kv_keys=65" in line
 
 
+def test_render_log_line_with_no_retries_is_byte_identical_to_before(  # docs/plans/write-throttle-resilience.md
+):
+    c_before = obs.Collector()
+    c_before.record("open", "-", 20_000, 0)
+    c_before.record("get", "links", 11_000, 262)
+    line_before = obs.render_log_line([("comp", "api")], 40_000, c_before)
+
+    # Same operations, same collector construction — write_retry/write_failed
+    # were never recorded, so the rendered line must not change at all.
+    c_after = obs.Collector()
+    c_after.record("open", "-", 20_000, 0)
+    c_after.record("get", "links", 11_000, 262)
+    line_after = obs.render_log_line([("comp", "api")], 40_000, c_after)
+
+    assert line_before == line_after
+    assert "write_retry" not in line_after
+    assert "write_failed" not in line_after
+
+
+def test_render_log_line_shows_retries_and_exhaustion():
+    c = obs.Collector()
+    c.record("set", "-", 5_000, 0)
+    c.record("write_retry", "-", 300_000, 0)
+    c.record("write_retry", "-", 400_000, 0)
+    c.record("write_retry", "-", 450_000, 0)
+    c.record("write_failed", "-", 0, 0)
+
+    line = obs.render_log_line([("comp", "api")], 1_200_000, c)
+    assert "write_retry=3/1150" in line
+    assert "write_failed=1/0" in line
+    # Ordering: write_retry/write_failed immediately after delete, before list_keys.
+    assert line.index("write_retry=") < line.index("write_failed=")
+
+
+def test_collector_record_has_no_key_parameter():
+    """Structural invariant: Collector.record must never gain a parameter
+    that could accept a KV key, for write_retry/write_failed exactly as for
+    every other op type."""
+    import inspect
+
+    params = list(inspect.signature(obs.Collector.record).parameters)
+    assert params == ["self", "op_type", "namespace", "duration_ns", "num_bytes", "num_keys"]
+
+
 def test_render_log_line_none_collector_omits_kv_summary_entirely():
     line = obs.render_log_line([("comp", "api"), ("status", "401")], 12_000, None)
     assert line == "ss comp=api status=401 dur_us=12"

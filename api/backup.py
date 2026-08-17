@@ -296,15 +296,43 @@ async def handle_restore(
         # Write-then-prune, not wipe-then-write: an interrupted restore then
         # leaves a superset (the file's content plus leftovers), never an
         # empty store. Records before indexes within the store.
-        for key in restore_write_order(store_name, list(entries.keys())):
-            await store.set(key, entries[key])
-        restored[store_name] = len(entries)
+        #
+        # Report only, deliberately NO retry here
+        # (docs/plans/write-throttle-resilience.md) — a full-cap restore
+        # (MAX_BACKUP_ENTRIES=5,000) is already documented as unable to
+        # complete inside Akamai's 30-second handler limit (~100s of writes
+        # at the 50/s cap), so adding retry sleeps makes an already-doomed
+        # request slower for no gain. Restore replaces rather than merges and
+        # is therefore idempotent, so "run it again" is a genuine next step
+        # — hence `next_step: "retry_restore"` below rather than pointing at
+        # the consistency repair tool. This is the clearest place in the app
+        # where "retry" and "report" are independent decisions: this path
+        # takes the second without the first, deliberately, and imports
+        # nothing from kvretry.
+        try:
+            for key in restore_write_order(store_name, list(entries.keys())):
+                await store.set(key, entries[key])
+            restored[store_name] = len(entries)
 
-        existing_keys = await list_keys(store)
-        stale_keys = [key for key in existing_keys if key not in entries]
-        for key in stale_keys:
-            await store.delete(key)
-        pruned[store_name] = len(stale_keys)
+            existing_keys = await list_keys(store)
+            stale_keys = [key for key in existing_keys if key not in entries]
+            for key in stale_keys:
+                await store.delete(key)
+            pruned[store_name] = len(stale_keys)
+        except Exception as exc:
+            # Same "throttled" vs "other" label kvretry.classify_write_error
+            # renders elsewhere, inlined rather than imported: this path
+            # takes no dependency on the retry seam at all, by design.
+            write_error = "throttled" if "too many requests" in str(exc).lower() else "other"
+            return json_response(200, {
+                "ok": False,
+                "partial": True,
+                "restored": restored,
+                "pruned": pruned,
+                "stopped_at_store": store_name,
+                "write_error": write_error,
+                "next_step": "retry_restore",
+            })
 
     signed_out = "users" in decoded_entries_by_store
 

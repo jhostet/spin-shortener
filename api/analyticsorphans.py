@@ -47,6 +47,7 @@ liveness judgement.
 
 import json
 
+import kvretry
 import links
 from analytics import parse_analytics_key
 from kvbatch import gather_reads
@@ -238,6 +239,19 @@ async def purge_slug_analytics(analytics_store, slug: str, list_keys,
     any future analytics key type for free.
 
     DELETES ARE ALWAYS SEQUENTIAL, NEVER GATHERED — see the module docstring.
+
+    **Deliberately takes no `write` parameter and never retries**
+    (docs/plans/write-throttle-resilience.md) — this is the "where should it
+    NOT be used" answer for the write-retry seam. Three reasons: it runs
+    AFTER the link record is already deleted, so its own failure cannot
+    corrupt anything; its failure mode (orphaned analytics keys) is
+    CLAUDE.md-documented "expected, normal, intended state between purges"
+    with a shipped operator tool (`handle_orphan_purge` below, which DOES
+    retry); and it already catches every exception and reports
+    `{"status": "failed", ...}` without turning a successful link deletion
+    into a 500. Retrying here would spend a chunk of the request's write
+    budget on the least valuable writes in the app, worsening cap pressure
+    for everyone else, for a failure mode nobody needs fixed synchronously.
     """
     keys = await list_keys(analytics_store)
     by_slug, _unrecognized = classify_analytics_keys(keys)
@@ -295,12 +309,21 @@ async def handle_orphan_report(links_store, analytics_store, principal, list_key
     return json_response(200, report)
 
 
-async def handle_orphan_purge(links_store, analytics_store, principal, request, list_keys) -> Response:
+async def handle_orphan_purge(links_store, analytics_store, principal, request, list_keys, write) -> Response:
     """POST /api/admin/analytics/purge. All input validation is all-or-nothing
     (nothing is written if the request itself is malformed); per-slug outcomes
     after that are reported and skipped rather than failing the whole batch —
     see the plan's Trade-offs #5 for why a fatal per-slug error would stall
     the GUI's chunked loop permanently.
+
+    `write` (docs/plans/write-throttle-resilience.md) retries each delete
+    under `kvretry.RECORD_WRITE` — these are ordinary analytics keys, not
+    indexes. On `kvretry.WriteFailed` the loop STOPS (never gathered, never
+    retried past the policy — see the module docstring's sequential-deletes
+    rule); the slug whose delete failed, and every slug not yet attempted, go
+    back into `remaining_slugs` so the GUI's existing chunked loop picks them
+    up on its next pass, exactly as it already does for a plan that simply
+    exceeded the per-request key budget.
     """
     if not principal.has_permission("users.manage"):
         return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
@@ -351,10 +374,26 @@ async def handle_orphan_purge(links_store, analytics_store, principal, request, 
     else:
         slugs_to_purge, keys_to_delete, remaining_slugs = [], [], []
 
-    # 4. Delete sequentially. NEVER gather_reads/asyncio.gather here — see
-    # the module docstring.
-    for key in keys_to_delete:
-        await analytics_store.delete(key)
+    # 4. Delete sequentially, per slug (so a mid-slug failure can put that
+    # slug's remainder back), retried under kvretry.RECORD_WRITE. NEVER
+    # gather_reads/asyncio.gather here — see the module docstring.
+    purged_slugs: list[str] = []
+    deleted_keys_count = 0
+    write_failed = False
+    for index, slug in enumerate(slugs_to_purge):
+        slug_failed = False
+        for key in orphans[slug]["keys"]:
+            try:
+                await write(lambda k=key: analytics_store.delete(k), kvretry.RECORD_WRITE)
+            except kvretry.WriteFailed:
+                write_failed = True
+                slug_failed = True
+                break
+            deleted_keys_count += 1
+        if slug_failed:
+            remaining_slugs = slugs_to_purge[index:] + remaining_slugs
+            break
+        purged_slugs.append(slug)
 
     skipped = []
     for s in slugs:
@@ -365,10 +404,11 @@ async def handle_orphan_purge(links_store, analytics_store, principal, request, 
 
     return json_response(200, {
         "ok": True,
-        "purged_slugs": slugs_to_purge,
-        "deleted_keys": len(keys_to_delete),
+        "purged_slugs": purged_slugs,
+        "deleted_keys": deleted_keys_count,
         "remaining_slugs": remaining_slugs,
         "skipped": skipped,
         "complete": not remaining_slugs,
+        "write_failed": write_failed,
         "max_keys_per_request": MAX_PURGE_KEYS_PER_REQUEST,
     })

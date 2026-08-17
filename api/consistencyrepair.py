@@ -61,6 +61,7 @@ is fixed by re-running. The worst case is "run it again".
 import json
 
 import consistency
+import kvretry
 from responses import Response, iso_now, json_response
 
 REPAIR_CONFIRMATION = "REPAIR"
@@ -341,9 +342,10 @@ def _skipped_report(check_id: str) -> dict:
 # --- The applier -------------------------------------------------------------
 
 
-async def apply_repairs(stores_by_name: dict[str, object], plan: dict) -> dict:
+async def apply_repairs(stores_by_name: dict[str, object], plan: dict, write) -> dict:
     """Sequential, never concurrent — see the module docstring. Returns
-    {"keys_written": n, "keys_deleted": n, "write_skipped": [...]}.
+    {"keys_written": n, "keys_deleted": n, "write_skipped": [...],
+    "write_failed": [...]}.
 
     Stores in ("links", "users") order: links first, users last, so a
     mid-request failure leaves the operator's own session material untouched
@@ -351,12 +353,25 @@ async def apply_repairs(stores_by_name: dict[str, object], plan: dict) -> dict:
 
     No `user:` key is ever read, written or deleted here — only
     `_meta:usernames` and `session:<token>`.
+
+    Every `set`/`delete` is routed through `write` under `kvretry.INDEX_WRITE`
+    (docs/plans/write-throttle-resilience.md) — every key this function
+    touches IS an index. On `kvretry.WriteFailed`, this STOPS entirely rather
+    than continuing to the next key: the repair tool is what an operator
+    reaches for DURING an incident, i.e. exactly when the app is throttling,
+    and a repair that keeps hammering a throttled store makes the incident
+    worse. Re-running is already safe (see the module docstring's
+    "lost-update window" note), so stopping and reporting is the same
+    "index what landed, don't retry harder" move `bulk.py` makes.
     """
     keys_written = 0
     keys_deleted = 0
     write_skipped: list[dict] = []
+    write_failed: list[dict] = []
 
     for store_name in ("links", "users"):
+        if write_failed:
+            break
         store = stores_by_name[store_name]
         store_plan = plan[store_name]
 
@@ -369,22 +384,36 @@ async def apply_repairs(stores_by_name: dict[str, object], plan: dict) -> dict:
             new = apply_list_delta(parsed or [], delta["add"], delta["remove"])
             if new == (parsed or []):
                 continue  # idempotent: a second pass over the same input writes nothing
-            await store.set(key, json.dumps(new).encode("utf-8"))
+            try:
+                await write(lambda k=key, n=new: store.set(k, json.dumps(n).encode("utf-8")), kvretry.INDEX_WRITE)
+            except kvretry.WriteFailed as exc:
+                write_failed.append({"store": store_name, "key": key, "reason": "write_failed"})
+                break
             keys_written += 1
+
+        if write_failed:
+            break
 
         # Deletes are always sequential, one `await store.delete(key)` at a
         # time — see the module docstring's "Repairs are writes" section.
         for key in store_plan["deletes"]:
-            await store.delete(key)
+            try:
+                await write(lambda k=key: store.delete(k), kvretry.INDEX_WRITE)
+            except kvretry.WriteFailed as exc:
+                write_failed.append({"store": store_name, "key": key, "reason": "write_failed"})
+                break
             keys_deleted += 1
 
-    return {"keys_written": keys_written, "keys_deleted": keys_deleted, "write_skipped": write_skipped}
+    return {
+        "keys_written": keys_written, "keys_deleted": keys_deleted,
+        "write_skipped": write_skipped, "write_failed": write_failed,
+    }
 
 
 # --- The handler --------------------------------------------------------------
 
 
-async def handle_repair(stores_by_name: dict[str, object], principal, request, list_keys, get_many) -> Response:
+async def handle_repair(stores_by_name: dict[str, object], principal, request, list_keys, get_many, write) -> Response:
     """POST /api/admin/consistency/repair. Gated on `users.manage`, matching
     the read-only check, backup and the analytics purge.
 
@@ -429,7 +458,7 @@ async def handle_repair(stores_by_name: dict[str, object], principal, request, l
     collected = await consistency.collect(stores_by_name, list_keys, get_many)
     checks, _totals = consistency.analyze(collected, max_findings=None)
     plan = plan_repairs(collected, checks, requested, MAX_REPAIR_WRITES)
-    applied = await apply_repairs(stores_by_name, plan)
+    applied = await apply_repairs(stores_by_name, plan, write)
 
     response_checks = [
         {
@@ -443,7 +472,7 @@ async def handle_repair(stores_by_name: dict[str, object], principal, request, l
         }
         for c in plan["checks"]
     ]
-    complete = all(c["remaining"] == 0 for c in plan["checks"])
+    complete = all(c["remaining"] == 0 for c in plan["checks"]) and not applied["write_failed"]
 
     return json_response(200, {
         "ok": True,
@@ -457,6 +486,7 @@ async def handle_repair(stores_by_name: dict[str, object], principal, request, l
         "writes": applied["keys_written"] + applied["keys_deleted"],
         "blocked": plan["blocked"],
         "write_skipped": applied["write_skipped"],
+        "write_failed": applied["write_failed"],
         "complete": complete,
         "max_writes_per_request": MAX_REPAIR_WRITES,
     })
