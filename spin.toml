@@ -11,7 +11,6 @@ admin_bootstrap_username = { default = "admin" }
 admin_bootstrap_password = { required = true, secret = true }
 cookie_secure = { default = "true" }
 public_base_urls = { default = "http://localhost:3000" }
-analytics_event_slots = { default = "30" }
 analytics_day_retention_days = { default = "90" }
 log_level = { default = "off" }
 log_debug_token = { default = "", secret = true }
@@ -32,7 +31,6 @@ source = "redirect/main.wasm"
 allowed_outbound_hosts = []
 key_value_stores = ["default"]
 [component.redirect.variables]
-analytics_event_slots = "{{ analytics_event_slots }}"
 analytics_day_retention_days = "{{ analytics_day_retention_days }}"
 log_level = "{{ log_level }}"
 log_debug_token = "{{ log_debug_token }}"
@@ -54,7 +52,6 @@ admin_bootstrap_username = "{{ admin_bootstrap_username }}"
 admin_bootstrap_password = "{{ admin_bootstrap_password }}"
 cookie_secure = "{{ cookie_secure }}"
 public_base_urls = "{{ public_base_urls }}"
-analytics_event_slots = "{{ analytics_event_slots }}"
 log_level = "{{ log_level }}"
 log_debug_token = "{{ log_debug_token }}"
 app_version = "{{ app_version }}"

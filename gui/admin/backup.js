@@ -484,6 +484,18 @@ function formatOrphanHeadline(report) {
   return `${orphan_keys} of ${report.scanned.analytics_keys} analytics keys belong to ${orphan_slugs} ${linkWord}.`;
 }
 
+// docs/plans/drop-events-write.md: redirect stopped writing events:<slug>:<slot>
+// keys 2026-08-18. The residual is frozen, not growing, and this names it only
+// when it's non-zero — a store already swept of pre-cutover keys shows nothing.
+// No purge button for these here; see the plan's "Leftover events: keys"
+// section for why a sweep would need to invert the existing purge's safety
+// property (it must delete a LIVE link's leftover keys too) and is deferred.
+function formatObsoleteEventKeysNote(report) {
+  const count = report.totals.obsolete_event_keys;
+  if (!count) return "";
+  return `<p>${count} of these are <code>events:</code> keys from the retired recent-events feature and are safe to remove.</p>`;
+}
+
 function renderOrphanList(report) {
   if (!report.orphans.length) return "";
   const items = report.orphans
@@ -500,12 +512,16 @@ function renderOrphanReport(report) {
   latestOrphanReport = report;
 
   if (report.totals.orphan_slugs === 0) {
-    resultEl.innerHTML = `<p class="form-success">No orphaned analytics — every analytics key belongs to a link that still exists.</p>`;
+    resultEl.innerHTML = `
+      <p class="form-success">No orphaned analytics — every analytics key belongs to a link that still exists.</p>
+      ${formatObsoleteEventKeysNote(report)}
+    `;
     return;
   }
 
   resultEl.innerHTML = `
     <p>${escapeHtml(formatOrphanHeadline(report))}</p>
+    ${formatObsoleteEventKeysNote(report)}
     ${renderOrphanList(report)}
     <button type="button" id="purge-btn" class="outline secondary">Delete these analytics keys</button>
     <button type="button" id="purge-stop-btn" class="outline" hidden>Stop</button>

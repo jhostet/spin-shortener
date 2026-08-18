@@ -36,9 +36,3 @@ func TestCountShardKeyNeverCollidesWithTheLegacyKey(t *testing.T) {
 		}
 	}
 }
-
-func TestEventKey(t *testing.T) {
-	if got := EventKey("abc", 7); got != "analytics:events:abc:7" {
-		t.Errorf("EventKey(%q, %d) = %q, want %q", "abc", 7, got, "analytics:events:abc:7")
-	}
-}

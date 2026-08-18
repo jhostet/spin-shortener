@@ -2,10 +2,7 @@ package linkgate
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
-	"strings"
-	"time"
 )
 
 // CountRecord is the count:<slug> KV blob: a running total plus a
@@ -54,79 +51,31 @@ func trimDays(days map[string]int, retentionDays int) {
 	}
 }
 
-// ClassifyUserAgent buckets a User-Agent header into a coarse device class
-// using a small static ruleset -- deliberately not a full UA-parsing
-// pipeline, per the "cheap, simple" hot-path analytics design.
-func ClassifyUserAgent(ua string) string {
-	if ua == "" {
-		return "other"
-	}
-	lower := strings.ToLower(ua)
-	switch {
-	case containsAny(lower, "bot", "crawler", "spider"):
-		return "bot"
-	case containsAny(lower, "mobile", "android", "iphone"):
-		return "mobile"
-	case containsAny(lower, "mozilla", "chrome", "safari", "firefox", "edg/"):
-		return "desktop"
-	default:
-		return "other"
-	}
-}
-
-func containsAny(s string, substrs ...string) bool {
-	for _, sub := range substrs {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-// FormatEvent renders one events:<slug>:<slot> value: a fixed-shape,
-// pipe-delimited string that's a blind overwrite on write (no read needed)
-// and trivially parsed on read.
-func FormatEvent(unixMs int64, referrer, uaClass string) string {
-	return fmt.Sprintf("%d|%s|%s", unixMs, referrer, uaClass)
-}
-
-// EventSlot picks a deterministic ring-buffer slot for "now" out of
-// numSlots, so recent-events reads are numSlots direct KV gets, never a scan.
-//
-// It delegates to ShardFor, whose splitmix64 finalizer is what makes the
-// distribution hold. This used to be `(UnixNano() * 2654435761) mod numSlots`
-// — a single multiply, intended as a de-correlation trick — and that was the
-// cause of the long-standing recent-events collision defect, found 2026-08-07:
-//
-//	A single multiply is LINEAR OVER THE MODULUS. Multiplication distributes
-//	over the modulo, so for two clicks Δ nanoseconds apart the slot advances by
-//	a constant stride of (Δ * 2654435761) mod numSlots. The reachable slots are
-//	therefore one additive cycle of length numSlots/gcd(stride, numSlots) —
-//	never the full ring, no matter how distinct the timestamps are. The
-//	multiplier is ≡ 1 (mod 30), so at the default numSlots=30 the stride
-//	collapses to Δ mod 30, and millisecond-scale Δ values are divisible by high
-//	powers of 2 and 5 while 30 = 2·3·5 shares them. Clicks 300 ms apart reached
-//	exactly ONE slot; 1 ms apart reached three of thirty.
-//
-// That reproduced the documented observation (8 requests 300 ms apart retaining
-// 3 distinct events) exactly. The timestamps were never the problem — CLAUDE.md
-// previously blamed WASI clock resolution and that explanation is retracted;
-// the timestamps are perfectly distinct and simply aliased onto the same slots.
-//
-// splitmix64's xorshifts are not linear over the modulus, so there is no
-// constant stride to collapse. Do not "simplify" this back into a multiply.
-func EventSlot(now time.Time, numSlots int) int {
-	return ShardFor(uint64(now.UnixNano()), numSlots)
-}
-
 // ShardFor maps a 64-bit entropy value onto [0, numShards).
 //
 // The value is run through a splitmix64 finalizer before the modulo so the
 // result depends on all 64 input bits, and — the property that actually
-// matters — so that inputs in arithmetic progression do not map to slots in
-// arithmetic progression. A single multiply-then-reduce has that flaw and it
-// is what broke EventSlot for as long as this feature has existed; see the
-// derivation above EventSlot, which now delegates here.
+// matters — so that inputs in arithmetic progression do not map to shards in
+// arithmetic progression. A single multiply-then-reduce has that flaw:
+//
+//	A single multiply is LINEAR OVER THE MODULUS: multiplication distributes over
+//	the modulo, so for two inputs Δ apart the result advances by a constant
+//	stride, and the reachable outputs are one additive cycle rather than the whole
+//	range. Go's multiply wraps at 2^64, which is divisible by 2, so wraparound
+//	preserves the low bit — pinning output parity to the input's low bit forever.
+//	Clicks arriving at a steady cadence are exactly that shape. This is not
+//	hypothetical: it was the cause of the recent-events collision defect found
+//	2026-08-07 (8 clicks 300 ms apart reached 1 slot of 30). Do not "simplify"
+//	this back into a multiply.
+//
+// The caller that originally suffered that defect, EventSlot (the
+// recent-events ring buffer's slot picker), was retired 2026-08-18 along with
+// the whole recent-events feature — see docs/plans/drop-events-write.md. This
+// derivation moved here, onto ShardFor, because ShardFor is what the click
+// counter (recordClickCount, via CountShards) still calls, and it is the only
+// written record of why the splitmix64 finalizer is load-bearing. The
+// surviving pin on this property is
+// TestShardFor_DistributesUniformlyOverTimestampShapedInput.
 func ShardFor(entropy uint64, numShards int) int {
 	if numShards <= 1 {
 		return 0

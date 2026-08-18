@@ -397,7 +397,7 @@ def test_url_policy_value_round_trips_byte_identical_through_backup_and_restore(
 async def test_handle_export_requires_users_manage():
     store = FakeStore()
     resp = await backup.handle_export(
-        {"links": store}, _principal(role="user", permissions=[]), {}, fake_list_keys, 30,
+        {"links": store}, _principal(role="user", permissions=[]), {}, fake_list_keys,
     )
     assert resp.status == 403
     assert json.loads(resp.body)["required_permission"] == "users.manage"
@@ -405,7 +405,7 @@ async def test_handle_export_requires_users_manage():
 
 async def test_handle_export_unknown_store_query_param():
     resp = await backup.handle_export(
-        {"links": FakeStore()}, _principal(), {"stores": ["nope"]}, fake_list_keys, 30,
+        {"links": FakeStore()}, _principal(), {"stores": ["nope"]}, fake_list_keys,
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "unknown_store"
@@ -413,7 +413,7 @@ async def test_handle_export_unknown_store_query_param():
 
 async def test_handle_export_empty_stores_query_param():
     resp = await backup.handle_export(
-        {"links": FakeStore()}, _principal(), {"stores": [""]}, fake_list_keys, 30,
+        {"links": FakeStore()}, _principal(), {"stores": [""]}, fake_list_keys,
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_stores"
@@ -429,7 +429,7 @@ async def test_handle_export_full_three_store_counts_match_stores():
     analytics_store = FakeStore({"count:abc": b'{"total": 3}'})
     stores_by_name = {"links": links_store, "users": users_store, "analytics": analytics_store}
 
-    resp = await backup.handle_export(stores_by_name, _principal(), {}, fake_list_keys, 30)
+    resp = await backup.handle_export(stores_by_name, _principal(), {}, fake_list_keys)
     assert resp.status == 200
     doc = json.loads(resp.body)
     assert doc["fidelity"] == "full"
@@ -446,7 +446,7 @@ async def test_handle_export_partial_stores_only_covers_requested():
     users_store = FakeStore({"user:admin": b'{"username": "admin"}'})
     stores_by_name = {"links": links_store, "users": users_store}
 
-    resp = await backup.handle_export(stores_by_name, _principal(), {"stores": ["links"]}, fake_list_keys, 30)
+    resp = await backup.handle_export(stores_by_name, _principal(), {"stores": ["links"]}, fake_list_keys)
     doc = json.loads(resp.body)
     assert set(doc["stores"].keys()) == {"links"}
 
@@ -462,7 +462,7 @@ async def test_handle_export_no_credential_material_anywhere():
         "_meta:bootstrapped": b"1",
         "_meta:usernames": b'["admin"]',
     })
-    resp = await backup.handle_export({"users": users_store}, _principal(), {"stores": ["users"]}, fake_list_keys, 30)
+    resp = await backup.handle_export({"users": users_store}, _principal(), {"stores": ["users"]}, fake_list_keys)
     body_text = resp.body.decode("utf-8")
     assert "super-secret-hash" not in body_text
     doc = json.loads(resp.body)
@@ -476,7 +476,7 @@ async def test_handle_export_backup_too_large():
     huge_value = b"x" * (backup.MAX_BACKUP_BODY_BYTES + 1)
     links_store = FakeStore({"slug:abc": huge_value})
     resp = await backup.handle_export(
-        {"links": links_store}, _principal(), {"stores": ["links"]}, fake_list_keys, 30,
+        {"links": links_store}, _principal(), {"stores": ["links"]}, fake_list_keys,
     )
     assert resp.status == 500
     body = json.loads(resp.body)
@@ -493,28 +493,28 @@ def _restore_request(payload):
 
 async def _export_doc(stores_by_name):
     query = {"stores": [",".join(stores_by_name.keys())]}
-    resp = await backup.handle_export(stores_by_name, _principal(), query, fake_list_keys, 30)
+    resp = await backup.handle_export(stores_by_name, _principal(), query, fake_list_keys)
     return json.loads(resp.body)
 
 
 async def test_handle_restore_requires_users_manage():
     resp = await backup.handle_restore(
         {"links": FakeStore()}, _principal(role="user", permissions=[]),
-        _restore_request({}), fake_list_keys, 30,
+        _restore_request({}), fake_list_keys,
     )
     assert resp.status == 403
 
 
 async def test_handle_restore_body_too_large():
     request = Request(method="POST", uri="/x", headers={}, body=b"x" * (backup.MAX_BACKUP_BODY_BYTES + 1))
-    resp = await backup.handle_restore({"links": FakeStore()}, _principal(), request, fake_list_keys, 30)
+    resp = await backup.handle_restore({"links": FakeStore()}, _principal(), request, fake_list_keys)
     assert resp.status == 413
     assert json.loads(resp.body)["error"] == "body_too_large"
 
 
 async def test_handle_restore_requires_confirmation():
     resp = await backup.handle_restore(
-        {"links": FakeStore()}, _principal(), _restore_request({"backup": {}}), fake_list_keys, 30,
+        {"links": FakeStore()}, _principal(), _restore_request({"backup": {}}), fake_list_keys,
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "confirmation_required"
@@ -524,7 +524,7 @@ async def test_handle_restore_invalid_backup_rejected():
     resp = await backup.handle_restore(
         {"links": FakeStore()}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": {"not": "valid"}}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_backup_format"
@@ -552,7 +552,7 @@ async def test_handle_restore_throttled_write_reports_partial_instead_of_500():
     resp = await backup.handle_restore(
         {"links": links_store, "users": FakeStore()}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -572,7 +572,7 @@ async def test_handle_restore_success_response_byte_identical_to_today():
     resp = await backup.handle_restore(
         {"links": links_store, "users": FakeStore()}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -589,7 +589,7 @@ async def test_handle_restore_links_only_signed_out_false_users_untouched():
     resp = await backup.handle_restore(
         {"links": links_store, "users": users_store}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -615,7 +615,7 @@ async def test_handle_restore_users_bearing_removes_sessions_and_bootstrap_marke
     resp = await backup.handle_restore(
         {"users": fresh_users_store}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     body = json.loads(resp.body)
@@ -636,7 +636,7 @@ async def test_handle_restore_prunes_preexisting_key_absent_from_file():
     resp = await backup.handle_restore(
         {"links": fresh_links_store}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     assert await fresh_links_store.exists("slug:stale") is False
@@ -658,7 +658,7 @@ async def test_handle_restore_write_order_slug_before_all_links_user_before_user
     resp = await backup.handle_restore(
         {"links": recording_store}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     assert write_order.index("slug:abc") < write_order.index("all_links")
@@ -690,7 +690,7 @@ async def test_handle_restore_tags_and_reassigned_owner_indexes_slugs_write_befo
     resp = await backup.handle_restore(
         {"links": recording_store}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
     assert write_order.index("slug:abc") < write_order.index("owner_links:alice")
@@ -722,7 +722,7 @@ async def test_handle_restore_pre_stage2_backup_containing_all_links_and_owner_l
     resp = await backup.handle_restore(
         {"links": restore_target}, _principal(),
         _restore_request({"confirm": "REPLACE", "backup": doc}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 200
 
@@ -773,7 +773,7 @@ async def test_handle_restore_all_or_nothing_each_failure_leaves_stores_byte_ide
         resp = await backup.handle_restore(
             {"links": links_store, "users": users_store}, _principal(),
             _restore_request({"confirm": "REPLACE", "backup": bad_doc}),
-            fake_list_keys, 30,
+            fake_list_keys,
         )
         assert resp.status == 400
         assert links_store._data == links_snapshot
@@ -786,7 +786,7 @@ async def test_handle_restore_missing_confirmation_leaves_stores_untouched():
     resp = await backup.handle_restore(
         {"links": links_store}, _principal(),
         _restore_request({"backup": {"format": backup.BACKUP_FORMAT}}),
-        fake_list_keys, 30,
+        fake_list_keys,
     )
     assert resp.status == 400
     assert links_store._data == links_snapshot

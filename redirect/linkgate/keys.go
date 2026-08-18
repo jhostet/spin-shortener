@@ -52,11 +52,6 @@ func CountShardKey(slug string, shard int) string {
 	return AnalyticsPrefix + "count:" + slug + ":" + strconv.Itoa(shard)
 }
 
-// EventKey is the physical key of one recent-events ring-buffer slot.
-func EventKey(slug string, slot int) string {
-	return AnalyticsPrefix + "events:" + slug + ":" + strconv.Itoa(slot)
-}
-
 // There is deliberately no users: prefix constant here: the redirect
 // component has no business constructing a users key, and an unused
 // constant is an invitation.

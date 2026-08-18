@@ -29,7 +29,7 @@ Built as a polyglot Spin (WASM) app: a Go component for the hot-path redirect, a
 - Optional start/end scheduling windows; outside the window a link 404s indistinguishably from a nonexistent slug
 - QR codes (SVG/PNG) per link
 - Bulk link management on the dashboard: create up to 50 links at once from a pasted list or an uploaded .csv/.tsv/.txt file (batch-level password/schedule, all-or-nothing validation with a per-row error report), plus multi-select Delete and Enable/Disable of up to 50 existing links at once
-- Click analytics: accurate running totals and per-day counts, plus a best-effort (lossy, not complete) recent-events sample
+- Click analytics: accurate running totals and per-day counts. (A best-effort recent-events sample — timestamp, referrer, device class per click — shipped and was later withdrawn on 2026-08-18: it doubled the app-wide write-rate cost of every recorded click for a lossy, never-complete anecdote nobody was confirmed to be reading. See `docs/plans/drop-events-write.md`.)
 - Local auth with sessions; admin role + fine-grained permission system (e.g. `links.view_all`)
 - No outbound network access from either Wasm component by design — rules out external rate-limiting or abuse-detection services; login/link-password brute-force protection currently relies only on PBKDF2 cost, not attempt-throttling
 - Slug existence and password-protection status are enumerable by a probing visitor (accepted, not treated as a vulnerability)

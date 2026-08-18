@@ -264,12 +264,7 @@ function slugChip(slug, { linked = false, title = null } = {}) {
 // shifting it into the viewer's timezone would be inventing a fact.
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-// `precise` renders seconds and milliseconds, for the recent-events table
-// only. Everything else in the app is a date or an operator-entered window
-// where sub-second precision would be noise — but several clicks routinely
-// land in the same second, and without this the rows read as duplicates of
-// one another rather than as distinct visits.
-function formatTimestamp(value, { dateOnly = false, precise = false } = {}) {
+function formatTimestamp(value, { dateOnly = false } = {}) {
   if (!value) return "—";
   const parts = DATE_ONLY.exec(String(value));
   const date = parts
@@ -278,29 +273,6 @@ function formatTimestamp(value, { dateOnly = false, precise = false } = {}) {
   if (Number.isNaN(date.getTime())) return String(value);
   if (dateOnly || parts) {
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
-  }
-  if (precise) {
-    // The date parts are spelled out instead of using `dateStyle: "medium"`,
-    // and that is a correctness requirement, not a style choice: ECMA-402
-    // forbids combining `dateStyle`/`timeStyle` with any individual component
-    // option, so `dateStyle` alongside `hour`/`minute`/`second` throws
-    // `TypeError: Invalid option`. `fractionalSecondDigits` is NOT the culprit
-    // and works fine next to `second` — do not "fix" this by dropping it.
-    //
-    // This shipped broken in 051cfa7 and reached production. The throw lands
-    // inside links/detail.js's recent-events render loop, so a link with no
-    // events rendered fine and only links that actually had events showed an
-    // empty table — which is why a deploy smoke test on a fresh link missed it.
-    // These options reproduce `dateStyle: "medium"` exactly ("Aug 9, 2026").
-    return new Intl.DateTimeFormat(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      fractionalSecondDigits: 3,
-    }).format(date);
   }
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }

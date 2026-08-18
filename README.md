@@ -8,7 +8,7 @@ A self-hosted URL shortener built as a polyglot [Spin](https://spinframework.dev
 - Optional per-link password protection
 - Optional start/end time windows — a link only redirects within its scheduled window
 - QR codes (SVG/PNG, web/print sizes) for every link
-- Click analytics: totals, per-day counts, and a best-effort sample of recent click events
+- Click analytics: totals and per-day counts
 - Local username/password login with sessions, CSRF protection, and admin user management (roles + fine-grained permissions)
 
 ## Quick start

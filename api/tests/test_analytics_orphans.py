@@ -210,6 +210,32 @@ async def test_handle_orphan_report_names_orphans_and_excludes_live_slugs():
     assert "keepme" not in slugs_reported
 
 
+async def test_handle_orphan_report_obsolete_event_keys_sums_both_live_and_orphan_slugs():
+    """docs/plans/drop-events-write.md: obsolete_event_keys is the measurement
+    of leftover events: keys after redirect stopped writing them. It must sum
+    BOTH a live slug's leftover event keys and an orphan slug's — a version
+    that only counted orphans would pass with 1 here (killme's single event
+    key) and silently miss keepme's, understating the residual on any real
+    store, since most events: keys left over at the moment of cutover belong
+    to links that are still live."""
+    links_store = FakeStore({"slug:keepme": b"{}"})
+    analytics_store = FakeStore({
+        "count:keepme:1": _count(3),
+        "events:keepme:0": _event(),
+        "events:keepme:1": _event(),
+        "count:killme:1": _count(9),
+        "events:killme:5": _event(),
+    })
+
+    resp = await orphans_mod.handle_orphan_report(
+        links_store, analytics_store, _principal(), fake_list_keys,
+    )
+    body = json.loads(resp.body)
+    # 2 from the live slug (keepme) + 1 from the orphan slug (killme) = 3.
+    # A naive orphans-only implementation would report 1 and fail this.
+    assert body["totals"]["obsolete_event_keys"] == 3
+
+
 async def test_handle_orphan_report_ignores_a_leftover_all_links_key():
     """docs/plans/derived-link-indexes.md: all_links is an inert leftover
     key now, not a maintained index. A present-but-garbage value must not

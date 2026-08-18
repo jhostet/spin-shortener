@@ -49,7 +49,7 @@ async def test_backup_export_through_links_view_cannot_leak_a_users_password_has
     list_keys = kvprefix.scoped_list_keys(fake_list_keys)
 
     response = await backup.handle_export(
-        {"links": views["links"]}, _principal(), {"stores": ["links"]}, list_keys, num_event_slots=30,
+        {"links": views["links"]}, _principal(), {"stores": ["links"]}, list_keys,
     )
 
     assert response.status == 200
@@ -100,7 +100,7 @@ async def test_restore_prunes_only_within_its_own_prefix():
     )
 
     response = await backup.handle_restore(
-        {"links": views["links"]}, _principal(), request, list_keys, num_event_slots=30,
+        {"links": views["links"]}, _principal(), request, list_keys,
     )
     assert response.status == 200
 
@@ -133,7 +133,7 @@ async def test_pre_consolidation_fixture_restores_unchanged_and_reexports_identi
     )
     response = await backup.handle_restore(
         {"links": views["links"], "users": views["users"], "analytics": views["analytics"]},
-        _principal(), request, list_keys, num_event_slots=30,
+        _principal(), request, list_keys,
     )
     assert response.status == 200
 
@@ -144,7 +144,7 @@ async def test_pre_consolidation_fixture_restores_unchanged_and_reexports_identi
 
     export_response = await backup.handle_export(
         {"links": views["links"], "users": views["users"], "analytics": views["analytics"]},
-        _principal(), {}, list_keys, num_event_slots=30,
+        _principal(), {}, list_keys,
     )
     assert export_response.status == 200
     exported = json.loads(export_response.body)

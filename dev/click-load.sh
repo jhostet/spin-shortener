@@ -11,13 +11,16 @@
 # looking at the link detail page.
 #
 # THE WRITE-RATE WARNING BELOW IS THE POINT OF THIS SCRIPT, not a nicety.
-# Every recorded click performs two KV writes (analytics:count:<slug>:<n> and
-# analytics:events:<slug>:<slot>), so the app-wide write rate is rate x 2
-# against Akamai's 50 write RPS cap. A run above ~25 requests/second measures
-# that cap, not counter contention. This is not hypothetical: the click-count
-# gating probe was first run at 38.5 req/s (77 writes/s), showed 32.5% loss, and
-# was read as a clean failure of the sharding design. Re-run under the cap it
-# passed unambiguously. One line of warning would have saved that round trip.
+# Every recorded click performs one KV write (analytics:count:<slug>:<n> —
+# the recent-events ring buffer's second write, analytics:events:<slug>:<slot>,
+# was retired 2026-08-18, see docs/plans/drop-events-write.md), so the app-wide
+# write rate is rate x 1 against Akamai's 50 write RPS cap. A run above ~50
+# requests/second measures that cap, not counter contention. This is not
+# hypothetical: the click-count gating probe was first run at 38.5 req/s (then
+# 77 writes/s, when the ceiling was still two writes per click), showed 32.5%
+# loss, and was read as a clean failure of the sharding design. Re-run under
+# the cap it passed unambiguously. One line of warning would have saved that
+# round trip.
 #
 # `set -u` is deliberately omitted, matching dev/kv-explorer-up.sh: macOS's
 # system bash 3.2 treats "$@" with no positional parameters as an unbound
@@ -29,7 +32,7 @@ set -eo pipefail
 export LC_ALL=C
 
 readonly AKAMAI_WRITE_RPS_CAP=50
-readonly KV_WRITES_PER_CLICK=2
+readonly KV_WRITES_PER_CLICK=1
 
 usage() {
   cat >&2 <<'EOF'

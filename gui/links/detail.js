@@ -100,21 +100,6 @@ async function loadAnalytics() {
     row.innerHTML = `<td>${escapeHtml(formatTimestamp(day))}</td><td>${escapeHtml(String(count))}</td>`;
     daysBody.appendChild(row);
   }
-
-  const eventsBody = document.getElementById("events-body");
-  eventsBody.innerHTML = "";
-  if (!data.recent_events.length) {
-    eventsBody.innerHTML = `<tr><td colspan="3" class="empty-state">No recent events yet.</td></tr>`;
-  }
-  for (const event of data.recent_events) {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${escapeHtml(formatTimestamp(event.timestamp, { precise: true }))}</td>
-      <td>${escapeHtml(event.referrer || "(direct)")}</td>
-      <td>${escapeHtml(event.device_class)}</td>
-    `;
-    eventsBody.appendChild(row);
-  }
 }
 
 // initHeader() must resolve before loadLinkInfo() runs — loadLinkInfo()

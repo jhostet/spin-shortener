@@ -338,8 +338,7 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            num_event_slots = int(await variables.get("analytics_event_slots"))
-            return await analytics.handle_analytics(links_store, analytics_store, result, slug, num_event_slots, get_many)
+            return await analytics.handle_analytics(links_store, analytics_store, result, slug, get_many)
 
         if path.startswith("/api/links/") and path.endswith("/qr") and method == "GET":
             slug = path.removeprefix("/api/links/").removesuffix("/qr")
@@ -398,20 +397,18 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            num_event_slots = int(await variables.get("analytics_event_slots"))
             return await backup.handle_export(
                 {"links": links_store, "users": users_store, "analytics": analytics_store},
-                result, query, list_keys, num_event_slots,
+                result, query, list_keys,
             )
 
         if path == "/api/admin/restore" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            num_event_slots = int(await variables.get("analytics_event_slots"))
             return await backup.handle_restore(
                 {"links": links_store, "users": users_store, "analytics": analytics_store},
-                result, request, list_keys, num_event_slots,
+                result, request, list_keys,
             )
 
         if path == "/api/admin/consistency" and method == "GET":

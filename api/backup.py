@@ -214,7 +214,6 @@ async def handle_export(
     principal,
     query: dict,
     list_keys,
-    num_event_slots: int,
 ) -> Response:
     if not principal.has_permission("users.manage"):
         return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
@@ -264,7 +263,6 @@ async def handle_restore(
     principal,
     request,
     list_keys,
-    num_event_slots: int,
 ) -> Response:
     if not principal.has_permission("users.manage"):
         return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})

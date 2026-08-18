@@ -3,12 +3,11 @@ writes into the `analytics` KV store on every successful click.
 """
 
 import json
-from datetime import datetime, timezone
 
 import links
 from auth import Principal
 from links import can_view, get_link
-from responses import json_response, to_iso8601_utc_ms
+from responses import json_response
 
 
 # MUST stay equal to redirect/linkgate/keys.go's CountShards — see that file
@@ -64,6 +63,14 @@ def parse_analytics_key(key: str) -> tuple[str, str] | None:
     handle_click_totals intersects against a known-visible set and must keep
     its current behaviour byte for byte. analyticsorphans.py applies
     links.is_valid_custom_slug on top before anything is deleted.
+
+    The "event" branch stays even though nothing writes `events:` keys any
+    more (redirect's recordClickEvent was retired 2026-08-18 — see
+    docs/plans/drop-events-write.md): leftover `events:` keys from before that
+    change still exist in real stores, and analyticsorphans.classify_analytics_keys
+    must keep recognising them or they become permanently unpurgeable
+    unrecognized_keys, showing up in the orphan report's unrecognized_sample
+    on every run.
     """
     if key.startswith("count:"):
         kind, rest = "count", key[len("count:"):]
@@ -75,24 +82,6 @@ def parse_analytics_key(key: str) -> tuple[str, str] | None:
     if not slug:
         return None
     return kind, slug
-
-
-def _parse_event(raw: bytes) -> dict | None:
-    try:
-        text = raw.decode("utf-8")
-        unix_ms_str, referrer, device_class = text.split("|", 2)
-        unix_ms = int(unix_ms_str)
-    except (ValueError, UnicodeDecodeError):
-        return None
-
-    # Millisecond resolution, deliberately. The record has always carried it
-    # (redirect writes UnixMilli), and this function used to round it away to
-    # whole seconds — which was invisible while EventSlot's slot aliasing was
-    # discarding most events, and became misleading the moment that was fixed:
-    # several clicks legitimately land in one second, so the table rendered
-    # rows that looked like duplicates of each other.
-    timestamp = to_iso8601_utc_ms(datetime.fromtimestamp(unix_ms / 1000, tz=timezone.utc))
-    return {"timestamp": timestamp, "unix_ms": unix_ms, "referrer": referrer, "device_class": device_class}
 
 
 async def handle_click_totals(links_store, analytics_store, principal: Principal, list_keys, get_many):
@@ -198,46 +187,29 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     return json_response(200, {"totals": totals})
 
 
-async def handle_analytics(
-    links_store, analytics_store, principal: Principal, slug: str, num_event_slots: int, get_many
-):
+async def handle_analytics(links_store, analytics_store, principal: Principal, slug: str, get_many):
     record = await get_link(links_store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
     if not can_view(principal, record):
         return json_response(403, {"error": "forbidden", "required_permission": "links.view_all"})
 
-    # Every key below is independent, so they are all fetched in one
-    # get_many host call (docs/plans/batch-kv-reads.md) rather than one
-    # round trip per shard plus one per event slot — which is what used to
-    # make COUNT_SHARDS show up directly in page latency. Correctness does
-    # not depend on how many host calls this costs; only kv_ops/kv_keys in
-    # the logfmt line make that visible.
+    # Every shard key is independent, so they are all fetched in one
+    # get_many host call (docs/plans/batch-kv-reads.md) rather than one round
+    # trip per shard — which is what used to make COUNT_SHARDS show up
+    # directly in page latency. Correctness does not depend on how many host
+    # calls this costs; only kv_ops/kv_keys in the logfmt line make that
+    # visible.
     #
     # The legacy unsharded key goes first — nothing writes it any more, but
     # clicks recorded before sharding landed still live there, so summing it in
     # is what makes this a no-migration change.
     count_keys = [f"count:{slug}"] + [f"count:{slug}:{shard}" for shard in range(COUNT_SHARDS)]
-    event_keys = [f"events:{slug}:{slot}" for slot in range(num_event_slots)]
 
-    fetched = await get_many(analytics_store, count_keys + event_keys)
+    fetched = await get_many(analytics_store, count_keys)
     total, days = _merge_counts(fetched.get(key) for key in count_keys)
-
-    events = []
-    for key in event_keys:
-        raw = fetched.get(key)
-        if raw is None:
-            continue
-        event = _parse_event(raw)
-        if event is not None:
-            events.append(event)
-
-    events.sort(key=lambda e: e["unix_ms"], reverse=True)
-    for event in events:
-        del event["unix_ms"]
 
     return json_response(200, {
         "total": total,
         "days": days,
-        "recent_events": events,
     })

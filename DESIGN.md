@@ -160,7 +160,7 @@ A second theme, shipped alongside the light one rather than replacing it — `:r
 ### Hierarchy
 - **Display** (700, 1.5rem, 1.4): page-level `h1` — used sparingly; `dashboard.html` is the one page that skips it entirely, relying on the persistent nav's brand name instead (`login.html`, `admin/users.html`, and `links/detail.html` all have a real `h1`).
 - **Headline** (700, 1.25rem, 1.4): `h2` — section headings within a page ("Create a new link", "Your links").
-- **Title** (700, 1.1rem, 1.4): `h3` — sub-section headings (e.g. "Clicks per day" / "Recent events" side by side).
+- **Title** (700, 1.1rem, 1.4): `h3` — sub-section headings (e.g. "Clicks per day").
 - **Body** (400, 1rem, 1.4): all prose, labels, and table cells that aren't data columns.
 - **Label** (400, 0.85em, 1.6, monospace): the slug chip and every data-like table column (slug, destination, timestamps) — set apart from the sans-serif prose around it.
 - **Caption** (600, 0.75rem, 1.4, sans-serif): compact functional text that isn't data and isn't prose — the links table's tightened action-button group, the slug-kind/lock badges next to a slug chip, and the nav's identity-chip role text/avatar-letter. Added to reconcile two ad-hoc small sizes (`0.8rem`, `0.7rem`) that had drifted outside any documented step; reused rather than re-drifted when the identity chip introduced its own one-off `0.8rem`/`0.9rem`/`0.7rem` sizes — caught live by the mechanical detector's `design-system-font-size` advisory.

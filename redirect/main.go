@@ -298,7 +298,7 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
+	sendRedirectThenRecord(w, slug, l.TargetURL, collector)
 }
 
 // handleRedirectPost re-fetches the link fresh from KV — never trusting a
@@ -321,7 +321,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if l.PasswordHash == "" {
-		sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
+		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
 		return
 	}
 
@@ -335,31 +335,29 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendRedirectThenRecord(w, r, slug, l.TargetURL, collector)
+	sendRedirectThenRecord(w, slug, l.TargetURL, collector)
 }
 
 // sendRedirectThenRecord issues the 302 and only then records the click.
 //
-// ALL analytics runs after the response. Measured on Akamai 2026-08-06: this
+// Analytics runs after the response. Measured on Akamai 2026-08-06: this
 // moves median TTFB from 98.0 ms to 74.3 ms (~24 ms, untraced, warm
 // connection) at no measurable accuracy cost — a controlled A/B put click
-// recording at 86/100 deferred against 85/100 not deferred. An intermediate
-// "split" arrangement (count before, event after) was built and measured at
-// ~5.5 ms, inside the noise band, and dropped.
+// recording at 86/100 deferred against 85/100 not deferred.
 //
-// All analytics is best-effort in the sense that a KV error is swallowed
-// rather than propagated: failing to record a click must never block the
-// redirect. This opens its own store rather than reusing the handler's,
-// keeping a successful redirect at 6 KV operations (2 opens); threading the
-// handler's store in would remove one kv.Open, which measured ~0.2% on Akamai
-// (~154 µs against ~20 ms per data operation) and is not worth doing.
+// Analytics is best-effort in the sense that a KV error is swallowed rather
+// than propagated: failing to record a click must never block the redirect.
+// This opens its own store rather than reusing the handler's, keeping a
+// successful redirect at 5 KV operations (2 opens); threading the handler's
+// store in would remove one kv.Open, which measured ~0.2% on Akamai (~154 µs
+// against ~20 ms per data operation) and is not worth doing.
 //
-// A visitor has no stake in the events write, so it runs after the response
+// A visitor has no stake in the count write, so it runs after the response
 // has been handed to the host rather than before. The Spin Go SDK makes that
 // possible: wasiHandle passes the response to the host as soon as the first
 // Write calls send(), without waiting for the handler to return (see
 // spin-go-sdk/v3 http/http.go) — so the redirect is already travelling while
-// the analytics writes are still in flight.
+// the analytics write is still in flight.
 //
 // The courtesy body is deliberately dropped and Content-Length: 0 set
 // explicitly. http.Redirect writes a small `<a href=...>Found</a>.` body with
@@ -377,7 +375,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 // response until the handler returns so Server-Timing can be attached. That
 // is correct for tracing but it defeats this optimisation, so a traced
 // request does NOT show the improvement. Measure it untraced.
-func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target string, collector *linkgate.Collector) {
+func sendRedirectThenRecord(w http.ResponseWriter, slug, target string, collector *linkgate.Collector) {
 	store, err := openTimedStore(collector)
 	analytics := err == nil // best-effort: a KV failure must never block the redirect
 	now := time.Now()
@@ -388,12 +386,9 @@ func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target
 	w.WriteHeader(http.StatusFound)
 	_, _ = w.Write([]byte{})
 
-	// Both halves after the response. Kept as two functions because they have
-	// genuinely different failure modes — see each — even though both are now
-	// deferred.
+	// After the response, the same as the count write itself.
 	if analytics {
 		recordClickCount(store, slug, now)
-		recordClickEvent(store, slug, r, now)
 	}
 }
 
@@ -418,10 +413,12 @@ func sendRedirectThenRecord(w http.ResponseWriter, r *http.Request, slug, target
 //     Ordering cannot fix it; that was A/B'd and it does not help.
 //
 //   - The app-wide write cap. Akamai allows 50 KV writes/second per app and a
-//     recorded click costs two (this shard, plus one events slot), so above
-//     ~25 clicks/second ACROSS THE WHOLE SERVICE writes are throttled and the
-//     loss is not something this function can do anything about. Sharding does
-//     not touch it; only writing less per click would.
+//     recorded click costs one (this shard; the recent-events ring buffer's
+//     second write was retired 2026-08-18, see
+//     docs/plans/drop-events-write.md), so above ~50 clicks/second ACROSS THE
+//     WHOLE SERVICE writes are throttled and the loss is not something this
+//     function can do anything about. Sharding does not touch it; only
+//     writing less per click would.
 //
 // With CountShards=16, a single link taking every click the app can serve sees
 // only ~1.6 clicks/second per shard, well inside the band measured lossless.
@@ -454,23 +451,6 @@ func recordClickCount(store linkgate.KVStore, slug string, now time.Time) {
 // sharding at all.
 func clickEntropy(now time.Time) uint64 {
 	return uint64(now.UnixNano()) ^ rand.Uint64()
-}
-
-// recordClickEvent writes one recent-events ring-buffer slot.
-//
-// Safe to run AFTER the response, which is the whole point of the split: it is
-// a blind overwrite with no read, so deferring it cannot lose anything the
-// design does not already accept losing. Its slot collisions depend on the
-// timestamp and the slot count (see CLAUDE.md's Analytics section, which
-// documents this log as a best-effort sample), not on when the write happens.
-// now is passed in rather than re-read so the event still carries the click's
-// timestamp, not the post-response one.
-func recordClickEvent(store linkgate.KVStore, slug string, r *http.Request, now time.Time) {
-	numSlots := intVariable("analytics_event_slots", 30)
-	slot := linkgate.EventSlot(now, numSlots)
-	eventKey := linkgate.EventKey(slug, slot)
-	event := linkgate.FormatEvent(now.UnixMilli(), r.Referer(), linkgate.ClassifyUserAgent(r.UserAgent()))
-	_ = store.Set(eventKey, []byte(event))
 }
 
 // intVariable reads a Spin variable and parses it as an int, falling back to

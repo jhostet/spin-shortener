@@ -131,9 +131,23 @@ def build_orphan_report(
     """`totals` are always exact even when `orphans` is truncated — the same
     `MAX_FINDINGS_PER_CHECK` rule `consistency.py` follows, for the same
     reason: a capped list must never read as complete.
+
+    `obsolete_event_keys` is the measurement docs/plans/drop-events-write.md
+    added once redirect stopped writing `events:<slug>:<slot>` keys
+    (2026-08-18): the residual is frozen rather than growing, and this is
+    what turns "roughly a third of a busy link's analytics keys" from an
+    arithmetic model into a real number on a real store. It sums `event_keys`
+    across BOTH `orphans` and `live` — a version counting only orphans would
+    miss every leftover events: key still attached to a link that is still
+    live, which is most of them on any store that hasn't been purged since
+    the cutover.
     """
     orphan_keys_total = sum(len(v["keys"]) for v in orphans.values())
     live_keys_total = sum(len(v["keys"]) for v in live.values())
+    obsolete_event_keys = (
+        sum(v["event_keys"] for v in orphans.values())
+        + sum(v["event_keys"] for v in live.values())
+    )
 
     ordered = sorted(orphans.items(), key=lambda item: (-len(item[1]["keys"]), item[0]))
     truncated = len(ordered) > MAX_ORPHAN_SLUGS_REPORTED
@@ -160,6 +174,7 @@ def build_orphan_report(
             "orphan_keys": orphan_keys_total,
             "live_keys": live_keys_total,
             "unrecognized_keys": len(unrecognized),
+            "obsolete_event_keys": obsolete_event_keys,
         },
         "truncated": truncated,
         "max_orphan_slugs": MAX_ORPHAN_SLUGS_REPORTED,
