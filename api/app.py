@@ -111,28 +111,12 @@ async def _kv_keys(store) -> list[str]:
 
 def _memoized_kv_keys():
     """One raw get_keys walk per request, shared by every namespace view that
-    uses it (docs/plans/derived-link-indexes.md). `handle_click_totals`
-    enumerates two namespaces (links, then analytics) and each enumeration
-    walks the whole physical store, so without this it would pay for two
-    identical whole-store walks in one request.
-
-    NEVER pass the scoped_list_keys built over this to backup.handle_restore:
-    restore calls list_keys AFTER writing, specifically to find pre-existing
-    keys to prune, and a pre-write cached snapshot would silently change what
-    it prunes. That is the exact reason a global cache was rejected on
-    2026-08-04 (TASKS.md, "Considered and rejected") — this one is scoped to
-    a single request and a single call site, never module-level and never
-    reused across requests.
+    uses it. The implementation lives in kvprefix.memoized_raw_list_keys so it
+    is host-testable (app.py is excluded from pytest) and so the cache-hit
+    contract sits beside the scoped_list_keys that reads it — read that
+    docstring, including why this must NEVER reach backup.handle_restore.
     """
-    cached = None
-
-    async def kv_keys(store):
-        nonlocal cached
-        if cached is None:
-            cached = await _kv_keys(store)
-        return cached
-
-    return kv_keys
+    return kvprefix.memoized_raw_list_keys(_kv_keys)
 
 
 def _make_raw_get_many(collector):

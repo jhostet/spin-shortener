@@ -109,9 +109,49 @@ async def get_link(store, slug: str) -> dict | None:
         raise UnreadableLinkError(slug) from exc
 
 
+# A link record has no size bound of its own below Akamai's 1 MB max value
+# size, and since docs/plans/derived-link-indexes.md EVERY visible record is
+# fetched on every dashboard load, so the population paying for an oversized
+# record is now everyone rather than its owner. 4096 bytes bounds a record to
+# roughly 4.5 KB while staying clear of real marketing URLs — UTM-laden
+# campaign links run to a few hundred bytes, so this is orders of magnitude of
+# headroom, not a tight fit. **Raising it needs evidence of a real rejected
+# URL, and LOWERING it can reject links that already exist** — the asymmetry
+# the sibling caps (MAX_BULK_ROWS, MAX_BACKUP_ENTRIES, MAX_PURGE_KEYS_PER_REQUEST)
+# all carry. Measured in BYTES, not characters: the bound being protected is a
+# stored value's size, and a percent-encoded or non-ASCII URL costs more bytes
+# than it has characters.
+MAX_TARGET_URL_BYTES = 4096
+
+
 def is_valid_target_url(target_url: str) -> bool:
     parsed = urlparse(target_url)
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _target_url_error_body(error_code: str) -> dict:
+    """Echoes the cap in the response so no client ever hardcodes it, the same
+    convention every sibling cap in this codebase follows."""
+    if error_code == "target_url_too_long":
+        return {"error": error_code, "max_bytes": MAX_TARGET_URL_BYTES}
+    return {"error": error_code}
+
+
+def target_url_error(target_url) -> str | None:
+    """The single choke point for destination-URL shape, returning an error
+    code or None. All three authoring paths (handle_create, handle_update,
+    bulk.validate_bulk_rows) go through this rather than repeating the checks
+    — CLAUDE.md's destination-URL-policy section states the rule this follows:
+    a constraint enforced in two of three places is not enforced.
+
+    Deliberately does NOT cover the destination *policy* (urlpolicy.evaluate),
+    which needs the policy record and returns a richer verdict.
+    """
+    if not isinstance(target_url, str) or not is_valid_target_url(target_url):
+        return "invalid_target_url"
+    if len(target_url.encode("utf-8")) > MAX_TARGET_URL_BYTES:
+        return "target_url_too_long"
+    return None
 
 
 def is_valid_custom_slug(slug: str) -> bool:
@@ -166,8 +206,9 @@ async def handle_create(store, principal: Principal, request, write=kvretry.dire
         return json_response(400, {"error": "invalid_json"})
 
     target_url = payload.get("target_url")
-    if not isinstance(target_url, str) or not is_valid_target_url(target_url):
-        return json_response(400, {"error": "invalid_target_url"})
+    url_error = target_url_error(target_url)
+    if url_error:
+        return json_response(400, _target_url_error_body(url_error))
 
     policy = await urlpolicy.load_policy(store)
     verdict = urlpolicy.evaluate(target_url, policy)
@@ -329,8 +370,9 @@ async def handle_update(store, principal: Principal, slug: str, request, write=k
 
     if "target_url" in payload:
         target_url = payload["target_url"]
-        if not isinstance(target_url, str) or not is_valid_target_url(target_url):
-            return json_response(400, {"error": "invalid_target_url"})
+        url_error = target_url_error(target_url)
+        if url_error:
+            return json_response(400, _target_url_error_body(url_error))
         policy = await urlpolicy.load_policy(store)
         verdict = urlpolicy.evaluate(target_url, policy)
         if not verdict["allowed"]:

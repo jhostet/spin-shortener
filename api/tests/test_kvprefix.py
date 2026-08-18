@@ -59,6 +59,68 @@ async def test_two_views_over_one_store_cannot_see_each_others_keys():
     assert await views["users"].get("user:alice") == b"user-shaped-value"
 
 
+# --- memoized_raw_list_keys, and the op it must NOT record ---
+
+
+class _CountingCollector:
+    """Minimal obs.Collector stand-in: records only what it was asked to."""
+
+    def __init__(self):
+        self.ops: list[str] = []
+
+    def record(self, op, namespace, duration_ns, num_bytes, num_keys=1):
+        self.ops.append(op)
+
+
+async def test_memoized_raw_list_keys_performs_one_real_enumeration():
+    calls = []
+
+    async def raw(store):
+        calls.append(store)
+        return ["links:slug:a"]
+
+    memoized = kvprefix.memoized_raw_list_keys(raw)
+    store = FakeStore()
+    assert await memoized(store) == ["links:slug:a"]
+    assert await memoized(store) == ["links:slug:a"]
+    assert await memoized(store) == ["links:slug:a"]
+    assert len(calls) == 1
+
+
+async def test_memoized_cache_hit_records_no_kv_operation():
+    """The bug this fixes, measured on the deployed build 2026-08-18:
+    handle_click_totals traced as `list_keys=2` while performing exactly ONE
+    whole-store walk, because the memoized hit was still recorded. kv_ops
+    counts HOST operations, and a cache hit never reaches the host."""
+    async def raw(store):
+        return ["links:slug:a", "analytics:count:a:1"]
+
+    collector = _CountingCollector()
+    memoized = kvprefix.memoized_raw_list_keys(raw)
+    list_keys = kvprefix.scoped_list_keys(memoized, collector)
+
+    views = kvprefix.open_views(FakeStore())
+    await list_keys(views["links"])
+    await list_keys(views["analytics"])
+
+    assert collector.ops.count("list_keys") == 1
+
+
+async def test_a_plain_raw_callable_still_records_every_call():
+    """The getattr default is what keeps every non-memoized call site
+    unchanged — without it this fix would silently stop recording real walks."""
+    async def raw(store):
+        return ["links:slug:a"]
+
+    collector = _CountingCollector()
+    list_keys = kvprefix.scoped_list_keys(raw, collector)
+    views = kvprefix.open_views(FakeStore())
+    await list_keys(views["links"])
+    await list_keys(views["links"])
+
+    assert collector.ops.count("list_keys") == 2
+
+
 # --- scoped_list_keys ---
 
 

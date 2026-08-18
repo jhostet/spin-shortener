@@ -262,6 +262,28 @@ async def test_bulk_create_body_too_large_rejected():
     assert body["max_bytes"] == bulk.MAX_BULK_BODY_BYTES
 
 
+async def test_bulk_create_rejects_an_oversized_target_url_and_writes_nothing():
+    """The THIRD authoring path. validate_bulk_rows takes the same choke point
+    as handle_create/handle_update, because a cap enforced in two of three
+    places is not enforced — CLAUDE.md's destination-URL-policy rule, which
+    exists because the bulk path is exactly the one that stayed open before."""
+    store = FakeStore()
+    over = "https://example.com/" + "a" * links.MAX_TARGET_URL_BYTES
+    text = "good,https://example.com/fine\nbad," + over
+
+    resp = await bulk.handle_bulk_create(
+        store, _principal(), _request({"text": text}), fake_get_many, kvretry.direct
+    )
+
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    codes = [e["error"] for e in body["row_errors"]]
+    assert "target_url_too_long" in codes
+    # Validation stays all-or-nothing: the VALID row is not written either.
+    assert store._data == {}
+
+
 async def test_bulk_create_invalid_json():
     store = FakeStore()
     resp = await bulk.handle_bulk_create(store, _principal(), _request(body=b"not json"), fake_get_many, kvretry.direct)

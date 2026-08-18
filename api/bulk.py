@@ -138,8 +138,11 @@ def validate_bulk_rows(
 
         if not row.target_url:
             error_code = "missing_target_url" if row.slug else "invalid_target_url"
-        elif not links.is_valid_target_url(row.target_url):
-            error_code = "invalid_target_url"
+        else:
+            # Same choke point as handle_create/handle_update, so the length
+            # cap cannot be enforced in two of three authoring paths — the
+            # failure mode CLAUDE.md's destination-URL-policy section names.
+            error_code = links.target_url_error(row.target_url)
 
         if error_code is None:
             verdict = urlpolicy.evaluate(row.target_url, policy)

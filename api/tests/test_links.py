@@ -217,6 +217,62 @@ async def test_get_edit_all_permission_can_view_others_links():
     assert resp.status == 200
 
 
+def _long_url(nbytes):
+    """A valid http(s) URL whose UTF-8 length is exactly nbytes."""
+    head = "https://example.com/"
+    return head + "a" * (nbytes - len(head))
+
+
+async def test_target_url_at_the_cap_is_accepted_and_over_it_is_rejected():
+    store = FakeStore()
+    at_cap = _long_url(links.MAX_TARGET_URL_BYTES)
+    over = _long_url(links.MAX_TARGET_URL_BYTES + 1)
+    assert len(at_cap.encode("utf-8")) == links.MAX_TARGET_URL_BYTES
+
+    ok = await links.handle_create(store, _principal(), _request({"target_url": at_cap}))
+    assert ok.status == 201
+
+    bad = await links.handle_create(store, _principal(), _request({"target_url": over}))
+    assert bad.status == 400
+    body = json.loads(bad.body)
+    assert body["error"] == "target_url_too_long"
+    # The cap is echoed so no client hardcodes it.
+    assert body["max_bytes"] == links.MAX_TARGET_URL_BYTES
+
+
+async def test_target_url_cap_is_measured_in_bytes_not_characters():
+    """A percent-free non-ASCII URL costs more bytes than it has characters,
+    and the bound being protected is a stored value's SIZE."""
+    store = FakeStore()
+    # Each 'é' is 2 bytes in UTF-8, so this is under the cap by character
+    # count and over it by byte count.
+    head = "https://example.com/"
+    url = head + "é" * ((links.MAX_TARGET_URL_BYTES - len(head)) // 2 + 1)
+    assert len(url) < links.MAX_TARGET_URL_BYTES
+    assert len(url.encode("utf-8")) > links.MAX_TARGET_URL_BYTES
+
+    resp = await links.handle_create(store, _principal(), _request({"target_url": url}))
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "target_url_too_long"
+
+
+async def test_target_url_cap_is_enforced_on_update_too():
+    """The second of the three authoring paths. A cap enforced at create only
+    is trivially bypassed by creating short and then updating long."""
+    store = FakeStore()
+    created = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/short"}))
+    slug = json.loads(created.body)["slug"]
+
+    resp = await links.handle_update(
+        store, _principal(), slug, _request({"target_url": _long_url(links.MAX_TARGET_URL_BYTES + 1)})
+    )
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "target_url_too_long"
+    # And the stored record is untouched.
+    record = await links.get_link(store, slug)
+    assert record["target_url"] == "https://example.com/short"
+
+
 async def test_list_returns_a_link_that_is_in_NEITHER_index():
     """THE load-bearing test for docs/plans/derived-link-indexes.md's Stage 1.
 
