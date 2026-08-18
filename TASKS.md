@@ -372,6 +372,7 @@ All items below are complete-and-shipped-adjacent or deliberately deferred — n
 - [ ] **Find out what Akamai's actual KV write-failure message is — `write_error` reports `other`, not `throttled` (2026-08-17).** Every failed write in the traced run classified as `other`. The classifier is not at fault: `str()` on a faithful reconstruction of `Err(Error_Other(value='too many requests'))` does surface the message, so `api/tests/fakes.py`'s stand-in is accurate and the substring match would fire on it. Akamai's real message is therefore different, **and nothing anywhere logs the exception string** — not the log line, not the response. Control flow is deliberately unaffected (every write error retries regardless), so this is an observability gap, not a correctness one: an incident report says `other` and names nothing. Fix needs a diagnostic build surfacing `repr(exc.cause)` on the partial response or in the log line, deployed, and one concurrent bulk run to capture it — then either widen `classify_write_error`'s match or record that the message is unstable. Note the standing rule this must not break: the match is **observability-only** and must never become control flow.
 - [x] **A memoised `list_keys` hit is still counted as a KV op, inflating `kv_ops` — MEASURED 2026-08-17, FIXED 2026-08-18.** Fixed by the second option this entry named: `scoped_list_keys` no longer records an op when the underlying call never reached the host. The memoisation moved from a private closure in `api/app.py` (untestable — `app.py` is excluded from pytest) into `kvprefix.memoized_raw_list_keys`, which sets a `cache_hit` attribute that `scoped_list_keys` reads via `getattr(..., False)` so every non-memoized call site is untouched. Mutation-verified: recording cache hits again fails `test_memoized_cache_hit_records_no_kv_operation` with `assert 2 == 1`, the exact traced symptom. Original entry follows. `GET /api/analytics/click-totals` traces as `list_keys=2` on the `55dea50-derived-reads` build even though only one raw walk occurs: the two ops total 26,400 µs while the slowest single one is 26,396 µs, so the second is a 4 µs memoised hit. CLAUDE.md defines `kv_ops` as counting **host** operations, and a memoised hit is not one — so this both overstates `kv_ops` and, worse, tells a reader the whole-store walk happens twice per request when it happens once. Cost is unaffected; this is purely observability, which is why it was filed rather than fixed during a measurement deploy. Fix is in `api/app.py`'s per-request memoisation wrapper (record the op only on a miss) or in `api/obs.py` (a distinct op name for a cache hit, e.g. `list_keys_cached`, which keeps the hit visible without pretending it cost a round trip). **Whichever is chosen, re-trace afterwards** — the point of the field is that a reader can trust it. Note this becomes more misleading, not less, once Stage 2 lands and the enumeration is the only way the app learns which links exist.
 - [ ] **A single-link DELETE returned `200` but did not remove the record — SEEN ONCE, 2026-08-18.** During the M2 probe on `88f4f4c-no-indexes`, slug `m2t01` was created, deleted, and was still present in `GET /api/links` and still returning **302** from `/r/m2t01` minutes later; a second DELETE removed it cleanly. **It did not recur in 10 further create-then-immediately-delete cycles, all of which returned `200` and removed the record.** The probe did not capture the failing DELETE's status code, so the cause is unknown. Most plausible reading: a create→delete race where the DELETE's own record `get` did not yet see the just-written record, so it 404'd and deleted nothing — which would make the observed "200" a mis-memory and the real response a 404, or would mean the delete write itself was lost. **Do not treat either explanation as established.** Reproducing needs a loop that records the DELETE's status code AND an `X-SS-Debug` trace (the `delete=` op count in the log line distinguishes the two: a 404-and-do-nothing shows no `delete` op at all, a lost write shows `delete=1`). Note this is NOT the same phenomenon as the sub-second redirect staleness recorded alongside it in the M2 section — that one self-heals in under a second and this one persisted until a second DELETE.
+- [ ] **A live link returns 404 when the KV read fails — MEASURED 2026-08-18, a correctness bug under load.** `lookupLink` (`redirect/main.go`) collapses a KV *failure* and a genuinely *absent* link into one `false` (`if err != nil || len(raw) == 0`), so the caller answers `http.NotFound`. Measured on `43d66c6-no-events` with `hey -disable-redirects`: clean at 690 req/s, **7% of requests wrongly 404 at 726 rps, 31% at 947, 43% at 1292**, with the link resolving normally at rest immediately afterwards. A successful redirect performs 2 KV gets, so ~700 rps is ~1,400 reads/second against Akamai's documented 1,000 — this is read-path saturation surfacing as a lie about the link. **Why it deserves a fix rather than a note:** a 404 is a claim about the *link*, not the server, and this codebase deliberately makes it indistinguishable from a disabled or expired link (a probing-resistance feature, "Security tradeoffs"), so a visitor is told a live campaign URL is dead. `Cache-Control: no-store` is the only reason it does not also get cached. **The fix is a judgement call and wants its own plan**, not a one-line patch: options are a `503` with `Retry-After` (honest, but a new status on the hot path), a bounded retry (adds latency to the one path the repo protects hardest, and `redirect` deliberately has no retry today — see "Write-throttle resilience" Trade-offs #2), or threading an explicit absent-vs-unreadable distinction out of `lookupLink`. Note the same collapse exists for an unparseable record (`ParseLink` error), which the API side already treats as a *reportable* condition (`unreadable_value`). **Cheap first step if this is picked up: the traced log line already distinguishes them** — a failed get shows as a `get` op with `status=404`, so a deployed build with `log_level=summary` could confirm whether this ever happens in real traffic before anyone designs a fix.
 - [x] Set up CI to run `go test ./linkgate/...` and `uv run pytest` (both components) automatically — see "CI setup (Jenkins)" below.
 - [x] Consolidate `redirect`/`api` from three named KV stores (`links`, `users`, `analytics`) to a single `"default"` store with key-prefixing (`links:`/`users:`/`analytics:`) — required before an actual Akamai Functions deploy, since Akamai only supports one auto-provisioned `"default"` store and no `runtime-config.toml`. See CLAUDE.md's "Deployment: known Akamai Functions blocker" section for the confirmed finding and exact prefix scheme. Touches `spin.toml`, `redirect/main.go`'s `kv.Open` calls, `api/app.py`'s `key_value.open` calls, and every key literal across both components' non-test and test code. — **SCHEDULED 2026-08-04**, see `docs/plans/kv-store-consolidation.md`. A prefixing *view* (`api/kvprefix.py`, `redirect/linkgate/keys.go`) was chosen over flattening the prefixes into every key literal across both components — the view confines the change to `app.py` plus one new module per language and keeps every existing test as a regression suite for the refactor, at the honest cost of an indirection layer between what business logic writes (`slug:abc`) and what the store actually holds (`links:slug:abc`). See the plan's "Trade-offs and rejected alternatives" #1 for the full argument. — **COMPLETED 2026-08-05 (6221e5a) and running in production since.** Deployed to Akamai Functions the same day; the single `"default"` store works there, and `get_keys` on it was later confirmed working by a live consistency check. See the `## KV store consolidation` section below for the build-out and the deploy verification.
 - [ ] Implement SAML and/or OIDC as additional auth providers — the seam is real and documented in `docs/auth-providers.md` (the `initiate`/`handle_callback` interface, `oauth_state` KV bookkeeping, JIT user provisioning), but neither provider is built. Needs a specific XML-signature (SAML) or JWT/JWKS (OIDC) validation library that works under componentize-py's pure-Python-only WASI constraint.
@@ -2584,6 +2585,61 @@ that breaks it is this audience's normal work, and what is given up is a ≤30-e
 ring the dashboard never reads. The one thing that would flip that: evidence the marketing team
 actually reads the table.
 
+
+### THE "~58 req/s CEILING" WAS MY OWN HARNESS — and characterising it found a real bug (2026-08-18)
+
+**The ceiling does not exist.** The 2026-08-18 sweep that reported a limit near 58 req/s was
+measuring its own driver: `knee.sh` spawns `curl` plus **two `awk`s and two `perl`s per request**
+for its absolute-schedule pacing, so at ~70 req/s it was forking ~350 processes/second on the
+laptop. Replaced with `hey` (one process, real worker pool) the same deployed build serves **690
+req/s cleanly**. Everything below was measured with `hey`, and every rate in the loss sweeps above
+should be read as a property of the *pacing driver's* reach, not the app's.
+
+**Two false starts worth recording, because both produced confident wrong numbers:**
+
+1. **`hey` follows redirects by default**, so the first redirect runs were timing a round trip to
+   `example.com` — and reported ~500–600 rps with a `NaN` latency and an empty status
+   distribution, which was `example.com` refusing TLS handshakes at concurrency, not this app.
+   **Use `-disable-redirects` for any measurement of `/r/{slug}`.**
+2. **`hey` divides `-n` across `-c` by integer division**, so `-n 300 -c 80` issues 240 requests,
+   not 300. A missing-responses count that looks like failures is usually this. Use `n = c × k`.
+
+**Throughput by path, `hey`, `-disable-redirects`, deployed build:**
+
+| path | KV work | throughput |
+|---|---|---|
+| `/theme.css` (static, `gui`) | none | 217 req/s @ c=20 |
+| `/r/{miss}` → 404 | 2 ops, no writes | **352 req/s @ c=20** |
+| `/r/{slug}` → 302 | 5 ops, 1 write | **690 req/s @ c=60, clean** |
+
+**THE REAL FINDING, and it is a correctness bug rather than a capacity limit: above ~700 requests
+per second, live links start returning 404.**
+
+| concurrency | throughput | wrongly 404 |
+|---|---|---|
+| 60 | 690 rps | **0%** |
+| 70 | 726 rps | 7% |
+| 80 | 947 rps | 31% |
+| 90 | 1292 rps | 43% |
+
+The mechanism is one line, `lookupLink` in `redirect/main.go`:
+`if err != nil || len(raw) == 0 { return linkgate.Link{}, false }`. **A KV read *failure* and a
+genuinely absent link are collapsed into the same `false`**, and the caller answers
+`http.NotFound`. So read-path saturation (the 1,000 reads/second app-wide cap; a successful
+redirect does 2 gets, so ~700 rps is ~1,400 reads/s) surfaces to a visitor as **"this link does not
+exist"** rather than "try again". The link resolved normally again at rest, immediately after.
+
+**Why this is worse than a slow response.** A 404 is a semantic claim about the link, not about the
+server: it tells the visitor the campaign URL is dead, and it is the one status this codebase
+deliberately makes indistinguishable from a disabled or out-of-window link (see "Security
+tradeoffs" — that indistinguishability is a feature for probing resistance and a liability here).
+`Cache-Control: no-store` keeps it from being cached, which is the only reason this is not worse.
+
+**Filed as Future work rather than fixed here** — the fix is a judgement call about what a
+redirect should do when KV is unavailable (503 with `Retry-After`, a bounded retry, or an explicit
+distinction between "absent" and "unreadable"), and it wants its own plan. **Recording ceilings are
+unchanged by any of this**: clicks are still capped at ~50/second by the write cap, which this
+section does not touch.
 
 ### DEPLOYED AND RE-MEASURED (2026-08-18) — `43d66c6-no-events`, the ceiling doubled
 
