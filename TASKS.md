@@ -2585,6 +2585,50 @@ ring the dashboard never reads. The one thing that would flip that: evidence the
 actually reads the table.
 
 
+### DEPLOYED AND RE-MEASURED (2026-08-18) — `43d66c6-no-events`, the ceiling doubled
+
+Live after 110 s. **The redirect is measurably cheaper on the deployed build**: traced
+`kv_ops=5`, `set=1` (was 6 and 2), at `dur_us` 72–98 ms.
+
+**The knee moved exactly as predicted, and the like-for-like comparison is the headline.** Same
+harness, same rates, 8 slugs, 200 clicks per point:
+
+| request rate | loss BEFORE (2 writes/click) | loss AFTER (1 write/click) |
+|---|---|---|
+| ~29.5/s | 14.5% | **0.0%** |
+| ~34.5/s | 24.5% | **0.0%** |
+| ~39.0/s | 36.0% | **0.0%** |
+| ~48/s | 46.5% | **3.5%** |
+| ~58/s | — | 13.0% |
+
+The new curve fits the same cap model on one write per click: 13.0% measured at 58.3 writes/s
+against 14.2% predicted. **The ceiling is now ~50 clicks/second**, up from ~25.
+
+**Something other than the write cap binds at ~58 req/s**, newly visible now that the cap is no
+longer the first limit: a run targeting 70 req/s achieved only 57.0. That is the latency/
+concurrency ceiling the baseline never reached, and it is now the next constraint rather than a
+hypothetical. It has NOT been characterised — client-side concurrency is a candidate and was not
+ruled out.
+
+**Sharding is still doing real work, and this run proves it rather than assuming it.** Two
+independent signs. First, at the *same write rate* (~48.8/s) loss rose from 1.5% to 3.5% when the
+request rate doubled — per-key contention growing with concurrency, exactly as predicted when the
+ceiling was raised. Second, the single-link probe that the baseline deliberately could not make
+(it spread load over 8 slugs): **one slug at 38.9 clicks/second lost 0.5%** (199/200), and 0.0% at
+19.9. Against 25% loss at 9.4 clicks/second pre-sharding, that is what makes the new headroom
+usable — **the doubled ceiling would be unreachable on a single hot link without the 64-way
+counter.**
+
+**The upgrade path works on real data.** The live store still holds **32 leftover `events:` keys**
+from before the change; `GET /api/admin/analytics/orphans` reports them as
+`obsolete_event_keys: 32`, they are not counted as orphans, not reported as `unrecognized_key`,
+and `GET /api/admin/consistency` stays `ok: true`.
+
+**The ~⅓ key-growth reduction, measured rather than modelled.** Deleting the load-test slugs
+inline-purged **56–64 analytics keys each**, against **87–93** for equivalently-clicked slugs
+before the change — the 30 event slots, gone. Store returned to baseline: 14 links, 37 analytics
+keys, 0 orphan slugs, `ok: true`.
+
 ### BUILT AND VERIFIED (2026-08-18) — deploy still pending
 
 Suites: api **648** (unchanged — the retired `recent_events` tests and the new
@@ -2669,6 +2713,6 @@ Store returned to baseline: 14 links, 37 analytics keys, 0 orphan slugs, `ok: tr
 - [x] Update dev/click-load.sh's writes-per-click arithmetic — file(s): dev/click-load.sh — done when: KV_WRITES_PER_CLICK is 1, the header comment and both over-cap warnings describe one write per recorded click and a ~50 requests/second measurement ceiling, the 2026-08-06 misread-probe caution is kept, and a run at 30 req/s no longer prints the at-or-above-cap warning — **note: verified with `awk -v r=30 -v w=1 'BEGIN{printf "%.1f", r*w}'` = 30.0, under the 50 cap; the over_cap comparison (>=50) confirms no warning at that rate. The two per-run warning messages derive from the constant, unchanged.**
 - [x] Report leftover events keys in the orphan report — file(s): api/analyticsorphans.py, api/tests/test_analytics_orphans.py, gui/admin/backup.js — done when: build_orphan_report's totals carry obsolete_event_keys summed over BOTH orphan and live slugs, a test pins it against a store holding events keys for a live slug and a deleted slug (a version counting only orphans must fail it), the Store maintenance page's orphan summary names the count only when it is above zero, and cd api && uv run pytest passes — **note: verified the new test actually catches a naive orphans-only implementation (mutated to sum only orphans, ran the test, confirmed `assert 1 == 3` failure, then restored via backup/diff showing only the intended addition). 648 passed.**
 - [x] Update CLAUDE.md, PRODUCT.md, README.md and DESIGN.md for the retired events write — file(s): CLAUDE.md, PRODUCT.md, README.md, DESIGN.md — done when: CLAUDE.md's Analytics section states one KV write per recorded click, the M1/M2 table's M2 row reads one write and ~50 clicks/second with M1 untouched, the recent-events subsection is marked retired-with-the-feature while keeping its derivation as the reason ShardFor uses a splitmix64 finalizer, the Security-tradeoffs bullet and the Akamai section's 50÷2≈25 arithmetic read ~50, the stale claim that analytics runs before http.Redirect is corrected to after via sendRedirectThenRecord, the redirect op profile reads 5 for a successful redirect and 2 for a miss, the two stale CountShards = 16 references read 64, PRODUCT.md and README.md no longer advertise a recent-events sample, and DESIGN.md's h3 example no longer cites Recent events — **note: the "analytics runs before http.Redirect" correction was already present in CLAUDE.md (a CORRECTION 2026-08-18 note existed from prior cleanup work) — left as-is, verified accurate. Also fixed several other stale "16"/"two writes"/"~25" references beyond the two explicitly named, found while sweeping the file (e.g. the "sums 17 keys" line, the illustrative logfmt example, the analytics_event_slots mentions in the orphan-purge section reworded to past tense). PRODUCT.md's capability line rewritten to record the shipped-then-withdrawn history rather than just deleting the clause.**
-- [ ] Re-measure the click-loss knee on a deployed build carrying the change — file(s): (none — measurement step) — done when: the same four rates from the baseline task are re-run against the deployed build, the new knee is recorded beside the baseline in that task line, and an X-SS-Debug trace of one /r/{slug} shows set=1 with kv_ops=5 (2 open, 2 get, 1 set) against 6 before — **BLOCKED: requires `spin aka app deploy`, which is a deploy action explicitly outside the builder's authority for this task. Left unticked pending explicit user authorization to deploy. Everything else in this plan is implemented and verified locally (redirect Go tests + mutation check, API/gui-pages pytest suites, and a full spin up --build end-to-end run); this is the only remaining item and it requires the user's go-ahead.**
+- [x] Re-measure the click-loss knee on a deployed build carrying the change — **DONE 2026-08-18 on `43d66c6-no-events`. The prediction held: the knee moved from ~25 to ~50 clicks/second.** See the results section below. — file(s): (none — measurement step) — done when: the same four rates from the baseline task are re-run against the deployed build, the new knee is recorded beside the baseline in that task line, and an X-SS-Debug trace of one /r/{slug} shows set=1 with kv_ops=5 (2 open, 2 get, 1 set) against 6 before — **BLOCKED: requires `spin aka app deploy`, which is a deploy action explicitly outside the builder's authority for this task. Left unticked pending explicit user authorization to deploy. Everything else in this plan is implemented and verified locally (redirect Go tests + mutation check, API/gui-pages pytest suites, and a full spin up --build end-to-end run); this is the only remaining item and it requires the user's go-ahead.**
 - [x] End-to-end manual verification of the dropped events write — file(s): (none — verification step) — done when: against spin up --build with NO --runtime-config-file (so KV persists to .spin/sqlite_key_value.db), a freshly created link clicked 10 times yields only analytics:count: keys and zero analytics:events: keys in that database, GET /api/links/{slug}/analytics returns total and days with no recent_events key, and links/detail.html renders a full-width Clicks per day table with no Recent events heading and a clean browser console — **note: deleted a stale .spin/sqlite_key_value.db from a prior session first, and had to kill a leftover `spin trigger http --runtime-config-file` process squatting on :3000 from an earlier round before this one could bind. Ran `spin up --build` (no --runtime-config-file) with SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD/SPIN_VARIABLE_COOKIE_SECURE=false. Logged in via the real login FORM (both via curl POST /api/auth/login for the API checks and via Playwright filling #username/#password and clicking Log in for the browser check — never a raw fetch). Created link slug S9WrXUC, clicked /r/S9WrXUC 10 times (all 302), sqlite query showed exactly 10 `analytics:count:S9WrXUC:<shard>` rows and ZERO `analytics:events:` rows. GET /api/links/S9WrXUC/analytics returned exactly {"total":10,"days":{"2026-08-18":10}} — no recent_events key at all. GET /api/admin/analytics/orphans showed obsolete_event_keys:0 (this fresh store never had any). Playwright snapshot of links/detail.html confirmed a single full-width "Clicks per day" table (10 clicks, Aug 18 2026), no "Recent events" heading, accuracy hint reads "roughly 50 clicks per second", and browser_console_messages reported 0 errors/0 warnings.**
 
