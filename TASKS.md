@@ -2199,11 +2199,18 @@ have.
 
 ## Where things stand
 
-- **Repo:** `main` clean, HEAD = the write-throttle trace commit.
-- **Deployed:** `751f368-throttle-resilience` — **HEAD is live.** Deployed and traced 2026-08-17;
-  results in `### DEPLOYED AND TRACED (2026-08-17)` above.
+- **Repo:** `main` clean. **Deployed:** `88f4f4c-no-indexes` — **HEAD is live** (2026-08-18).
+- **The link indexes are GONE.** `all_links` and `owner_links:<owner>` are no longer written or
+  read; a record's existence is the only truth. Stages 1 and 2 of
+  `docs/plans/derived-link-indexes.md` both shipped, deployed and traced — see
+  `### STAGE 2 DEPLOYED AND TRACED (2026-08-18)` above for the measurements.
 - **Store:** clean and back at baseline — 14 links, 37 analytics keys, 0 orphan slugs,
-  `GET /api/admin/consistency` returns `ok: true` with zero findings.
+  `GET /api/admin/consistency` returns `ok: true` with zero findings, over **6** checks (was 12)
+  and **3** repairable ones (was 8).
+- **Two instructions below this line are now OBSOLETE and are left only because the sections they
+  sit in are historical record:** deleting junk links no longer needs to be *paced* (concurrent
+  bulk deletes were measured clean on 2026-08-18), and a concurrent bulk run no longer produces
+  `unindexed_link` findings to repair afterwards.
 
 ## What the trace settled, and what it opened
 
@@ -2373,6 +2380,55 @@ login and got `csrf_mismatch` — cookie jar and token must come from the same l
 - [x] Remove the GUI's index-drift copy and branches — file(s): gui/dashboard.js, gui/admin/backup.js, gui/admin/backup.html — done when: dashboard.js has no data.index_updated branch and no renderIndexNotUpdatedWarning helper, backup.js's CHECK_COPY names only the six surviving checks, a partial bulk create still renders its not_created error table, the consistency article's prose names no retired check, spin up is restarted before checking (the gui snapshot is taken at startup), and cd gui-pages && uv run pytest passes — **note:** `dashboard.js`'s three `data.index_updated === false` branches (bulk-action, bulk-tag, bulk-reassign) and the shared `renderIndexNotUpdatedWarning()` helper are gone; the bulk-create partial branch dropped its `index_updated`-conditional append and still renders `renderBulkErrorTable(notCreated)` unconditionally. `backup.js`'s `CONSISTENCY_CHECK_LABELS` (the actual map name — the task line's "CHECK_COPY" was this plan's paraphrase) now names only the six surviving checks. **`backup.html` did need one edit, caught only by loading the live page during task 6's manual verification, not by any grep**: its consistency-article intro paragraph described "a link missing from an index, an index entry with no link" in prose — no check id, but exactly the retired `unindexed_link`/`missing_link_record` pair. Reworded to name three of the surviving checks instead (unknown owner, unindexed user, orphan session). `git diff --stat -- gui/` confirms exactly `dashboard.js`, `backup.js` and `backup.html` changed. `cd gui-pages && uv run pytest` — 71 passed. The "restart spin up before checking" clause was satisfied live during task 6 (the `backup.html` fix landed before that run started, so it needed no separate restart of its own).
 - [x] Record the outcome in CLAUDE.md — file(s): CLAUDE.md — done when: the "KV consistency check" section states six checks and three repairable ones and explains that the index checks were retired because the indexes were, the "Consistency repair" section's twelve-row table is reduced accordingly and its present_slugs/would_orphan_unindexed_link paragraphs are removed, a new subsection states that all_links and owner_links: are derived from a key enumeration and why (the measured 2026-08-17 lost update), the "records first, indexes last" rule is replaced by "a record's existence is the only truth" everywhere it appears, the write-throttle section notes that its index-what-landed half is now moot while its record retry stands, the residual read-modify-write keys (_meta:usernames, _meta:url_policy) are named, and the ~250 ms traced list_keys revisit trigger is recorded — **note:** a new "## Derived link indexes" section (right before "## KV consistency check") carries the mechanism, the 2026-08-17 measurement, the "records first, indexes last" → "a record's existence is the only truth" replacement (with the two other occurrences of the old phrase, in the bulk-links and write-throttle sections, updated to match), the two named residual read-modify-write keys, and the ~250 ms `list_keys` revisit trigger (not previously in CLAUDE.md — the plan text lived only in docs/plans/derived-link-indexes.md, so this is new content, not a copy). "KV consistency check" and "Consistency repair" rewritten to six/three; the present_slugs and would_orphan_unindexed_link paragraphs are gone with the repairs that needed them. The write-throttle section gained an explicit "this section is historical for its index half" note at the top rather than a line-by-line rewrite of its dated measurement narrative, which stays intact as history. **Beyond the stated scope, three other passages that would otherwise have contradicted the rest of the file were also corrected** (a compile-then-lie risk, not merely stale prose): "User deletion and link ownership"'s cross-store write-ordering paragraph and its `links.owned_slugs`→`links.slugs_owned_by` reference, "Link tags and ownership"'s reassignment write-ordering bullet (was describing the now-deleted `move_slugs_between_owners`), and "Orphaned analytics purge"'s several `links.all_slugs`/"rewrite the indexes" references. Historical narrative describing the ORIGINAL pre-fix bugs (the "used to leave two things behind" paragraph, the write-throttle section's dated incident measurements) was deliberately left as history, not rewritten to the present tense.
 - [x] End-to-end manual verification of derived link indexes — file(s): (none — verification step) — done when: against a local spin up, two overlapping bulk creates (dev/bulk-concurrent.sh style, or two curl calls issued in the same second) both have every one of their links present in GET /api/links and visible in the dashboard, a plain non-admin user sees exactly their own links and no others, deleting a link removes it from the list on the next load, the dashboard's default row order is unchanged (oldest first) and its owner filter still lists an owner whose user record no longer exists, and GET /api/admin/consistency returns ok: true immediately after the concurrent creates — **note:** ran `SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD=localtestpw SPIN_VARIABLE_COOKIE_SECURE=false spin up --build --runtime-config-file runtime-config.toml` against a fresh in-memory store. Two concurrent 3-row `POST /api/links/bulk` calls (backgrounded curl, same second, identical `created_at`) both landed — all 6 slugs present in `GET /api/links`, slug-ascending within the shared timestamp as designed. `GET /api/admin/consistency` returned `ok: true` immediately after, with the links-store scan seeing the same 6 keys (the property Stage 1 alone could not produce — `unindexed_link` no longer exists to report anything, and there is nothing to be reported). Created a non-admin user (`carol`) via `POST /api/users`, logged in as her, confirmed `GET /api/links` returned exactly her own one link. Deleted a link via `DELETE /api/links/{slug}` and confirmed it was absent from the next `GET /api/links`. Created one more link and confirmed it appeared at the bottom (oldest-first unchanged). For the owner-filter case, the normal API path correctly refuses to produce a deleted-account-owned link any more (409 `user_owns_links`, derived from records) — so that state was reproduced via a `POST /api/admin/restore` of a hand-built backup containing a `slug:` record owned by a nonexistent `ghost-user`, a legitimate way to inject legacy-shaped data without bypassing any safety net. Loaded the dashboard in a real browser (Playwright): the row rendered `ghost-user — deleted account` in the Owner column, `#owner-filter` listed `ghost-user::ghost-user — deleted account`, and zero console errors/warnings throughout every page load (`dashboard.html`, `admin/backup.html`). **Bonus catch from the live browser check, fixed on the spot:** `admin/backup.html`'s consistency-article intro paragraph named "a link missing from an index, an index entry with no link" in prose (no check id, but exactly the retired `unindexed_link`/`missing_link_record` pair) — reworded; see task 4's note. Server stopped cleanly at the end (port 3000 confirmed free).
+
+### STAGE 2 DEPLOYED AND TRACED (2026-08-18) — `88f4f4c-no-indexes`
+
+Live after **100 s**, the CLI's usual false negative on the way. Store baseline before: 14 links,
+37 analytics keys, `ok: true`.
+
+**The upgrade path was the first thing checked, because this deploy is the first one to meet a
+real store carrying keys nothing writes any more.** The live store still holds `all_links` and
+`owner_links:admin` from before Stage 2. Result: **`ok: true`, ZERO findings, 6 checks, 3
+repairable**, and the leftover keys are NOT reported as `unrecognized_key`. The known-and-inert
+classification works against real data, not just a fixture.
+
+**The headline, measured on Akamai.** `dev/bulk-concurrent.sh 4 5 s2d` — four concurrent 5-row
+creates, the identical run used on Stage 1:
+
+| | Stage 1 (`55dea50`) | **Stage 2 (`88f4f4c`)** |
+|---|---|---|
+| links visible in `GET /api/links` | 20 of 20 | **20 of 20** |
+| `unindexed_link` / `unindexed_owner_link` | 10 / 10 | **0 / 0** |
+| consistency | `ok: false` | **`ok: true`, zero findings** |
+
+Stage 1 made the drift harmless; **Stage 2 makes it impossible.**
+
+**Concurrent DELETES were checked too, and they are also clean** — four concurrent 5-slug bulk
+deletes left `ok: true` with zero findings. That matters because it shows the whole *class* is
+gone rather than the create path specifically. **Consequence for anyone reading older notes: the
+"delete junk links *paced*, a concurrent burst is what causes drift" instruction in the session
+handoff below is now OBSOLETE.** It was correct when written and no longer is.
+
+**Write counts confirmed live, which is the other half of what Stage 2 bought** (traced with
+`X-SS-Debug`, read back from `spin aka logs`):
+
+| request | before | **after** | trace evidence |
+|---|---|---|---|
+| single create | 3 writes | **1** | `set=1/23792` |
+| single delete | 3 writes | **1** | `delete=1/24634` |
+| 5-row bulk create | 7 writes | **5** | `set=5/126332` |
+
+At the 50-row cap that is 52 → 50; the saving is small proportionally on a big batch and is the
+whole write cost on a single create, which is the common case.
+
+**Read costs are unchanged, as expected** — Stage 2 touched writes, not reads. `GET /api/links`
+7 ops at 113–118 ms (one 192 ms outlier in six samples), `click-totals` 8 ops at 110–117 ms, both
+first-after-idle discarded. Comparable to Stage 1's 124–136 / 109–139 ms, and within the latency
+regime's own movement — **do not read a difference either way as caused by this change.**
+
+**Cleanup** was the concurrent-delete run above; store returned to exactly **14 links, 37 analytics
+keys, 0 orphan slugs, `ok: true`**. No repair was needed at any point, which is itself the result:
+the tool built to fix the original incident had nothing to do.
 
 **Verified independently before commit, including two mutation checks.** Suites: api **641**
 (from 671 — a net **−30**, accounted for exactly: **63** test functions removed, **33** added, and
