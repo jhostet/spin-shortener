@@ -384,14 +384,28 @@ function statusToggleHtml(link) {
   return `<button data-slug="${escapeHtml(link.slug)}" data-status="${escapeHtml(link.status)}" class="status-btn outline" aria-label="${label} link ${escapeHtml(link.slug)}">${label}</button>`;
 }
 
-async function loadLinks() {
+// `refreshTotals` defaults to FALSE, so only the bootstrap call at the end of
+// this file fetches click totals. Every other caller is mutation-driven —
+// create, bulk create, edit save, a cancelled reassign, bulk
+// delete/enable/disable, bulk tag/untag, bulk reassign, create-success
+// dismiss — and none of those can change a click count, so re-fetching would
+// re-pay a whole-store key enumeration plus the shard read fan-out for data
+// that provably cannot have moved. Decided 2026-08-12, and deliberately with
+// NO refresh control: the totals are stale the moment they render, so an
+// on-demand refresh would imply a liveness they have never had. The only
+// staleness this introduces is "clicks since page load".
+//
+// A link created after the totals loaded renders 0, not an em-dash, for free:
+// clicksCell only shows the em-dash while `clickTotals` is still null, and
+// falls back to 0 for any slug absent from a loaded map.
+async function loadLinks({ refreshTotals = false } = {}) {
   const { ok, data } = await api.get("/links");
   if (!ok) return;
   allLinks = data.links;
   rebuildTagFilterOptions();
   rebuildOwnerFilterOptions();
   renderLinksTable();
-  loadClickTotals();
+  if (refreshTotals) loadClickTotals();
 }
 
 // Fired after the table is already on screen, and deliberately not awaited by
@@ -1184,7 +1198,7 @@ wireWindowValidation(document.getElementById("bulk-start-at"), document.getEleme
 // reads currentPrincipal (set by loadMe()) to decide whether to show each
 // row's Edit/Delete controls, and running them concurrently could render
 // the first paint with every row's Edit/Delete hidden, even the viewer's own.
-loadMe().then(() => loadLinks().then(openDeepLinkedEditRow));
+loadMe().then(() => loadLinks({ refreshTotals: true }).then(openDeepLinkedEditRow));
 
 // --- CSV export -------------------------------------------------------------
 // Client-side only: the dashboard already holds every link the user may see in

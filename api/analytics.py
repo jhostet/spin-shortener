@@ -126,10 +126,28 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     "BOTH SPIKES ANSWERED" for the measured quota-accounting answer.
 
     Rejected alternative, recorded so it is not re-proposed: maintaining a
-    denormalized `analytics:total:<slug>` would make this O(N) reads, but it
-    adds a THIRD KV write to every click. Writes are the binding constraint
-    (50/second app-wide, already two per click); trading read cost for write
-    cost is backwards here.
+    denormalized `analytics:total:<slug>` would make this O(N) reads. **The
+    real objection is CONTENTION, not the write cap** — an earlier version of
+    this docstring said writes are the binding constraint, and that reason was
+    wrong, so the re-costing on 2026-08-12 is recorded here rather than left
+    to be rediscovered.
+
+    A single `analytics:total:<slug>` is a read-modify-write on ONE key per
+    link, which is exactly the shape the click counter was sharded to escape:
+    it carries the same measured loss curve as the pre-sharding counter — 0%
+    below ~3 clicks/second on one link, **25% at 9.4/second, measured live
+    2026-08-06** — while the 64-shard sum stays exact at the same rates. A
+    denormalized total would therefore be a *wrong* number, not merely a third
+    write, and it would be wrong precisely for the busy links a dashboard
+    total matters most for.
+
+    `wasi:keyvalue/atomics`' `increment` cannot rescue it: it is documented
+    unsupported on Akamai Functions, so there is no compare-and-swap or atomic
+    add available anywhere in this stack. See
+    docs/plans/denormalised-click-total.md for the full re-costing, including
+    why the trade is one extra write per click against thousands of reads per
+    dashboard load rather than the simple write-cap argument this docstring
+    used to make.
     """
     # docs/plans/derived-link-indexes.md, Stage 1: visible is derived from a
     # `slug:` key enumeration rather than read from all_links/owner_links:.
