@@ -2200,7 +2200,18 @@ have.
 
 ## Where things stand
 
-- **Repo:** `main` clean. **Deployed:** `88f4f4c-no-indexes` — **HEAD is live** (2026-08-18).
+- **Repo:** `main` clean. **Deployed:** `188a11d-cleanup`.
+- **HEAD is NOT live — one behaviour change is waiting for the next deploy, by decision.**
+  `d055e41` ("Stop re-fetching click totals on every dashboard mutation") is committed, tested and
+  browser-verified locally but **deliberately not deployed on its own**: it is a `gui/`-only change,
+  so it is correct on disk and simply does not reach the live dashboard until something else ships.
+  **Fold it into the next deploy rather than deploying it alone** — that was the explicit call, not
+  an oversight. The other two undeployed commits (`8148975`, `3221cfc`) are TASKS.md-only and carry
+  no runtime change at all. Nothing here is urgent: the live build is fully functional, it just
+  re-fetches click totals on dashboard mutations, which is a cost rather than a defect.
+- **Whenever that next deploy happens**, the one thing worth re-checking in the browser afterwards
+  is the measured result this change is about: an initial dashboard load should issue exactly one
+  `GET /api/analytics/click-totals`, and a bulk create / disable / tag should issue none.
 - **The link indexes are GONE.** `all_links` and `owner_links:<owner>` are no longer written or
   read; a record's existence is the only truth. Stages 1 and 2 of
   `docs/plans/derived-link-indexes.md` both shipped, deployed and traced — see
