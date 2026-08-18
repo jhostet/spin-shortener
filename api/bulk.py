@@ -214,7 +214,13 @@ async def handle_bulk_create(store, principal, request, get_many, write):
     if len(rows) > MAX_BULK_ROWS:
         return json_response(400, {"error": "too_many_rows", "max_rows": MAX_BULK_ROWS, "row_count": len(rows)})
 
-    existing = set(await links.all_slugs(store))
+    # docs/plans/derived-link-indexes.md: all_links was only ever a
+    # pre-flagging optimization here — the real collision check is the
+    # get_many confirmation pass ~15 lines below, which re-reads every
+    # candidate slug's record directly. Seeding this from the index bought
+    # nothing but a chance to trust a key that can drift; every submitted
+    # slug still gets checked against the record itself.
+    existing: set[str] = set()
     policy = await urlpolicy.load_policy(store)
     row_errors = validate_bulk_rows(rows, existing, principal.has_permission("links.create_custom_slug"), policy)
 

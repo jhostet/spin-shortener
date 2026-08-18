@@ -22,6 +22,20 @@ def _count(total):
     return json.dumps({"total": total, "days": {}}).encode("utf-8")
 
 
+def _link(slug, owner="alice"):
+    """A `slug:` record. Since docs/plans/derived-link-indexes.md's Stage 1 the
+    visible set is derived from the `slug:` key enumeration rather than read
+    from all_links/owner_links:, so a fixture that seeds only an index now
+    describes a store with no links in it at all."""
+    return json.dumps({
+        "slug": slug,
+        "owner": owner,
+        "target_url": "https://example.com/" + slug,
+        "status": "active",
+        "created_at": "2026-01-01T00:00:00Z",
+    }).encode("utf-8")
+
+
 class RecordingStore(FakeStore):
     """Counts reads, so the cost claims in the docstring are testable rather
     than aspirational."""
@@ -36,7 +50,10 @@ class RecordingStore(FakeStore):
 
 
 async def test_sums_shards_and_the_legacy_unsharded_key():
-    links = FakeStore({"all_links": json.dumps(["promo"]).encode("utf-8")})
+    links = FakeStore({
+        "all_links": json.dumps(["promo"]).encode("utf-8"),
+        "slug:promo": _link("promo"),
+    })
     analytics_store = FakeStore({
         "count:promo": _count(5),        # pre-sharding history
         "count:promo:3": _count(2),
@@ -54,7 +71,10 @@ async def test_reads_only_the_shard_keys_that_exist():
     """The whole point of the design. A link with clicks in two shards must
     cost two reads, not COUNT_SHARDS + 1 — otherwise a 200-link dashboard is
     13,000 reads against a 1,000/second app-wide cap."""
-    links = FakeStore({"all_links": json.dumps(["promo"]).encode("utf-8")})
+    links = FakeStore({
+        "all_links": json.dumps(["promo"]).encode("utf-8"),
+        "slug:promo": _link("promo"),
+    })
     analytics_store = RecordingStore({
         "count:promo:3": _count(2),
         "count:promo:41": _count(4),
@@ -75,6 +95,8 @@ async def test_never_reads_analytics_for_a_link_the_caller_cannot_see():
     links = FakeStore({
         "all_links": json.dumps(["mine", "theirs"]).encode("utf-8"),
         "owner_links:alice": json.dumps(["mine"]).encode("utf-8"),
+        "slug:mine": _link("mine", owner="alice"),
+        "slug:theirs": _link("theirs", owner="bob"),
     })
     analytics_store = RecordingStore({
         "count:mine:1": _count(3),
@@ -90,7 +112,10 @@ async def test_never_reads_analytics_for_a_link_the_caller_cannot_see():
 
 async def test_events_keys_are_never_read():
     """Totals only. The events ring is the expensive, useless half here."""
-    links = FakeStore({"all_links": json.dumps(["promo"]).encode("utf-8")})
+    links = FakeStore({
+        "all_links": json.dumps(["promo"]).encode("utf-8"),
+        "slug:promo": _link("promo"),
+    })
     analytics_store = RecordingStore({
         "count:promo:1": _count(1),
         "events:promo:7": b"1754600000000|(direct)|other",
@@ -105,7 +130,10 @@ async def test_events_keys_are_never_read():
 async def test_a_link_with_no_clicks_reports_zero_not_absent():
     """The column renders `clickTotals[slug] ?? 0`, but an explicit 0 keeps
     the contract honest: the endpoint answers for every visible link."""
-    links = FakeStore({"all_links": json.dumps(["quiet"]).encode("utf-8")})
+    links = FakeStore({
+        "all_links": json.dumps(["quiet"]).encode("utf-8"),
+        "slug:quiet": _link("quiet"),
+    })
     resp = await analytics.handle_click_totals(
         links, FakeStore({}), _principal(role="admin"), fake_list_keys, fake_get_many
     )
@@ -113,7 +141,10 @@ async def test_a_link_with_no_clicks_reports_zero_not_absent():
 
 
 async def test_a_corrupt_shard_costs_only_its_own_clicks():
-    links = FakeStore({"all_links": json.dumps(["promo"]).encode("utf-8")})
+    links = FakeStore({
+        "all_links": json.dumps(["promo"]).encode("utf-8"),
+        "slug:promo": _link("promo"),
+    })
     analytics_store = FakeStore({
         "count:promo:1": _count(4),
         "count:promo:2": b"not json at all",

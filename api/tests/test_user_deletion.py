@@ -67,7 +67,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     assert created.status == 201
 
     # admin tries to delete carol -> refused, she still owns a link.
-    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys)
+    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys, fake_get_many)
     assert resp.status == 409
     assert json.loads(resp.body) == {"error": "user_owns_links", "username": "carol", "link_count": 1}
 
@@ -78,7 +78,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     assert reassign.status == 200
 
     # carol is now deletable.
-    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys)
+    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys, fake_get_many)
     assert resp.status == 200
 
     # A NEW carol is created, with a different password.
@@ -86,7 +86,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     new_carol = _principal("carol", permissions=["links.create_custom_slug"])
 
     # The new carol sees zero links.
-    listing = await links.handle_list(links_store, new_carol, fake_get_many)
+    listing = await links.handle_list(links_store, new_carol, fake_get_many, fake_list_keys)
     assert json.loads(listing.body)["links"] == []
 
     # The new carol cannot edit the old carol-private link.
@@ -115,7 +115,7 @@ async def test_session_revival_no_longer_happens():
     assert principal.role == "user"
 
     # carol owns no links, so deletion succeeds outright.
-    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys)
+    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys, fake_get_many)
     assert resp.status == 200
 
     # After deletion, the same token resolves to None.

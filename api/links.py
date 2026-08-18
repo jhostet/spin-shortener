@@ -56,6 +56,48 @@ async def all_slugs(store) -> list[str]:
     return json.loads(raw) if raw else []
 
 
+SLUG_KEY_PREFIX = "slug:"
+
+
+async def enumerate_slugs(store, list_keys) -> list[str]:
+    """Every slug that has a record, derived from a key enumeration rather
+    than read from `all_links`/`owner_links:<owner>`. This is what
+    docs/plans/derived-link-indexes.md's Stage 1 uses to remove the two
+    indexes as a shared, racy, read-modify-write bottleneck on the authoring
+    hot path — see that plan for the measured lost-update incident this
+    fixes. Order is UNSPECIFIED — KV key order is not defined, so any caller
+    that renders a list must impose its own ordering."""
+    return [
+        key[len(SLUG_KEY_PREFIX):]
+        for key in await list_keys(store)
+        if key.startswith(SLUG_KEY_PREFIX)
+    ]
+
+
+async def slugs_owned_by(store, username: str, list_keys, get_many) -> list[str]:
+    """Every slug whose record's `owner` field equals `username`, derived
+    from enumerate_slugs + get_many rather than read from the
+    `owner_links:<username>` index. Used by users.handle_delete's 409 gate
+    (docs/plans/derived-link-indexes.md) so that a drifted or missing index
+    entry can no longer let a user's links go unnoticed at deletion time.
+    Skips a slug whose record is missing or unreadable, the same tolerance
+    handle_list applies."""
+    slugs = await enumerate_slugs(store, list_keys)
+    fetched = await get_many(store, [f"{SLUG_KEY_PREFIX}{slug}" for slug in slugs])
+    owned = []
+    for slug in slugs:
+        raw = fetched.get(f"{SLUG_KEY_PREFIX}{slug}")
+        if raw is None:
+            continue
+        try:
+            record = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if record.get("owner") == username:
+            owned.append(slug)
+    return owned
+
+
 async def add_slugs_to_indexes(store, owner: str, slugs: list[str], write=kvretry.direct) -> None:
     """One read+write of `all_links`, one of `owner_links:<owner>`, for any
     number of slugs. Order-preserving, skips slugs already present.
@@ -306,20 +348,24 @@ async def handle_create(store, principal: Principal, request, write=kvretry.dire
     return json_response(201, public_link(record))
 
 
-async def handle_list(store, principal: Principal, get_many):
-    if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
-        slugs = await all_slugs(store)
-    else:
-        slugs = await owned_slugs(store, principal.username)
+async def handle_list(store, principal: Principal, get_many, list_keys):
+    """docs/plans/derived-link-indexes.md, Stage 1: the list is derived from
+    a `slug:` key enumeration rather than read from `all_links`/
+    `owner_links:<owner>`. Those indexes are a shared, read-modify-write key
+    with no compare-and-swap, so any two overlapping authoring requests can
+    clobber each other's additions — measured directly on 2026-08-17. This
+    removes the race by removing the shared key it depends on, rather than
+    making it less likely to be clobbered.
+    """
+    slugs = await enumerate_slugs(store, list_keys)
     # One get_many host call (or a handful of MAX_KEYS_PER_GET_MANY-sized
     # chunks), not a round trip per link (docs/plans/batch-kv-reads.md,
     # superseding the earlier gather_reads-based fan-out). `GET /api/links`
     # has no pagination, so the sequential form cost ~23 ms per link against
-    # a deployed store — ~2.4 s at 100 links. Iterating `slugs` (not the
-    # dict) is what keeps the response in index order, since get_many does
-    # not preserve one. A slug present in the index whose record is missing
-    # (an interrupted delete leaves index entries with no backing record) is
-    # skipped, exactly as before.
+    # a deployed store — ~2.4 s at 100 links.
+    #
+    # A slug enumerated with no backing record (an interrupted delete, or a
+    # stale enumeration entry) is skipped, exactly as before.
     #
     # An UNREADABLE record is skipped too, and that is a fix rather than a
     # nicety: this used to let json.loads raise, which turned one corrupt
@@ -348,8 +394,18 @@ async def handle_list(store, principal: Principal, get_many):
             record = json.loads(raw)
         except (ValueError, TypeError):
             continue
-        records.append(public_link(record))
-    return json_response(200, {"links": records})
+        if not can_view(principal, record):
+            continue
+        records.append(record)
+    # Enumeration order is unspecified (KV key order is not defined), and the
+    # dashboard renders server order by default, so this sort is load-bearing,
+    # not cosmetic. Ascending created_at reproduces today's oldest-first
+    # all_links append order. The slug tie-break matters because a bulk
+    # create stamps one created_at on all its rows, so those rows now render
+    # slug-ascending within the batch instead of submission order — the one
+    # accepted cosmetic behaviour change in Stage 1.
+    records.sort(key=lambda r: (r.get("created_at") or "", r.get("slug") or ""))
+    return json_response(200, {"links": [public_link(r) for r in records]})
 
 
 async def handle_get(store, principal: Principal, slug: str):

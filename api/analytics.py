@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import links
 from auth import Principal
-from links import can_view, get_link, owned_slugs
+from links import can_view, get_link
 from responses import json_response, to_iso8601_utc_ms
 
 
@@ -131,10 +131,27 @@ async def handle_click_totals(links_store, analytics_store, principal: Principal
     (50/second app-wide, already two per click); trading read cost for write
     cost is backwards here.
     """
+    # docs/plans/derived-link-indexes.md, Stage 1: visible is derived from a
+    # `slug:` key enumeration rather than read from all_links/owner_links:.
+    # `list_keys` here is the per-request MEMOIZED walk (api/app.py), shared
+    # with the analytics-namespace enumeration below, so this endpoint still
+    # costs exactly one raw get_keys walk per request, not two.
+    slugs = await links.enumerate_slugs(links_store, list_keys)
     if principal.has_permission("links.view_all") or principal.has_permission("links.edit_all"):
-        visible = set(await links.all_slugs(links_store))
+        visible = set(slugs)
     else:
-        visible = set(await owned_slugs(links_store, principal.username))
+        fetched = await get_many(links_store, [f"slug:{slug}" for slug in slugs])
+        visible = set()
+        for slug in slugs:
+            raw = fetched.get(f"slug:{slug}")
+            if raw is None:
+                continue
+            try:
+                record = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if can_view(principal, record):
+                visible.add(slug)
 
     if not visible:
         return json_response(200, {"totals": {}})

@@ -263,7 +263,7 @@ async def test_healthy_store_through_real_handlers_reports_all_clear():
     assert deleted.status == 200
 
     # carol now owns nothing, so she's deletable.
-    user_deleted = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys)
+    user_deleted = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys, fake_get_many)
     assert user_deleted.status == 200
 
     report = await _report(links_store, users_store, admin)
@@ -278,7 +278,7 @@ async def test_healthy_store_through_real_handlers_reports_all_clear():
 # --- The motivating case ---
 
 
-async def test_motivating_case_unindexed_owner_link_pins_the_user_deletion_gap():
+async def test_motivating_case_unindexed_owner_link_no_longer_lets_carol_be_deleted():
     links_store = FakeStore()
     users_store = FakeStore()
     admin = _principal("admin", role="admin")
@@ -294,8 +294,8 @@ async def test_motivating_case_unindexed_owner_link_pins_the_user_deletion_gap()
 
     # Drift: carol's record still names her as owner, but her own index no
     # longer lists the slug (an interrupted write, or a KV-explorer edit).
-    # This is exactly the state users.handle_delete's 409 gate cannot see,
-    # because that gate reads only this index.
+    # This USED to be the state users.handle_delete's 409 gate could not see,
+    # because that gate read only this index.
     owned = json.loads(await links_store.get("owner_links:carol"))
     assert slug in owned
     await links_store.set("owner_links:carol", json.dumps([s for s in owned if s != slug]).encode("utf-8"))
@@ -305,10 +305,21 @@ async def test_motivating_case_unindexed_owner_link_pins_the_user_deletion_gap()
     assert by_id["unindexed_owner_link"]["count"] == 1
     assert by_id["unindexed_owner_link"]["findings"] == [{"slug": slug, "owner": "carol"}]
 
-    # The point of the whole feature: the gate reads the drifted index, not
-    # the record, so carol is still deletable -- orphaning her own link.
-    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys)
-    assert resp.status == 200
+    # INVERTED by docs/plans/derived-link-indexes.md's Stage 1, and this
+    # inversion is the whole point of that change. The gate now derives
+    # ownership from the RECORDS (links.slugs_owned_by) rather than reading
+    # the drifted `owner_links:carol` index, so the drift above no longer
+    # hides carol's link from it: she is correctly refused deletion, and the
+    # link she still owns cannot be orphaned by the very flow built to
+    # prevent orphans. Before Stage 1 this asserted 200 -- the gap.
+    #
+    # Note the consistency check above still reports `unindexed_owner_link`,
+    # because Stage 1 changes only the READ paths and the indexes are still
+    # written. That combination -- drift visible to the checker, invisible to
+    # behaviour -- is the expected Stage 1 state.
+    resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys, fake_get_many)
+    assert resp.status == 409
+    assert json.loads(resp.body)["error"] == "user_owns_links"
 
 
 # --- The 2026-08-15 throttled-write incident, and its repair ---------------

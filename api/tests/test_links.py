@@ -7,7 +7,7 @@ import kvretry
 import links
 import urlpolicy
 from responses import Request
-from tests.fakes import FakeStore, ThrottlingStore, fake_get_many, recording_sleep
+from tests.fakes import FakeStore, ThrottlingStore, fake_get_many, fake_list_keys, recording_sleep
 
 
 async def _set_policy(store, default_action, rules):
@@ -197,6 +197,79 @@ async def test_get_edit_all_permission_can_view_others_links():
     assert resp.status == 200
 
 
+async def test_list_returns_a_link_that_is_in_NEITHER_index():
+    """THE load-bearing test for docs/plans/derived-link-indexes.md's Stage 1.
+
+    This is the exact state the measured 2026-08-17 lost update produces: two
+    overlapping bulk creates each read `all_links`, add their own slugs and
+    write back, so the loser's records exist and resolve at `/r/{slug}` while
+    appearing in neither `all_links` nor `owner_links:<owner>` -- live links,
+    invisible in the dashboard. A control run of just two concurrent 3-row
+    creates reproduced it on the deployed build.
+
+    Deriving the list from the `slug:` key enumeration is what fixes it, and
+    this test is what proves the fix rather than merely exercising the new
+    code path: it fails against the old index-reading handle_list.
+    """
+    store = FakeStore()
+    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/indexed"}))
+
+    # A record with NO index entry anywhere -- exactly what a clobbered index
+    # write leaves behind. Written directly, because no handler can produce
+    # this state on purpose.
+    orphan = {
+        "slug": "lostupdate",
+        "owner": "alice",
+        "target_url": "https://example.com/lost-update",
+        "status": "active",
+        "created_at": "2026-01-01T00:00:00Z",
+        "start_at": None,
+        "end_at": None,
+        "password_hash": None,
+        "custom": True,
+        "tags": [],
+    }
+    await store.set("slug:lostupdate", json.dumps(orphan).encode("utf-8"))
+
+    assert "lostupdate" not in await links.all_slugs(store)
+    assert "lostupdate" not in await links.owned_slugs(store, "alice")
+
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
+
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert "lostupdate" in [link["slug"] for link in body["links"]]
+    assert len(body["links"]) == 2
+
+
+async def test_list_returns_an_unindexed_link_for_a_view_all_caller_too():
+    """The sibling of the test above on the other branch of handle_list: a
+    caller with links.view_all takes the all-slugs path, which must also be
+    derived rather than read from `all_links`."""
+    store = FakeStore()
+    record = {
+        "slug": "lostupdate",
+        "owner": "bob",
+        "target_url": "https://example.com/lost-update",
+        "status": "active",
+        "created_at": "2026-01-01T00:00:00Z",
+        "start_at": None,
+        "end_at": None,
+        "password_hash": None,
+        "custom": True,
+        "tags": [],
+    }
+    await store.set("slug:lostupdate", json.dumps(record).encode("utf-8"))
+    assert await links.all_slugs(store) == []
+
+    resp = await links.handle_list(
+        store, _principal(username="alice", permissions=["links.view_all"]), fake_get_many, fake_list_keys
+    )
+
+    assert resp.status == 200
+    assert [link["slug"] for link in json.loads(resp.body)["links"]] == ["lostupdate"]
+
+
 async def test_list_skips_a_slug_whose_record_is_missing():
     """An interrupted bulk delete leaves index entries with no backing record
     (records are removed before indexes, deliberately). The gathered fetch in
@@ -210,7 +283,7 @@ async def test_list_skips_a_slug_whose_record_is_missing():
     slugs = await links.owned_slugs(store, "alice")
     await store.delete(f"slug:{slugs[0]}")
 
-    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many)
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert [link["target_url"] for link in body["links"]] == ["https://example.com/two"]
@@ -237,7 +310,7 @@ async def test_list_skips_a_record_that_cannot_be_parsed():
     slugs = await links.owned_slugs(store, "alice")
     await store.set(f"slug:{slugs[0]}", b"{not valid json at all")
 
-    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many)
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert [link["target_url"] for link in body["links"]] == ["https://example.com/two"]
@@ -254,7 +327,7 @@ async def test_list_only_shows_own_links_by_default():
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
-    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many)
+    resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert [link["target_url"] for link in body["links"]] == ["https://example.com/alice"]
@@ -265,7 +338,7 @@ async def test_list_admin_sees_all_links():
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
-    resp = await links.handle_list(store, _principal(username="admin", role="admin"), fake_get_many)
+    resp = await links.handle_list(store, _principal(username="admin", role="admin"), fake_get_many, fake_list_keys)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
@@ -277,7 +350,7 @@ async def test_list_view_all_permission_sees_all_links():
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     viewer = _principal(username="carol", permissions=["links.view_all"])
-    resp = await links.handle_list(store, viewer, fake_get_many)
+    resp = await links.handle_list(store, viewer, fake_get_many, fake_list_keys)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
@@ -289,7 +362,7 @@ async def test_list_edit_all_permission_sees_all_links():
     await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
-    resp = await links.handle_list(store, editor, fake_get_many)
+    resp = await links.handle_list(store, editor, fake_get_many, fake_list_keys)
     assert resp.status == 200
     body = json.loads(resp.body)
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}

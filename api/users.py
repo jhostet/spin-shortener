@@ -173,7 +173,7 @@ async def handle_update(store, principal: Principal, username: str, request, con
     return json_response(200, _public_user(user))
 
 
-async def handle_delete(store, links_store, principal: Principal, username: str, list_keys):
+async def handle_delete(store, links_store, principal: Principal, username: str, list_keys, get_many):
     if not principal.has_permission("users.manage"):
         return _forbidden()
 
@@ -183,7 +183,13 @@ async def handle_delete(store, links_store, principal: Principal, username: str,
     if username == principal.username:
         return json_response(400, {"error": "cannot_delete_self"})
 
-    owned = await links.owned_slugs(links_store, username)
+    # docs/plans/derived-link-indexes.md: derived from the records rather
+    # than the owner_links:<username> index, which is a shared, racy,
+    # read-modify-write key that can drift from the record's actual owner.
+    # Before this change, a link whose owner_links: entry had drifted did
+    # NOT block its owner's deletion — exactly the unindexed_owner_link
+    # scenario docs/plans/kv-consistency-check.md built that check for.
+    owned = await links.slugs_owned_by(links_store, username, list_keys, get_many)
     if owned:
         return json_response(409, {"error": "user_owns_links", "username": username, "link_count": len(owned)})
 

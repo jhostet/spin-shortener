@@ -109,6 +109,32 @@ async def _kv_keys(store) -> list[str]:
     return keys
 
 
+def _memoized_kv_keys():
+    """One raw get_keys walk per request, shared by every namespace view that
+    uses it (docs/plans/derived-link-indexes.md). `handle_click_totals`
+    enumerates two namespaces (links, then analytics) and each enumeration
+    walks the whole physical store, so without this it would pay for two
+    identical whole-store walks in one request.
+
+    NEVER pass the scoped_list_keys built over this to backup.handle_restore:
+    restore calls list_keys AFTER writing, specifically to find pre-existing
+    keys to prune, and a pre-write cached snapshot would silently change what
+    it prunes. That is the exact reason a global cache was rejected on
+    2026-08-04 (TASKS.md, "Considered and rejected") — this one is scoped to
+    a single request and a single call site, never module-level and never
+    reused across requests.
+    """
+    cached = None
+
+    async def kv_keys(store):
+        nonlocal cached
+        if cached is None:
+            cached = await _kv_keys(store)
+        return cached
+
+    return kv_keys
+
+
 def _make_raw_get_many(collector):
     """Per-request closure over one LAZILY-opened wasi:keyvalue/store bucket
     (docs/plans/batch-kv-reads.md). `get_many` needs a
@@ -247,6 +273,10 @@ class HttpHandler(Handler):
         users_store = stores["users"]
         analytics_store = stores["analytics"]
         list_keys = kvprefix.scoped_list_keys(_kv_keys, collector)
+        # Memoized per-request, and handed ONLY to handle_click_totals below
+        # (docs/plans/derived-link-indexes.md) — never to backup.handle_restore,
+        # which must see keys written earlier in the SAME request.
+        list_keys_once = kvprefix.scoped_list_keys(_memoized_kv_keys(), collector)
         get_many = kvbatch.scoped_get_many(_make_raw_get_many(collector), collector)
         write = kvretry.make_writer(_sleep_ns, collector)
         admin_username = await variables.get("admin_bootstrap_username")
@@ -282,7 +312,7 @@ class HttpHandler(Handler):
             if isinstance(result, Response):
                 return result
             if method == "GET":
-                return await links.handle_list(links_store, result, get_many)
+                return await links.handle_list(links_store, result, get_many, list_keys)
             return await links.handle_create(links_store, result, request, write)
 
         if path == "/api/links/bulk" and method == "POST":
@@ -315,7 +345,7 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await analytics.handle_click_totals(links_store, analytics_store, result, list_keys, get_many)
+            return await analytics.handle_click_totals(links_store, analytics_store, result, list_keys_once, get_many)
 
         if path.startswith("/api/links/") and path.endswith("/analytics") and method == "GET":
             slug = path.removeprefix("/api/links/").removesuffix("/analytics")
@@ -378,7 +408,7 @@ class HttpHandler(Handler):
                 return await users.handle_get(users_store, result, username)
             if method == "PATCH":
                 return await users.handle_update(users_store, result, username, request, configured_domains)
-            return await users.handle_delete(users_store, links_store, result, username, list_keys)
+            return await users.handle_delete(users_store, links_store, result, username, list_keys, get_many)
 
         if path == "/api/admin/backup" and method == "GET":
             result = await _require_session(users_store, request)
