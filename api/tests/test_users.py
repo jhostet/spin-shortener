@@ -265,11 +265,10 @@ async def test_delete_refuses_when_user_owns_links():
     store = FakeStore()
     links_store = FakeStore()
     await _make_user(store, username="carol")
-    # Since docs/plans/derived-link-indexes.md's Stage 1 the 409 gate derives
-    # ownership from the RECORDS, not from `owner_links:carol`, so seeding the
-    # index alone would describe a store in which carol owns nothing at all.
+    # Since docs/plans/derived-link-indexes.md's Stage 1 (and, since Stage 2,
+    # the only mechanism at all) the 409 gate derives ownership from the
+    # RECORD itself — there is no owner_links: index to seed any more.
     await links_store.set("slug:carol-private", _link_record("carol-private", "carol"))
-    await links.add_slugs_to_indexes(links_store, "carol", ["carol-private"])
 
     users_before = dict(store._data)
     links_before = dict(links_store._data)
@@ -284,17 +283,17 @@ async def test_delete_refuses_when_user_owns_links():
     assert links_store._data == links_before
 
 
-async def test_delete_allowed_when_owner_index_names_a_slug_with_no_record():
+async def test_delete_allowed_when_leftover_owner_links_key_names_a_slug_with_no_record():
     """The converse of the test above, and a behaviour CHANGE made by
-    docs/plans/derived-link-indexes.md's Stage 1. `owner_links:carol` names a
-    slug whose record does not exist -- an orphan index entry, the state an
-    interrupted delete leaves. The old gate read that index and refused the
-    deletion forever; the derived gate reads the records, finds carol owns
-    nothing, and lets the account go."""
+    docs/plans/derived-link-indexes.md's Stage 1, still true after Stage 2:
+    a leftover `owner_links:carol` (inert since Stage 2 — nothing writes it
+    any more) names a slug whose record does not exist. Since the gate never
+    reads this key at all any more, its content is irrelevant: the gate
+    reads the records, finds carol owns nothing, and lets the account go."""
     store = FakeStore()
     links_store = FakeStore()
     await _make_user(store, username="carol")
-    await links.add_slugs_to_indexes(links_store, "carol", ["ghost"])
+    await links_store.set("owner_links:carol", json.dumps(["ghost"]).encode("utf-8"))
     assert await links_store.exists("slug:ghost") is False
 
     resp = await users.handle_delete(
@@ -305,7 +304,10 @@ async def test_delete_allowed_when_owner_index_names_a_slug_with_no_record():
     assert await auth.get_user(store, "carol") is None
 
 
-async def test_delete_with_empty_owner_links_key_removes_it():
+async def test_delete_leaves_a_leftover_owner_links_key_untouched():
+    """docs/plans/derived-link-indexes.md, Stage 2: handle_delete no longer
+    deletes owner_links:<username> at all — a leftover key from before this
+    change (or one hand-written) stays exactly where it was, inert."""
     store = FakeStore()
     links_store = FakeStore()
     await _make_user(store, username="carol")
@@ -314,7 +316,7 @@ async def test_delete_with_empty_owner_links_key_removes_it():
     resp = await users.handle_delete(store, links_store, _principal(username="admin"), "carol", fake_list_keys, fake_get_many)
 
     assert resp.status == 200
-    assert await links_store.exists("owner_links:carol") is False
+    assert await links_store.exists("owner_links:carol") is True
 
 
 async def test_delete_with_no_owner_links_key_deletes_cleanly():

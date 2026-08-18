@@ -123,6 +123,26 @@ async def test_create_with_valid_password_masks_hash_in_response():
     assert auth.verify_password("longenough", stored_record["password_hash"])
 
 
+async def test_handle_create_performs_exactly_one_kv_write(monkeypatch):
+    """docs/plans/derived-link-indexes.md, Stage 2: a single create is
+    exactly one KV write (the record) — 3 before this change (record,
+    all_links, owner_links:<owner>)."""
+    store = FakeStore()
+    set_calls = []
+    original_set = store.set
+
+    async def counting_set(key, value):
+        set_calls.append(key)
+        await original_set(key, value)
+
+    monkeypatch.setattr(store, "set", counting_set)
+
+    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}))
+    assert resp.status == 201
+    body = json.loads(resp.body)
+    assert set_calls == [f"slug:{body['slug']}"]
+
+
 async def test_random_slug_retries_on_collision(monkeypatch):
     store = FakeStore()
     calls = iter(["colliding", "colliding", "free"])
@@ -231,8 +251,9 @@ async def test_list_returns_a_link_that_is_in_NEITHER_index():
     }
     await store.set("slug:lostupdate", json.dumps(orphan).encode("utf-8"))
 
-    assert "lostupdate" not in await links.all_slugs(store)
-    assert "lostupdate" not in await links.owned_slugs(store, "alice")
+    # docs/plans/derived-link-indexes.md, Stage 2: there is no index left to
+    # assert this record's absence from — its record existing with no index
+    # entry anywhere is now simply the only state there is.
 
     resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
 
@@ -260,7 +281,7 @@ async def test_list_returns_an_unindexed_link_for_a_view_all_caller_too():
         "tags": [],
     }
     await store.set("slug:lostupdate", json.dumps(record).encode("utf-8"))
-    assert await links.all_slugs(store) == []
+    # docs/plans/derived-link-indexes.md, Stage 2: no index to assert empty.
 
     resp = await links.handle_list(
         store, _principal(username="alice", permissions=["links.view_all"]), fake_get_many, fake_list_keys
@@ -280,7 +301,7 @@ async def test_list_skips_a_slug_whose_record_is_missing():
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
 
-    slugs = await links.owned_slugs(store, "alice")
+    slugs = await links.enumerate_slugs(store, fake_list_keys)
     await store.delete(f"slug:{slugs[0]}")
 
     resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
@@ -307,7 +328,7 @@ async def test_list_skips_a_record_that_cannot_be_parsed():
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
 
-    slugs = await links.owned_slugs(store, "alice")
+    slugs = await links.enumerate_slugs(store, fake_list_keys)
     await store.set(f"slug:{slugs[0]}", b"{not valid json at all")
 
     resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
@@ -368,7 +389,10 @@ async def test_list_edit_all_permission_sees_all_links():
     assert {link["target_url"] for link in body["links"]} == {"https://example.com/alice", "https://example.com/bob"}
 
 
-async def test_delete_owner_succeeds_and_removes_index():
+async def test_delete_owner_succeeds_and_removes_the_record():
+    """docs/plans/derived-link-indexes.md, Stage 2: there is no index to
+    remove the slug from any more — the record's own existence is the only
+    truth, so deleting it is the whole story."""
     store = FakeStore()
     owner = _principal(username="alice")
     created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
@@ -377,8 +401,6 @@ async def test_delete_owner_succeeds_and_removes_index():
     resp = await links.handle_delete(store, owner, slug)
     assert resp.status == 200
     assert await store.exists(f"slug:{slug}") is False
-    assert slug not in await links.owned_slugs(store, "alice")
-    assert slug not in await links.all_slugs(store)
 
 
 async def test_delete_non_owner_forbidden():
@@ -399,7 +421,6 @@ async def test_delete_edit_all_permission_can_delete_others_links():
     resp = await links.handle_delete(store, editor, slug)
     assert resp.status == 200
     assert await store.exists(f"slug:{slug}") is False
-    assert slug not in await links.owned_slugs(store, "alice")
 
 
 async def test_delete_view_all_permission_alone_still_forbidden():
@@ -447,7 +468,7 @@ async def test_delete_without_purge_analytics_is_byte_identical_to_today():
 
     resp = await links.handle_delete(store, owner, slug)
     assert resp.status == 200
-    assert json.loads(resp.body) == {"ok": True, "index_updated": True}
+    assert json.loads(resp.body) == {"ok": True}
 
 
 async def test_delete_with_purge_analytics_includes_the_result_in_the_response():
@@ -464,7 +485,6 @@ async def test_delete_with_purge_analytics_includes_the_result_in_the_response()
     assert resp.status == 200
     assert json.loads(resp.body) == {
         "ok": True,
-        "index_updated": True,
         "analytics_purge": {"status": "complete", "found_keys": 3, "deleted_keys": 3},
     }
 
@@ -497,7 +517,10 @@ async def test_delete_purge_analytics_is_never_called_on_403():
     assert calls == []
 
 
-async def test_delete_record_and_both_indexes_complete_before_the_first_analytics_delete():
+async def test_delete_record_delete_completes_before_the_first_analytics_delete():
+    """docs/plans/derived-link-indexes.md, Stage 2: there is no index write
+    left between the record delete and the analytics purge — the ordering
+    rule shrinks to "record, then purge", and this pins exactly that."""
     store = _RecordingStore()
     owner = _principal(username="alice")
     created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
@@ -513,14 +536,14 @@ async def test_delete_record_and_both_indexes_complete_before_the_first_analytic
     resp = await links.handle_delete(store, owner, slug, purge_analytics=purge)
     assert resp.status == 200
 
-    # Everything recorded before the purge callable ran must be the record
-    # delete and both index read/writes — never anything analytics-shaped,
-    # and the purge callable itself must have run exactly once, after them.
+    # Everything recorded before the purge callable ran must be exactly the
+    # record delete — never anything analytics-shaped — and the purge
+    # callable itself must have run exactly once, after it.
     assert len(purge_started_at) == 1
     ops_before_purge = store.ops[:purge_started_at[0]]
     assert ("delete", f"slug:{slug}") in ops_before_purge
-    assert any(key == "all_links" for _, key in ops_before_purge)
-    assert any(key == f"owner_links:{owner.username}" for _, key in ops_before_purge)
+    assert not any(op == "set" for op, _ in ops_before_purge)
+    assert not any(key in ("all_links",) or key.startswith("owner_links:") for _, key in ops_before_purge)
 
 
 async def test_delete_purge_analytics_raising_still_yields_200_with_failed_status():
@@ -920,177 +943,14 @@ async def test_patch_tags_full_replacement_not_merge():
     assert json.loads(resp.body)["tags"] == ["promo"]
 
 
-# --- Batched index writers (add_slugs_to_indexes / remove_slugs_from_indexes) ---
-
-
-async def test_add_slugs_to_indexes_writes_all_links_and_owner_once():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["s1", "s2", "s3"])
-    assert await links.all_slugs(store) == ["s1", "s2", "s3"]
-    assert await links.owned_slugs(store, "alice") == ["s1", "s2", "s3"]
-
-
-async def test_add_slugs_to_indexes_skips_already_present_and_preserves_order():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["s1"])
-    await links.add_slugs_to_indexes(store, "alice", ["s1", "s2"])
-    assert await links.all_slugs(store) == ["s1", "s2"]
-    assert await links.owned_slugs(store, "alice") == ["s1", "s2"]
-
-
-async def test_remove_slugs_from_indexes_multi_owner():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
-    await links.add_slugs_to_indexes(store, "bob", ["b1"])
-
-    await links.remove_slugs_from_indexes(store, {"alice": ["a1"], "bob": ["b1"]})
-
-    assert await links.all_slugs(store) == ["a2"]
-    assert await links.owned_slugs(store, "alice") == ["a2"]
-    assert await links.owned_slugs(store, "bob") == []
-
-
-async def test_move_slugs_between_owners_all_links_byte_identical():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
-    before = await store.get(links.ALL_SLUGS_INDEX_KEY)
-
-    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob")
-
-    after = await store.get(links.ALL_SLUGS_INDEX_KEY)
-    assert after == before
-
-
-async def test_move_slugs_between_owners_same_owner_guard_leaves_slug_present():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1"])
-
-    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "alice")
-
-    assert await links.owned_slugs(store, "alice") == ["a1"]
-
-
-async def test_move_slugs_between_owners_no_duplicate_when_already_in_new_owner_index():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1"])
-    await links.add_slugs_to_indexes(store, "bob", ["a1"])
-
-    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob")
-
-    assert await links.owned_slugs(store, "bob") == ["a1"]
-    assert await links.owned_slugs(store, "alice") == []
-
-
-async def test_move_slugs_between_owners_idempotent():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
-
-    await links.move_slugs_between_owners(store, {"alice": ["a1", "a2"]}, "bob")
-    once = {key: value for key, value in store._data.items()}
-
-    await links.move_slugs_between_owners(store, {"alice": ["a1", "a2"]}, "bob")
-    twice = {key: value for key, value in store._data.items()}
-
-    assert once == twice
-    assert await links.owned_slugs(store, "bob") == ["a1", "a2"]
-    assert await links.owned_slugs(store, "alice") == []
-
-
-async def test_move_slugs_between_owners_two_old_owners_one_write_each(monkeypatch):
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1"])
-    await links.add_slugs_to_indexes(store, "bob", ["b1"])
-
-    set_calls = []
-    original_set = store.set
-
-    async def counting_set(key, value):
-        set_calls.append(key)
-        await original_set(key, value)
-
-    monkeypatch.setattr(store, "set", counting_set)
-
-    await links.move_slugs_between_owners(store, {"alice": ["a1"], "bob": ["b1"]}, "carol")
-
-    assert set_calls.count("owner_links:carol") == 1
-    assert set_calls.count("owner_links:alice") == 1
-    assert set_calls.count("owner_links:bob") == 1
-    assert "all_links" not in set_calls
-    assert await links.owned_slugs(store, "carol") == ["a1", "b1"]
-    assert await links.owned_slugs(store, "alice") == []
-    assert await links.owned_slugs(store, "bob") == []
-
-
-async def test_index_write_once_property_for_bulk_style_batch(monkeypatch):
-    # Proves the design property the whole feature exists for: adding N slugs
-    # in one call does exactly one set() on all_links and one per distinct
-    # owner, not N.
-    store = FakeStore()
-    set_calls = []
-    original_set = store.set
-
-    async def counting_set(key, value):
-        set_calls.append(key)
-        await original_set(key, value)
-
-    monkeypatch.setattr(store, "set", counting_set)
-
-    slugs = [f"slug-{i}" for i in range(10)]
-    await links.add_slugs_to_indexes(store, "alice", slugs)
-
-    assert set_calls.count("all_links") == 1
-    assert set_calls.count("owner_links:alice") == 1
-    assert len(set_calls) == 2
-
-
-# --- Injectable `write` (docs/plans/write-throttle-resilience.md) ---
-
-
-def _recording_writer():
-    """A writer that behaves exactly like kvretry.direct (calls straight
-    through, no retry) but records the policy every call site passed, so a
-    test can assert every write in these three helpers is INDEX_WRITE."""
-    policies = []
-
-    async def write(make_coro, policy=kvretry.RECORD_WRITE):
-        policies.append(policy)
-        await make_coro()
-
-    return write, policies
-
-
-async def test_add_slugs_to_indexes_default_write_is_direct_and_unaffected():
-    # No writer passed at all — the ~20 existing seeding call sites in this
-    # file (and elsewhere) must keep working exactly as before.
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["s1"])
-    assert await links.owned_slugs(store, "alice") == ["s1"]
-
-
-async def test_add_slugs_to_indexes_routes_every_write_through_index_write_policy():
-    store = FakeStore()
-    write, policies = _recording_writer()
-    await links.add_slugs_to_indexes(store, "alice", ["s1", "s2"], write)
-    assert policies and all(p is kvretry.INDEX_WRITE for p in policies)
-    assert await links.owned_slugs(store, "alice") == ["s1", "s2"]
-
-
-async def test_remove_slugs_from_indexes_routes_every_write_through_index_write_policy():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1", "a2"])
-    write, policies = _recording_writer()
-    await links.remove_slugs_from_indexes(store, {"alice": ["a1"]}, write)
-    assert policies and all(p is kvretry.INDEX_WRITE for p in policies)
-    assert await links.owned_slugs(store, "alice") == ["a2"]
-
-
-async def test_move_slugs_between_owners_routes_every_write_through_index_write_policy():
-    store = FakeStore()
-    await links.add_slugs_to_indexes(store, "alice", ["a1"])
-    write, policies = _recording_writer()
-    await links.move_slugs_between_owners(store, {"alice": ["a1"]}, "bob", write)
-    assert policies and all(p is kvretry.INDEX_WRITE for p in policies)
-    assert await links.owned_slugs(store, "bob") == ["a1"]
+# docs/plans/derived-link-indexes.md, Stage 2: add_slugs_to_indexes,
+# remove_slugs_from_indexes and move_slugs_between_owners are deleted along
+# with the indexes they maintained. The whole "Batched index writers" and
+# "Injectable write" test blocks that exercised them directly are gone with
+# them — the write-retry behaviour they pinned (INDEX_WRITE policy routing)
+# no longer applies to anything, since there is no index write left in
+# links.py at all. The record-write retry these helpers never touched is
+# still pinned by the handle_create/handle_update/handle_delete tests below.
 
 
 # --- Destination URL policy enforcement ---
@@ -1127,7 +987,6 @@ async def test_create_rejection_consumes_no_slug():
     )
     assert resp.status == 400
     assert await store.exists("slug:my-slug") is False
-    assert await links.all_slugs(store) == []
 
 
 async def test_update_rejects_destination_denied_by_policy():
@@ -1208,7 +1067,7 @@ async def test_delete_still_works_on_an_unreadable_record():
     """
     store = FakeStore()
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
-    slug = (await links.owned_slugs(store, "alice"))[0]
+    slug = (await links.enumerate_slugs(store, fake_list_keys))[0]
     await store.set(f"slug:{slug}", b"{corrupt")
 
     admin = _principal(username="root", role="admin")
@@ -1217,9 +1076,6 @@ async def test_delete_still_works_on_an_unreadable_record():
     body = json.loads(resp.body)
     assert body["record_was_unreadable"] is True
     assert await store.get(f"slug:{slug}") is None
-    # all_links is corrected; the owner index is knowingly left to the repair
-    # tool, because the record can no longer name its owner.
-    assert slug not in await links.all_slugs(store)
 
 
 async def test_delete_of_an_unreadable_record_fails_closed_without_edit_all():
@@ -1229,7 +1085,7 @@ async def test_delete_of_an_unreadable_record_fails_closed_without_edit_all():
     deletable by anyone who asked."""
     store = FakeStore()
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
-    slug = (await links.owned_slugs(store, "alice"))[0]
+    slug = (await links.enumerate_slugs(store, fake_list_keys))[0]
     await store.set(f"slug:{slug}", b"{corrupt")
 
     resp = await links.handle_delete(store, _principal(username="alice"), slug)
@@ -1249,19 +1105,24 @@ async def test_handle_create_success_shape_unchanged_with_a_real_writer():
     assert delays == []
 
 
-async def test_handle_create_throttled_index_write_reports_partial_link_still_created():
-    store = ThrottlingStore(fail_times={"all_links": 10})
-    sleep, _ = recording_sleep()
+async def test_handle_create_retries_a_throttled_record_write_and_still_succeeds():
+    """docs/plans/derived-link-indexes.md, Stage 2: there is no index write
+    left for create to fail on — the old
+    test_handle_create_throttled_index_write_reports_partial_link_still_created
+    exercised a scenario that no longer exists (create has never had a way
+    to report `partial`/`index_updated` since the index itself was
+    removed). What remains is the record write's own retry, the same shape
+    handle_update/handle_set_password already pin below."""
+    store = ThrottlingStore(fail_times={})
+    store._fail_times["slug:my-slug"] = 2  # fails twice, succeeds on the 3rd (RECORD_WRITE.attempts == 3)
+    sleep, delays = recording_sleep()
     write = kvretry.make_writer(sleep)
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}), write)
-    assert resp.status == 200
-    body = json.loads(resp.body)
-    assert body["ok"] is False
-    assert body["partial"] is True
-    assert body["index_updated"] is False
-    assert body["next_step"] == "consistency_repair"
-    assert body["link"]["target_url"] == "https://example.com/x"
-    assert await store.exists(f"slug:{body['link']['slug']}") is True
+    resp = await links.handle_create(
+        store, _principal(permissions=["links.create_custom_slug"]),
+        _request({"target_url": "https://example.com/x", "custom_slug": "my-slug"}), write)
+    assert resp.status == 201
+    assert len(delays) == 2
+    assert await store.exists("slug:my-slug") is True
 
 
 async def test_handle_update_retries_a_throttled_write_and_still_succeeds():
@@ -1294,21 +1155,25 @@ async def test_handle_set_password_retries_a_throttled_write_and_still_succeeds(
     assert len(delays) == 2
 
 
-async def test_handle_delete_throttled_index_write_reports_index_updated_false():
+async def test_handle_delete_retries_a_throttled_record_delete_and_still_succeeds():
+    """docs/plans/derived-link-indexes.md, Stage 2: there is no owner index
+    write left for delete to fail on — the old
+    test_handle_delete_throttled_index_write_reports_index_updated_false
+    exercised a scenario that no longer exists. What remains is the record
+    delete's own retry."""
     store = ThrottlingStore(fail_times={})
     owner = _principal(username="alice")
     created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
-    store._fail_times["owner_links:alice"] = 10  # persistently fails the owner index write
+    store._fail_times[f"slug:{slug}"] = 2  # fails twice, succeeds on the 3rd
 
-    sleep, _ = recording_sleep()
+    sleep, delays = recording_sleep()
     write = kvretry.make_writer(sleep)
     resp = await links.handle_delete(store, owner, slug, write=write)
     assert resp.status == 200
     body = json.loads(resp.body)
-    assert body["ok"] is True
-    assert body["index_updated"] is False
-    # The record itself is still gone — only the index write failed.
+    assert body == {"ok": True}
+    assert len(delays) == 2
     assert await store.exists(f"slug:{slug}") is False
 
 
@@ -1318,7 +1183,7 @@ async def test_handle_delete_unreadable_record_branch_unchanged_by_write_param()
     in (which would show up as retries/delays if it were somehow reached)."""
     store = ThrottlingStore(fail_times={})
     await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
-    slug = (await links.owned_slugs(store, "alice"))[0]
+    slug = (await links.enumerate_slugs(store, fake_list_keys))[0]
     await store.set(f"slug:{slug}", b"{corrupt")
 
     sleep, delays = recording_sleep()

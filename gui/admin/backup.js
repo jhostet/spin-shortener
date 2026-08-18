@@ -179,40 +179,10 @@ document.getElementById("restore-btn").addEventListener("click", async () => {
 // back to the raw check id below for an id this map doesn't know, so a check
 // added server-side without a label here renders as itself, not "undefined".
 const CONSISTENCY_CHECK_LABELS = {
-  unindexed_link: {
-    title: "Links missing from the index",
-    meaning: "A link record exists but isn't listed in the all-links index, so it's invisible to the dashboard even though it still resolves.",
-    fix: "Adds these slugs back to the all-links index.",
-  },
-  missing_link_record: {
-    title: "Index entries with no link",
-    meaning: "The all-links index names a slug that has no backing record. Harmless — the dashboard already skips it.",
-    fix: "Removes these slugs from the all-links index.",
-  },
-  unindexed_owner_link: {
-    title: "Links missing from their owner's index",
-    meaning: "A link's owner record doesn't list it, so it's invisible on that owner's dashboard and deleting the owner would silently orphan it.",
-    fix: "Adds these slugs back to their owner's index.",
-  },
-  owner_index_mismatch: {
-    title: "Links indexed under the wrong owner",
-    meaning: "A link is listed under one owner's index but its record names a different owner, so that owner can't edit or delete it.",
-    fix: "Reassign or delete these links from the dashboard's owner filter.",
-  },
-  orphan_owner_index_entry: {
-    title: "Owner index entries with no link",
-    meaning: "An owner's index names a slug that has no backing record. Harmless — the dashboard already skips it.",
-    fix: "Removes these slugs from the owner's index.",
-  },
   unknown_link_owner: {
     title: "Links owned by a deleted account",
     meaning: "A link's record names an owner with no user record, so nobody can edit it and its owner can never be contacted.",
     fix: "Reassign or delete these links from the dashboard's owner filter.",
-  },
-  dangling_owner_index: {
-    title: "Owner indexes for deleted accounts",
-    meaning: "An owner index still lists links for a username with no user record. If that username is ever recreated, it would inherit these links.",
-    fix: "Deletes the owner index for these usernames.",
   },
   unindexed_user: {
     title: "Users missing from the username index",

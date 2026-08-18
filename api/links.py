@@ -40,22 +40,6 @@ async def allocate_random_slug(store, taken: set[str]) -> str:
     raise RuntimeError("failed to allocate a unique slug")
 
 
-async def owned_slugs(store, username: str) -> list[str]:
-    """Shared (not module-private) — users.py's handle_delete reads it to
-    decide whether a user still owns links before allowing their deletion,
-    the same reason can_view/can_edit below are public."""
-    raw = await store.get(f"owner_links:{username}")
-    return json.loads(raw) if raw else []
-
-
-ALL_SLUGS_INDEX_KEY = "all_links"
-
-
-async def all_slugs(store) -> list[str]:
-    raw = await store.get(ALL_SLUGS_INDEX_KEY)
-    return json.loads(raw) if raw else []
-
-
 SLUG_KEY_PREFIX = "slug:"
 
 
@@ -96,87 +80,6 @@ async def slugs_owned_by(store, username: str, list_keys, get_many) -> list[str]
         if record.get("owner") == username:
             owned.append(slug)
     return owned
-
-
-async def add_slugs_to_indexes(store, owner: str, slugs: list[str], write=kvretry.direct) -> None:
-    """One read+write of `all_links`, one of `owner_links:<owner>`, for any
-    number of slugs. Order-preserving, skips slugs already present.
-
-    `write` (docs/plans/write-throttle-resilience.md) defaults to
-    `kvretry.direct` (call through, no retry) so the ~20 existing test call
-    sites that use this helper purely to seed fixtures are unaffected. A real
-    caller (`bulk.py`, `links.handle_create`) passes a request-scoped writer
-    built by `kvretry.make_writer`, and each `store.set` is retried under
-    `kvretry.INDEX_WRITE` — every key this function touches IS an index.
-    """
-    slugs_index = await all_slugs(store)
-    for slug in slugs:
-        if slug not in slugs_index:
-            slugs_index.append(slug)
-    await write(lambda: store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8")), kvretry.INDEX_WRITE)
-
-    owned = await owned_slugs(store, owner)
-    for slug in slugs:
-        if slug not in owned:
-            owned.append(slug)
-    await write(lambda: store.set(f"owner_links:{owner}", json.dumps(owned).encode("utf-8")), kvretry.INDEX_WRITE)
-
-
-async def remove_slugs_from_indexes(store, slugs_by_owner: dict[str, list[str]], write=kvretry.direct) -> None:
-    """One read+write of `all_links` total, plus one per distinct owner. Takes
-    a per-owner mapping because a `links.edit_all` user can delete links
-    belonging to several owners in a single action. See `add_slugs_to_indexes`
-    for the `write` parameter's default and rationale."""
-    all_to_remove = {slug for slugs in slugs_by_owner.values() for slug in slugs}
-    slugs_index = await all_slugs(store)
-    slugs_index = [slug for slug in slugs_index if slug not in all_to_remove]
-    await write(lambda: store.set(ALL_SLUGS_INDEX_KEY, json.dumps(slugs_index).encode("utf-8")), kvretry.INDEX_WRITE)
-
-    for owner, slugs in slugs_by_owner.items():
-        to_remove = set(slugs)
-        owned = await owned_slugs(store, owner)
-        owned = [slug for slug in owned if slug not in to_remove]
-        await write(lambda o=owner, ow=owned: store.set(f"owner_links:{o}", json.dumps(ow).encode("utf-8")), kvretry.INDEX_WRITE)
-
-
-async def move_slugs_between_owners(
-    store, slugs_by_old_owner: dict[str, list[str]], new_owner: str, write=kvretry.direct
-) -> None:
-    """Reassignment's index half. One read+write of `owner_links:<new_owner>`,
-    plus one per distinct old owner — the same one-read-one-write-per-index
-    shape as add_slugs_to_indexes/remove_slugs_from_indexes, because Spin KV
-    has no compare-and-swap and a per-slug read-modify-write would multiply
-    the race window by N. See `add_slugs_to_indexes` for the `write`
-    parameter's default and rationale.
-
-    Deliberately never reads or writes `all_links`: a reassignment does not
-    change all_links membership, and calling remove_slugs_from_indexes here
-    would strip the slugs from it entirely.
-
-    Adds to the new owner FIRST, then removes from each old owner, and skips
-    any old owner equal to new_owner (without that guard a same-owner
-    "reassignment" would remove the slugs from the index it just added them
-    to). Both halves are idempotent, so re-running with the same arguments
-    converges rather than compounding.
-    """
-    all_slugs_to_move = [slug for slugs in slugs_by_old_owner.values() for slug in slugs]
-
-    owned_new = await owned_slugs(store, new_owner)
-    for slug in all_slugs_to_move:
-        if slug not in owned_new:
-            owned_new.append(slug)
-    await write(lambda: store.set(f"owner_links:{new_owner}", json.dumps(owned_new).encode("utf-8")), kvretry.INDEX_WRITE)
-
-    for old_owner, slugs in slugs_by_old_owner.items():
-        if old_owner == new_owner:
-            continue
-        to_remove = set(slugs)
-        owned_old = await owned_slugs(store, old_owner)
-        owned_old = [slug for slug in owned_old if slug not in to_remove]
-        await write(
-            lambda o=old_owner, ow=owned_old: store.set(f"owner_links:{o}", json.dumps(ow).encode("utf-8")),
-            kvretry.INDEX_WRITE,
-        )
 
 
 class UnreadableLinkError(Exception):
@@ -329,22 +232,11 @@ async def handle_create(store, principal: Principal, request, write=kvretry.dire
     # kvretry.WriteFailed propagates uncaught, same as any other write
     # failure did before this — no special handling, since there is nothing
     # to report a partial result about.
+    #
+    # docs/plans/derived-link-indexes.md, Stage 2: there is no index write
+    # here any more. A record's existence is the only truth, so a single
+    # create is exactly one KV write and this always returns 201.
     await write(lambda: store.set(f"slug:{slug}", json.dumps(record).encode("utf-8")), kvretry.RECORD_WRITE)
-
-    # The one drift-capable path in this function: the record now exists at
-    # /r/{slug} regardless of what happens next, so an exhausted index write
-    # must be reported rather than silently dropped — a one-row version of
-    # the bulk-create incidents this plan exists for.
-    try:
-        await add_slugs_to_indexes(store, principal.username, [slug], write)
-    except kvretry.WriteFailed:
-        return json_response(200, {
-            "ok": False,
-            "partial": True,
-            "link": public_link(record),
-            "index_updated": False,
-            "next_step": "consistency_repair",
-        })
     return json_response(201, public_link(record))
 
 
@@ -498,12 +390,15 @@ async def handle_delete(store, principal: Principal, slug: str, purge_analytics=
     rather than imported directly — analytics.py already imports links, so
     links.py importing analyticsorphans would be a cycle.
 
-    Ordering is load-bearing: record delete, then both indexes, then (only
-    if passed) the analytics purge. Every interruption before the purge
-    leaves a recoverable state (orphan analytics keys, the shipped operator
-    tool's whole reason to exist); the reverse ordering would leave a live,
-    resolving link whose click history vanished with no tool able to
-    restore it. See docs/plans/inline-analytics-purge-on-delete.md.
+    Ordering is load-bearing: record delete, then (only if passed) the
+    analytics purge. Every interruption before the purge leaves a recoverable
+    state (orphan analytics keys, the shipped operator tool's whole reason to
+    exist); the reverse ordering would leave a live, resolving link whose
+    click history vanished with no tool able to restore it. See
+    docs/plans/inline-analytics-purge-on-delete.md.
+
+    docs/plans/derived-link-indexes.md, Stage 2: there is no index to update
+    any more, so the response no longer carries index_updated at all.
 
     A KV failure inside `purge_analytics` must never turn a successful
     deletion into a 500 — the link is already gone, and the response must
@@ -524,23 +419,12 @@ async def handle_delete(store, principal: Principal, slug: str, purge_analytics=
         # be read.
         if not (principal.role == "admin" or principal.has_permission("links.edit_all")):
             return json_response(403, {"error": "forbidden", "required_permission": "links.edit_all"})
+        # docs/plans/derived-link-indexes.md, Stage 2: there is no index to
+        # correct any more — deleting the record is the whole repair. That
+        # entire failure mode (an unreadable record's owner being unknowable,
+        # blocking an index cleanup) disappears with the index itself.
         await store.delete(f"slug:{slug}")
-        # Only `all_links` can be corrected here — the per-owner index is
-        # keyed by an owner this record can no longer name. That leaves one
-        # `orphan_owner_index_entry`, which is deliberate rather than sloppy:
-        # it is exactly what `POST /api/admin/consistency/repair` fixes in a
-        # click, and the alternative (enumerating every owner_links key to
-        # find the slug) would put an O(users) scan on the ordinary delete
-        # path to serve a rare case.
-        remaining = [s for s in await all_slugs(store) if s != slug]
-        await store.set(ALL_SLUGS_INDEX_KEY, json.dumps(remaining).encode("utf-8"))
-        return json_response(200, {
-            "ok": True,
-            "record_was_unreadable": True,
-            "hint": "The record could not be parsed, so its owner index entry could not be "
-                    "identified. Run the store consistency check and repair "
-                    "orphan_owner_index_entry to finish tidying up.",
-        })
+        return json_response(200, {"ok": True, "record_was_unreadable": True})
 
     if record is None:
         return json_response(404, {"error": "not_found"})
@@ -551,21 +435,15 @@ async def handle_delete(store, principal: Principal, slug: str, purge_analytics=
     # uncaught, same as any other write failure did before this.
     await write(lambda: store.delete(f"slug:{slug}"), kvretry.RECORD_WRITE)
 
-    index_updated = True
-    try:
-        await remove_slugs_from_indexes(store, {record["owner"]: [slug]}, write)
-    except kvretry.WriteFailed:
-        index_updated = False
-
     if purge_analytics is None:
-        return json_response(200, {"ok": True, "index_updated": index_updated})
+        return json_response(200, {"ok": True})
 
     try:
         analytics_purge = await purge_analytics(slug)
     except Exception:
         analytics_purge = {"status": "failed", "found_keys": 0, "deleted_keys": 0}
 
-    return json_response(200, {"ok": True, "index_updated": index_updated, "analytics_purge": analytics_purge})
+    return json_response(200, {"ok": True, "analytics_purge": analytics_purge})
 
 
 async def handle_set_password(store, principal: Principal, slug: str, request, write=kvretry.direct):

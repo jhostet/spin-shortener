@@ -34,14 +34,19 @@ shares the same budget. `gather_reads` is used only for the purge's liveness
 pre-check (`links_store.exists(...)`, a read) and for the report's
 enumeration — never for a delete.
 
-**The purge cannot be misled by index drift the way the report can be.** The
-report derives liveness from `links.all_slugs` (cheap, O(1) KV operations);
-the purge instead re-checks `exists("slug:<S>")` on the record itself,
-immediately before deciding what to delete for that slug. That re-check is
-load-bearing, not defensive dressing: it is what makes it safe to skip a
-typed GUI confirmation field (see the plan's "Decisions taken" section) —
-a stale report can misinform the operator, but it cannot make the purge
-delete a live link's analytics, because the purge never trusts the report's
+**The purge cannot be misled by a stale report the way liveness-by-report-
+alone would be.** Since docs/plans/derived-link-indexes.md, the report itself
+derives liveness from a `slug:` key enumeration (`links.enumerate_slugs`)
+rather than a maintained index, so index drift specifically is no longer a
+way for it to be wrong — but the enumeration is still just a snapshot at
+report time, and a link created between the report and a later purge request
+would not yet be in it. The purge does not lean on that snapshot at all: it
+re-checks `exists("slug:<S>")` on the record itself, immediately before
+deciding what to delete for that slug. That re-check is load-bearing, not
+defensive dressing: it is what makes it safe to skip a typed GUI confirmation
+field (see the plan's "Decisions taken" section) — a stale report can
+misinform the operator, but it cannot make the purge delete a live link's
+analytics, because the purge never trusts the report's
 liveness judgement.
 """
 
@@ -197,25 +202,6 @@ def plan_purge(
     return slugs_to_purge, keys_to_delete, remaining_slugs
 
 
-def _parse_live_slugs(raw: bytes | None) -> list[str] | None:
-    """None only for a present-but-malformed value — an absent key means no
-    links have ever been created, which is valid state (empty list), not a
-    failure. Failing closed on a malformed value matters: an unreadable index
-    would otherwise make every link look deleted, and a value that parses but
-    isn't actually a list of strings (e.g. a JSON object) would silently
-    report every one of its members as "live" if this didn't check the type.
-    """
-    if raw is None:
-        return []
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        return None
-    return value
-
-
 async def purge_slug_analytics(analytics_store, slug: str, list_keys,
                                 max_keys: int = MAX_INLINE_PURGE_KEYS) -> dict:
     """Delete every analytics key belonging to `slug`. One enumeration, then
@@ -281,8 +267,16 @@ async def purge_slug_analytics(analytics_store, slug: str, list_keys,
 
 async def handle_orphan_report(links_store, analytics_store, principal, list_keys) -> Response:
     """GET /api/admin/analytics/orphans. Exactly 2 KV operations regardless
-    of how many orphans exist: one `list_keys` and one `get`. That is what
-    makes the report cheap enough to offer as a plain button.
+    of how many orphans exist: one `list_keys` on the analytics namespace and
+    one on the links namespace. That is what makes the report cheap enough to
+    offer as a plain button.
+
+    docs/plans/derived-link-indexes.md, Stage 2: liveness used to come from
+    one `get` of `all_links`. That index is no longer written, so reading it
+    now would report a growing false-orphan set as new links land with no
+    corresponding index entry — exactly the kind of drift-driven false
+    positive Stage 2 exists to remove. Liveness is now derived the same way
+    `handle_list` derives its own slug list: a `slug:` key enumeration.
     """
     if not principal.has_permission("users.manage"):
         return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
@@ -290,11 +284,7 @@ async def handle_orphan_report(links_store, analytics_store, principal, list_key
     keys = await list_keys(analytics_store)
     by_slug, unrecognized = classify_analytics_keys(keys)
 
-    raw_live = await links_store.get(links.ALL_SLUGS_INDEX_KEY)
-    live_slugs = _parse_live_slugs(raw_live)
-    if live_slugs is None:
-        return json_response(409, {"error": "links_index_unreadable", "next_step": "consistency_check"})
-    live_slugs_set = set(live_slugs)
+    live_slugs_set = set(await links.enumerate_slugs(links_store, list_keys))
 
     orphans, live = split_by_liveness(by_slug, live_slugs_set)
     report = build_orphan_report(

@@ -1,8 +1,13 @@
 """Repair companion to the read-only `GET /api/admin/consistency` check
-(`api/consistency.py`). Eight of the twelve checks have exactly one safe,
-derivable, automatic repair; four never do because repairing them requires a
+(`api/consistency.py`). Three of the six checks have exactly one safe,
+derivable, automatic repair; three never do because repairing them requires a
 judgment call the store can't answer. See docs/plans/consistency-repair.md
-for the full design, the per-check verdict, and the rejected alternatives.
+for the original twelve-check design and the per-check verdict, and
+docs/plans/derived-link-indexes.md for why five of the original eight
+repairs (everything about `all_links`/`owner_links:<owner>`) were deleted
+along with the checks and the indexes they repaired — since that plan's
+Stage 2, links.py no longer writes either index, so there is nothing left
+for those repairs to fix.
 
 Zero WASI SDK imports — `store` views, `request`, `list_keys` and
 `get_many` arrive as plain parameters, matching `consistency.py` and
@@ -15,18 +20,6 @@ submits check ids only, never findings — `handle_repair` always re-runs
 report's `MAX_FINDINGS_PER_CHECK` truncation too: the repair calls `analyze`
 with `max_findings=None` and so acts on every finding, not just the first 100
 of a check the operator happened to be looking at.
-
-**The single most important correctness property: `present_slugs` guards
-every removal repair.** A `slug:` record that exists but fails to parse is
-reported as `missing_link_record`/`orphan_owner_index_entry` (see
-`consistency.collect`'s docstring) even though its key is still physically
-present. A repair that stripped such a slug from an index would delete the
-only reference to a record that still exists — the link becomes invisible to
-the dashboard and the next backup restore prunes it entirely. That is data
-loss caused by a repair tool, which is the worst thing this feature could do.
-So `plan_repairs` requires a removal target's slug to be ABSENT from
-`present_slugs`, never merely absent from `link_records` (which a corrupt
-record is also excluded from).
 
 **Repairs are writes: sequential and chunked only, exactly like
 `POST /api/admin/analytics/purge`.** `apply_repairs` never fans out a write
@@ -42,9 +35,9 @@ cap rather than overlap, and would compete with live click recording.
 
 **No new KV key type.** The repair only mutates keys that already exist and
 are already understood by `backup.py`'s `INDEX_KEYS`, `consistency.py`'s
-key-shape recognition, and `kvprefix.STORE_PREFIXES`: `all_links`,
-`owner_links:<U>`, `_meta:usernames`, `session:<token>`. It is stateless — it
-records nothing about past repairs, exactly like the analytics purge.
+key-shape recognition, and `kvprefix.STORE_PREFIXES`: `_meta:usernames`,
+`session:<token>`. It is stateless — it records nothing about past repairs,
+exactly like the analytics purge.
 
 **The lost-update window.** Spin's KV has no compare-and-swap and the
 consistency walk has no snapshot, so a concurrent write between `collect` and
@@ -52,7 +45,7 @@ consistency walk has no snapshot, so a concurrent write between `collect` and
 delta write re-reads the index immediately before writing it, so the window
 is one `get` + one `set` rather than the whole collect-to-write span; (2) a
 repair never writes a wholesale computed list, only adds/removes the specific
-members `collect` formed an opinion about, so a concurrently-created slug
+members `collect` formed an opinion about, so a concurrently-created entry
 survives untouched; (3) the only reachable residual failure mode is a lost
 *removal*, which surfaces as ordinary drift on the next consistency run and
 is fixed by re-running. The worst case is "run it again".
@@ -73,11 +66,7 @@ MAX_REPAIR_WRITES = 100  # ~75 ms/write measured on Akamai (TASKS.md,
 # after that constant was chosen. Raising this needs real timing evidence
 # from a full-cap repair, not a hunch — the same rule MAX_BULK_ROWS and
 # MAX_PURGE_KEYS_PER_REQUEST carry.
-MAX_BLOCKED_DETAIL = 20  # per blocked entry's sample of at-risk slugs
-
-ALL_LINKS_KEY = consistency.ALL_SLUGS_INDEX_KEY
 USERNAMES_KEY = consistency.USERNAMES_INDEX_KEY
-OWNER_LINKS_PREFIX = consistency.OWNER_LINKS_PREFIX
 
 
 # --- Pure functions ---------------------------------------------------------
@@ -85,9 +74,10 @@ OWNER_LINKS_PREFIX = consistency.OWNER_LINKS_PREFIX
 
 def apply_list_delta(current: list[str], add: list[str], remove: list[str]) -> list[str]:
     """Removals first, then order-preserving appends of anything not already
-    present — byte-for-byte the shape `links.add_slugs_to_indexes`/
-    `remove_slugs_from_indexes` use, so a repaired index is indistinguishable
-    from one the normal authoring path would have written."""
+    present. The only surviving caller is `_meta:usernames`'s
+    unindexed_user/missing_user_record repair — links.py's own
+    add_slugs_to_indexes/remove_slugs_from_indexes used this identical shape
+    before docs/plans/derived-link-indexes.md deleted them."""
     remove_set = set(remove)
     result = [item for item in current if item not in remove_set]
     for item in add:
@@ -120,17 +110,21 @@ def plan_repairs(collected: dict, checks: list[dict], requested: list[str], budg
     per finding — many findings for one check share a single key), so any
     budget >= 1 makes progress. Unlike `analyticsorphans.plan_purge`, this
     function needs no "at least one slug is always planned" special case.
+
+    docs/plans/derived-link-indexes.md, Stage 2: the links-side machinery
+    this function used to carry (unindexed_link, missing_link_record,
+    unindexed_owner_link, orphan_owner_index_entry, dangling_owner_index —
+    the `present_slugs` guard and the `all_links` post-state precondition
+    they needed) is gone along with the indexes it repaired. Only the
+    users-side repairs remain: `_meta:usernames` (unindexed_user,
+    missing_user_record) and `session:<token>` (orphan_session).
     """
     checks_by_id = {c["check"]: c for c in checks}
     requested_set = set(requested)
-    present_slugs: set[str] = collected["present_slugs"]
 
-    links_deltas: dict[str, dict[str, list[str]]] = {}
-    links_deletes: list[str] = []
     users_deltas: dict[str, dict[str, list[str]]] = {}
     users_deletes: list[str] = []
 
-    touched_links: set[str] = set()
     touched_users: set[str] = set()
 
     budget_counter = _Budget(budget)
@@ -162,71 +156,8 @@ def plan_repairs(collected: dict, checks: list[dict], requested: list[str], budg
         budget_counter.spend()
         return "planned"
 
-    # --- Precompute unindexed_link's planned adds, needed for the dangling
-    # precondition's post-state check (rule 3) BEFORE dangling is planned. ---
-    unindexed_link_check = checks_by_id.get("unindexed_link")
-    unindexed_link_add_slugs: set[str] = set()
-    if (
-        "unindexed_link" in requested_set
-        and unindexed_link_check is not None
-        and not unindexed_link_check["skipped"]
-    ):
-        for finding in unindexed_link_check["findings"]:
-            unindexed_link_add_slugs.add(finding["slug"])
-
-    all_links_unreadable = collected["all_links"] is None
-    all_links_post_state = set(collected["all_links"] or []) | unindexed_link_add_slugs
-
-    # === Phase A: dangling_owner_index, always planned first (its deletion
-    # can target the very key #5 (orphan_owner_index_entry) would otherwise
-    # write a delta to). ===
-    if "dangling_owner_index" in requested_set:
-        check = checks_by_id["dangling_owner_index"]
-        planned = remaining = blocked = 0
-        if check["skipped"]:
-            check_reports.append(_skipped_report("dangling_owner_index"))
-        else:
-            for finding in check["findings"]:
-                username = finding["username"]
-                key = f"{OWNER_LINKS_PREFIX}{username}"
-                owner_slugs = collected["owner_index"].get(username, [])
-
-                if all_links_unreadable:
-                    blocked_entries.append({
-                        "check": "dangling_owner_index", "username": username,
-                        "reason": "links_index_unreadable", "next_step": None,
-                        "slug_count": finding["slug_count"],
-                    })
-                    blocked += 1
-                    continue
-
-                at_risk = sorted(
-                    slug for slug in owner_slugs
-                    if slug in present_slugs and slug not in all_links_post_state
-                )
-                if at_risk:
-                    blocked_entries.append({
-                        "check": "dangling_owner_index", "username": username,
-                        "reason": "would_orphan_unindexed_link", "next_step": "unindexed_link",
-                        "slug_count": len(at_risk), "slugs": at_risk[:MAX_BLOCKED_DETAIL],
-                    })
-                    blocked += 1
-                    continue
-
-                outcome = _delete_finding(links_deletes, touched_links, key)
-                if outcome == "planned":
-                    planned += 1
-                else:
-                    remaining += 1
-            check_reports.append({
-                "check": "dangling_owner_index", "findings": check["count"],
-                "planned": planned, "remaining": remaining, "blocked": blocked,
-                "skipped": False, "skip_reason": None,
-            })
-
-    # === Main pass: the remaining seven checks, in REPAIRABLE_CHECKS order. ===
     for check_id in consistency.REPAIRABLE_CHECKS:
-        if check_id == "dangling_owner_index" or check_id not in requested_set:
+        if check_id not in requested_set:
             continue
         check = checks_by_id[check_id]
         if check["skipped"]:
@@ -235,56 +166,7 @@ def plan_repairs(collected: dict, checks: list[dict], requested: list[str], budg
 
         planned = remaining = blocked = 0
 
-        if check_id == "unindexed_link":
-            for finding in check["findings"]:
-                outcome = _delta_finding(links_deltas, touched_links, ALL_LINKS_KEY, "add", finding["slug"])
-                planned += outcome == "planned"
-                remaining += outcome == "remaining"
-
-        elif check_id == "missing_link_record":
-            for finding in check["findings"]:
-                slug = finding["slug"]
-                if slug in present_slugs:
-                    blocked_entries.append({
-                        "check": check_id, "slug": slug,
-                        "reason": "record_unreadable", "next_step": "unreadable_value",
-                    })
-                    blocked += 1
-                    continue
-                outcome = _delta_finding(links_deltas, touched_links, ALL_LINKS_KEY, "remove", slug)
-                planned += outcome == "planned"
-                remaining += outcome == "remaining"
-
-        elif check_id == "unindexed_owner_link":
-            for finding in check["findings"]:
-                owner = finding["owner"]
-                key = f"{OWNER_LINKS_PREFIX}{owner}"
-                outcome = _delta_finding(links_deltas, touched_links, key, "add", finding["slug"])
-                planned += outcome == "planned"
-                remaining += outcome == "remaining"
-
-        elif check_id == "orphan_owner_index_entry":
-            for finding in check["findings"]:
-                slug = finding["slug"]
-                owner = finding["indexed_under"]
-                key = f"{OWNER_LINKS_PREFIX}{owner}"
-                if slug in present_slugs:
-                    blocked_entries.append({
-                        "check": check_id, "slug": slug, "username": owner,
-                        "reason": "record_unreadable", "next_step": "unreadable_value",
-                    })
-                    blocked += 1
-                    continue
-                if key in links_deletes:
-                    # The owner's whole index key is being deleted (phase A) —
-                    # the removal is already accomplished, at no extra cost.
-                    planned += 1
-                    continue
-                outcome = _delta_finding(links_deltas, touched_links, key, "remove", slug)
-                planned += outcome == "planned"
-                remaining += outcome == "remaining"
-
-        elif check_id == "unindexed_user":
+        if check_id == "unindexed_user":
             for finding in check["findings"]:
                 username = finding["username"]
                 if not username.strip():
@@ -318,13 +200,11 @@ def plan_repairs(collected: dict, checks: list[dict], requested: list[str], budg
             "skipped": False, "skip_reason": None,
         })
 
-    # Re-order check_reports to REPAIRABLE_CHECKS order (dangling_owner_index
-    # was appended out of turn, in phase A).
+    # Report order follows REPAIRABLE_CHECKS regardless of requested order.
     order = {check_id: i for i, check_id in enumerate(consistency.REPAIRABLE_CHECKS)}
     check_reports.sort(key=lambda c: order[c["check"]])
 
     return {
-        "links": {"deltas": links_deltas, "deletes": links_deletes},
         "users": {"deltas": users_deltas, "deletes": users_deletes},
         "checks": check_reports,
         "blocked": blocked_entries,
@@ -347,9 +227,10 @@ async def apply_repairs(stores_by_name: dict[str, object], plan: dict, write) ->
     {"keys_written": n, "keys_deleted": n, "write_skipped": [...],
     "write_failed": [...]}.
 
-    Stores in ("links", "users") order: links first, users last, so a
-    mid-request failure leaves the operator's own session material untouched
-    for a retry — the same rule `backup.RESTORE_STORE_ORDER` states.
+    docs/plans/derived-link-indexes.md, Stage 2: the links store is never
+    touched here any more — the only surviving repairs are `users`-side
+    (`_meta:usernames`, `session:<token>`), so there is no "links first,
+    users last" ordering left to state.
 
     No `user:` key is ever read, written or deleted here — only
     `_meta:usernames` and `session:<token>`.
@@ -369,38 +250,33 @@ async def apply_repairs(stores_by_name: dict[str, object], plan: dict, write) ->
     write_skipped: list[dict] = []
     write_failed: list[dict] = []
 
-    for store_name in ("links", "users"):
-        if write_failed:
+    store = stores_by_name["users"]
+    store_plan = plan["users"]
+
+    for key, delta in store_plan["deltas"].items():
+        raw = await store.get(key)
+        parsed = consistency.parse_str_list(raw)
+        if raw is not None and parsed is None:
+            write_skipped.append({"store": "users", "key": key, "reason": "index_unreadable_at_write"})
+            continue
+        new = apply_list_delta(parsed or [], delta["add"], delta["remove"])
+        if new == (parsed or []):
+            continue  # idempotent: a second pass over the same input writes nothing
+        try:
+            await write(lambda k=key, n=new: store.set(k, json.dumps(n).encode("utf-8")), kvretry.INDEX_WRITE)
+        except kvretry.WriteFailed:
+            write_failed.append({"store": "users", "key": key, "reason": "write_failed"})
             break
-        store = stores_by_name[store_name]
-        store_plan = plan[store_name]
+        keys_written += 1
 
-        for key, delta in store_plan["deltas"].items():
-            raw = await store.get(key)
-            parsed = consistency.parse_str_list(raw)
-            if raw is not None and parsed is None:
-                write_skipped.append({"store": store_name, "key": key, "reason": "index_unreadable_at_write"})
-                continue
-            new = apply_list_delta(parsed or [], delta["add"], delta["remove"])
-            if new == (parsed or []):
-                continue  # idempotent: a second pass over the same input writes nothing
-            try:
-                await write(lambda k=key, n=new: store.set(k, json.dumps(n).encode("utf-8")), kvretry.INDEX_WRITE)
-            except kvretry.WriteFailed as exc:
-                write_failed.append({"store": store_name, "key": key, "reason": "write_failed"})
-                break
-            keys_written += 1
-
-        if write_failed:
-            break
-
-        # Deletes are always sequential, one `await store.delete(key)` at a
-        # time — see the module docstring's "Repairs are writes" section.
+    # Deletes are always sequential, one `await store.delete(key)` at a
+    # time — see the module docstring's "Repairs are writes" section.
+    if not write_failed:
         for key in store_plan["deletes"]:
             try:
                 await write(lambda k=key: store.delete(k), kvretry.INDEX_WRITE)
-            except kvretry.WriteFailed as exc:
-                write_failed.append({"store": store_name, "key": key, "reason": "write_failed"})
+            except kvretry.WriteFailed:
+                write_failed.append({"store": "users", "key": key, "reason": "write_failed"})
                 break
             keys_deleted += 1
 

@@ -194,15 +194,17 @@ async def handle_delete(store, links_store, principal: Principal, username: str,
         return json_response(409, {"error": "user_owns_links", "username": username, "link_count": len(owned)})
 
     # Cross-store write order (see docs/plans/user-deletion-link-ownership.md,
-    # "Write ordering and what an interruption leaves"): links store first,
-    # then sessions, then the user record, then the usernames index. Spin KV
-    # has no transactions and no compare-and-swap, so this order is chosen so
-    # that every interruption point leaves the *stronger* invariant — a crash
-    # after this point never leaves a live session for a nonexistent user,
-    # and never leaves the user deleted with a dangling owner_links: key that
-    # a retry could no longer reach (handle_delete would 404 on the missing
-    # user record).
-    await links_store.delete(f"owner_links:{username}")
+    # "Write ordering and what an interruption leaves"): sessions, then the
+    # user record, then the usernames index. Spin KV has no transactions and
+    # no compare-and-swap, so this order is chosen so that every interruption
+    # point leaves the *stronger* invariant — a crash after this point never
+    # leaves a live session for a nonexistent user.
+    #
+    # docs/plans/derived-link-indexes.md, Stage 2: there is no owner_links:
+    # index to delete any more. A record's existence is the only truth, so
+    # deleting the user record itself is the whole cleanup on the links side
+    # (there is none — the 409 gate above already confirmed no record names
+    # this owner).
     await auth.delete_sessions_for_user(store, username, list_keys)
     await store.delete(f"user:{username}")
     await auth.remove_username(store, username)

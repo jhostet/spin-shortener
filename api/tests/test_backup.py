@@ -702,6 +702,50 @@ async def test_handle_restore_tags_and_reassigned_owner_indexes_slugs_write_befo
     assert restored_abc["tags"] == ["q4", "sale"]
 
 
+async def test_handle_restore_pre_stage2_backup_containing_all_links_and_owner_links_round_trips_unchanged():
+    """docs/plans/derived-link-indexes.md, Stage 2: api/backup.py deliberately
+    needs NO CHANGE — all_links and owner_links:<owner> are inert leftover
+    keys now (nothing writes them any more), not unknown ones, so a backup
+    taken BEFORE Stage 2 shipped — which can and does contain both — must
+    still restore both keys byte-identically. INDEX_KEYS/restore_write_order
+    already understood these keys before this plan and still do; nothing here
+    was touched.
+    """
+    links_store = FakeStore({
+        "slug:abc": json.dumps({"slug": "abc", "owner": "bob"}).encode(),
+        "all_links": b'["abc"]',
+        "owner_links:admin": b'["abc"]',
+    })
+    doc = await _export_doc({"links": links_store})
+
+    restore_target = FakeStore()
+    resp = await backup.handle_restore(
+        {"links": restore_target}, _principal(),
+        _restore_request({"confirm": "REPLACE", "backup": doc}),
+        fake_list_keys, 30,
+    )
+    assert resp.status == 200
+
+    assert await restore_target.get("all_links") == b'["abc"]'
+    assert await restore_target.get("owner_links:admin") == b'["abc"]'
+    assert json.loads(await restore_target.get("slug:abc")) == {"slug": "abc", "owner": "bob"}
+
+    # And the consistency check reports neither leftover key as a finding at
+    # all — they are known-and-inert, not unrecognized_key or anything else.
+    # (bob has no user: record, so unknown_link_owner legitimately fires on
+    # the restored slug itself — that is unrelated real drift, not something
+    # this test is about, so it's asserted around rather than eliminated.)
+    import consistency
+    from tests.fakes import fake_get_many
+
+    collected = await consistency.collect(
+        {"links": restore_target, "users": FakeStore()}, fake_list_keys, fake_get_many)
+    checks, totals = consistency.analyze(collected)
+    by_id = {c["check"]: c for c in checks}
+    assert by_id["unrecognized_key"]["count"] == 0
+    assert by_id["unreadable_value"]["count"] == 0
+
+
 async def test_handle_restore_all_or_nothing_each_failure_leaves_stores_byte_identical():
     good_doc = await _export_doc({
         "links": FakeStore({"slug:abc": b'{"slug": "abc"}', "all_links": b'["abc"]'}),

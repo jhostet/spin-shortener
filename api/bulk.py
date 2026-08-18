@@ -294,15 +294,10 @@ async def handle_bulk_create(store, principal, request, get_many, write):
             break
         created_records.append(record)
 
-    index_updated = True
-    if created_records:
-        try:
-            await links.add_slugs_to_indexes(
-                store, principal.username, [r["slug"] for r in created_records], write)
-        except kvretry.WriteFailed as exc:
-            index_updated = False
-            write_failure = write_failure or (exc, None, None)
-
+    # docs/plans/derived-link-indexes.md, Stage 2: no index write here any
+    # more — every record that landed is already listed, derived from the
+    # slug: key enumeration. A partial run's next step is always "resubmit":
+    # there is no index for a repair to fix.
     if write_failure is None:
         return json_response(201, {
             "count": len(created_records),
@@ -310,16 +305,14 @@ async def handle_bulk_create(store, principal, request, get_many, write):
         })
 
     exc, _, _ = write_failure
-    next_step = "consistency_repair" if not index_updated else "resubmit"
     return json_response(200, {
         "ok": False,
         "partial": True,
         "count": len(created_records),
         "links": [links.public_link(r) for r in created_records],
         "not_created": not_created,
-        "index_updated": index_updated,
         "write_error": kvretry.classify_write_error(exc.cause),
-        "next_step": next_step,
+        "next_step": "resubmit",
         "row_count": len(rows),
     })
 
@@ -403,8 +396,12 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
     applied: list[str] = []
     write_failure = None  # (exc,) of whichever write first failed
 
+    # docs/plans/derived-link-indexes.md, Stage 2: none of these six branches
+    # has an index step any more — there is no index. A record's existence is
+    # the only truth, so every interruption point below leaves exactly the
+    # records that landed, all of them listed, none of them advertised-but-
+    # missing.
     if action in ACTION_STATUSES:
-        # No index step: enable/disable are structurally incapable of drift.
         new_status = ACTION_STATUSES[action]
         now = iso_now()
         for slug, record in records.items():
@@ -416,9 +413,7 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
                 write_failure = (exc,)
                 break
             applied.append(slug)
-        index_updated = True
     elif action in ("tag", "untag"):
-        # No index step: tags live inside the record, not in a separate index.
         now = iso_now()
         for slug, record in records.items():
             if action == "tag":
@@ -432,14 +427,11 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
                 write_failure = (exc,)
                 break
             applied.append(slug)
-        index_updated = True
     elif action == "reassign":
-        # Records first, then the owner indexes — an interruption here leaves
-        # a duplicate (visible in both dashboards), never a disappearance.
+        # A pure record rewrite now — there is no owner index to move slugs
+        # between any more.
         now = iso_now()
-        slugs_by_old_owner: dict[str, list[str]] = {}
         for slug, record in records.items():
-            old_owner = record["owner"]
             record["owner"] = new_owner
             record["updated_at"] = now
             try:
@@ -447,32 +439,15 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
             except kvretry.WriteFailed as exc:
                 write_failure = (exc,)
                 break
-            slugs_by_old_owner.setdefault(old_owner, []).append(slug)
             applied.append(slug)
-        index_updated = True
-        if applied:
-            try:
-                await links.move_slugs_between_owners(store, slugs_by_old_owner, new_owner, write)
-            except kvretry.WriteFailed as exc:
-                index_updated = False
-                write_failure = write_failure or (exc,)
     else:  # delete
-        slugs_by_owner: dict[str, list[str]] = {}
-        for slug, record in records.items():
+        for slug in records:
             try:
                 await write(lambda s=slug: store.delete(f"slug:{s}"))
             except kvretry.WriteFailed as exc:
                 write_failure = (exc,)
                 break
-            slugs_by_owner.setdefault(record["owner"], []).append(slug)
             applied.append(slug)
-        index_updated = True
-        if applied:
-            try:
-                await links.remove_slugs_from_indexes(store, slugs_by_owner, write)
-            except kvretry.WriteFailed as exc:
-                index_updated = False
-                write_failure = write_failure or (exc,)
 
     if write_failure is None:
         result = {"ok": True, "action": action, "count": len(slugs)}
@@ -484,7 +459,6 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
 
     (exc,) = write_failure
     not_applied = [s for s in slugs if s not in applied]
-    next_step = "consistency_repair" if not index_updated else "resubmit"
     result = {
         "ok": False,
         "partial": True,
@@ -492,9 +466,8 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
         "count": len(applied),
         "applied": applied,
         "not_applied": not_applied,
-        "index_updated": index_updated,
         "write_error": kvretry.classify_write_error(exc.cause),
-        "next_step": next_step,
+        "next_step": "resubmit",
     }
     if action in ("tag", "untag"):
         result["tags"] = tag_list

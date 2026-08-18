@@ -1,9 +1,16 @@
-"""Unit tests for api/consistency.py's pure logic: each of the twelve checks
-in isolation, the three skip rules, the per-check cap, the all-clear state,
-the permission gate, and the credential-leak guarantee.
+"""Unit tests for api/consistency.py's pure logic: each of the six checks
+in isolation, the skip rule, the per-check cap, the all-clear state, the
+permission gate, and the credential-leak guarantee.
 
-Task-2's test_consistency_scenarios.py covers the same twelve checks again,
-but seeded through the real handlers (or FakeStores built the same way) and
+docs/plans/derived-link-indexes.md, Stage 2: six of the original twelve
+checks (everything about all_links/owner_links:<owner>) were retired along
+with the indexes they described, because links.py no longer writes either
+index — see consistency.py's module docstring. This file used to test all
+twelve; it now tests the six survivors plus the "leftover keys are known and
+inert" property that replaced them.
+
+Task-2's test_consistency_scenarios.py covers the same checks again, but
+seeded through the real handlers (or FakeStores built the same way) and
 asserting that every OTHER check stays at count 0 for that scenario — the
 "a checker that cries wolf is worse than none" property. This file is the
 narrower, faster unit layer: does each check fire correctly, in isolation,
@@ -39,15 +46,9 @@ def _by_id(checks):
 # --- CHECKS tuple ---
 
 
-def test_checks_tuple_has_the_twelve_ids_and_severities_in_order():
+def test_checks_tuple_has_the_six_ids_and_severities_in_order():
     assert consistency.CHECKS == (
-        ("unindexed_link", "warning"),
-        ("missing_link_record", "info"),
-        ("unindexed_owner_link", "warning"),
-        ("owner_index_mismatch", "warning"),
-        ("orphan_owner_index_entry", "info"),
         ("unknown_link_owner", "warning"),
-        ("dangling_owner_index", "warning"),
         ("unindexed_user", "warning"),
         ("missing_user_record", "info"),
         ("orphan_session", "warning"),
@@ -56,13 +57,8 @@ def test_checks_tuple_has_the_twelve_ids_and_severities_in_order():
     )
 
 
-def test_repairable_checks_is_exactly_the_eight_in_checks_order():
+def test_repairable_checks_is_exactly_the_three_in_checks_order():
     assert consistency.REPAIRABLE_CHECKS == (
-        "unindexed_link",
-        "missing_link_record",
-        "unindexed_owner_link",
-        "orphan_owner_index_entry",
-        "dangling_owner_index",
         "unindexed_user",
         "missing_user_record",
         "orphan_session",
@@ -83,28 +79,18 @@ def test_build_report_emits_repairable_checks():
 
 
 async def test_analyze_max_findings_none_returns_every_finding_uncapped():
-    links_data = {"all_links": _j([f"ghost{i}" for i in range(120)])}
-    links_store = FakeStore(links_data)
-    users_store = FakeStore({})
+    users_data = {"_meta:usernames": _j([f"ghost{i}" for i in range(120)])}
+    links_store = FakeStore({})
+    users_store = FakeStore(users_data)
     collected = await consistency.collect({"links": links_store, "users": users_store}, fake_list_keys, fake_get_many)
     checks, totals = consistency.analyze(collected, max_findings=None)
     by_id = _by_id(checks)
-    missing = by_id["missing_link_record"]
+    missing = by_id["missing_user_record"]
     assert missing["count"] == 120
     assert len(missing["findings"]) == 120
     assert missing["truncated"] is False
     assert all(not c["truncated"] for c in checks)
     assert totals["findings"] == 120
-
-
-async def test_collect_present_slugs_includes_unreadable_records():
-    collected = await consistency.collect(
-        {"links": FakeStore({"slug:bad": b"not-json", "slug:ok": _j({"owner": "carol"})}), "users": FakeStore({})},
-        fake_list_keys, fake_get_many,
-    )
-    assert collected["present_slugs"] == {"bad", "ok"}
-    # "bad" is present but unreadable, so it must NOT appear in link_records.
-    assert "bad" not in collected["link_records"]
 
 
 async def test_collect_sessions_by_username_groups_session_key_names():
@@ -122,94 +108,12 @@ async def test_collect_sessions_by_username_groups_session_key_names():
     assert sorted(collected["session_usernames"]) == ["carol", "nobody", "nobody"]
 
 
-# --- Each check, in isolation ---
-
-
-async def test_unindexed_link():
-    checks, totals = await _analyze(
-        links_data={
-            "slug:foo": _j({"owner": "carol"}),
-            "all_links": _j([]),
-            "owner_links:carol": _j(["foo"]),
-        },
-        users_data={"user:carol": _j({}), "_meta:usernames": _j(["carol"])},
-    )
-    by_id = _by_id(checks)
-    assert by_id["unindexed_link"]["count"] == 1
-    assert by_id["unindexed_link"]["findings"] == [{"slug": "foo", "owner": "carol"}]
-    assert totals["findings"] == 1
-
-
-async def test_missing_link_record():
-    checks, totals = await _analyze(links_data={"all_links": _j(["ghost"])})
-    by_id = _by_id(checks)
-    assert by_id["missing_link_record"]["count"] == 1
-    assert by_id["missing_link_record"]["findings"] == [{"slug": "ghost"}]
-    assert totals["findings"] == 1
-
-
-async def test_unindexed_owner_link():
-    checks, _ = await _analyze(
-        links_data={
-            "slug:spring-sale": _j({"owner": "carol"}),
-            "all_links": _j(["spring-sale"]),
-            "owner_links:carol": _j([]),  # drifted out
-        },
-        users_data={"user:carol": _j({}), "_meta:usernames": _j(["carol"])},
-    )
-    by_id = _by_id(checks)
-    assert by_id["unindexed_owner_link"]["count"] == 1
-    assert by_id["unindexed_owner_link"]["findings"] == [{"slug": "spring-sale", "owner": "carol"}]
-
-
-async def test_unindexed_owner_link_fires_when_index_key_absent_entirely():
-    checks, _ = await _analyze(
-        links_data={
-            "slug:spring-sale": _j({"owner": "carol"}),
-            "all_links": _j(["spring-sale"]),
-            # no owner_links:carol key at all
-        },
-        users_data={"user:carol": _j({}), "_meta:usernames": _j(["carol"])},
-    )
-    by_id = _by_id(checks)
-    assert by_id["unindexed_owner_link"]["count"] == 1
-
-
-async def test_owner_index_mismatch():
-    checks, _ = await _analyze(
-        links_data={
-            "slug:x": _j({"owner": "dave"}),
-            "all_links": _j(["x"]),
-            "owner_links:carol": _j(["x"]),
-            "owner_links:dave": _j(["x"]),
-        },
-        users_data={
-            "user:carol": _j({}), "user:dave": _j({}),
-            "_meta:usernames": _j(["carol", "dave"]),
-        },
-    )
-    by_id = _by_id(checks)
-    assert by_id["owner_index_mismatch"]["count"] == 1
-    assert by_id["owner_index_mismatch"]["findings"] == [
-        {"slug": "x", "indexed_under": "carol", "record_owner": "dave"}
-    ]
-    # dave's own index correctly lists x, so unindexed_owner_link stays clean.
-    assert by_id["unindexed_owner_link"]["count"] == 0
-
-
-async def test_orphan_owner_index_entry():
-    checks, _ = await _analyze(
-        links_data={"owner_links:carol": _j(["ghost"]), "all_links": _j([])},
-        users_data={"user:carol": _j({}), "_meta:usernames": _j(["carol"])},
-    )
-    by_id = _by_id(checks)
-    assert by_id["orphan_owner_index_entry"]["count"] == 1
-    assert by_id["orphan_owner_index_entry"]["findings"] == [{"slug": "ghost", "indexed_under": "carol"}]
+# --- Each surviving check, in isolation ---
 
 
 async def test_unknown_link_owner():
     checks, _ = await _analyze(
-        links_data={"slug:x": _j({"owner": "nobody"}), "all_links": _j(["x"])},
+        links_data={"slug:x": _j({"owner": "nobody"})},
         users_data={"_meta:usernames": _j([])},
     )
     by_id = _by_id(checks)
@@ -217,19 +121,21 @@ async def test_unknown_link_owner():
     assert by_id["unknown_link_owner"]["findings"] == [{"slug": "x", "owner": "nobody"}]
 
 
-async def test_dangling_owner_index():
+async def test_unknown_link_owner_derived_purely_from_records_no_index_involved():
+    """docs/plans/derived-link-indexes.md: this check no longer reads
+    all_links/owner_links: at all — a record naming an unknown owner fires
+    regardless of any index's state, including a leftover key that names
+    the record correctly."""
     checks, _ = await _analyze(
-        links_data={"owner_links:nobody": _j(["ghost"]), "all_links": _j([])},
+        links_data={
+            "slug:x": _j({"owner": "nobody"}),
+            "all_links": _j(["x"]),
+            "owner_links:nobody": _j(["x"]),
+        },
+        users_data={"_meta:usernames": _j([])},
     )
     by_id = _by_id(checks)
-    assert by_id["dangling_owner_index"]["count"] == 1
-    assert by_id["dangling_owner_index"]["findings"] == [{"username": "nobody", "slug_count": 1}]
-
-
-async def test_dangling_owner_index_never_fires_on_empty_index():
-    checks, _ = await _analyze(links_data={"owner_links:nobody": _j([])})
-    by_id = _by_id(checks)
-    assert by_id["dangling_owner_index"]["count"] == 0
+    assert by_id["unknown_link_owner"]["count"] == 1
 
 
 async def test_unindexed_user():
@@ -280,7 +186,6 @@ async def test_unreadable_value_slug_record_not_json():
     assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": "slug:bad"}]
     # The unreadable slug is excluded from every other check, not just noted.
     assert by_id["unknown_link_owner"]["count"] == 0
-    assert by_id["unindexed_link"]["count"] == 0
 
 
 async def test_unreadable_value_slug_record_missing_owner_field():
@@ -304,6 +209,55 @@ async def test_unrecognized_key_in_users_store():
     assert by_id["unrecognized_key"]["findings"] == [{"store": "users", "key": "junk"}]
 
 
+# --- Leftover all_links / owner_links:<U> — known and inert, never reported ---
+
+
+async def test_leftover_all_links_key_is_known_and_inert_not_unrecognized():
+    """docs/plans/derived-link-indexes.md, Stage 2: all_links is an inert
+    leftover key, not an unrecognized one — reporting it would fire on every
+    single run forever for any store that predates this change."""
+    checks, _ = await _analyze(links_data={"all_links": _j(["whatever", "garbage-too"])})
+    by_id = _by_id(checks)
+    assert by_id["unrecognized_key"]["count"] == 0
+    assert by_id["unreadable_value"]["count"] == 0
+
+
+async def test_leftover_all_links_key_ignored_even_when_unparseable():
+    """A leftover index key is never parsed at all any more, so even a
+    corrupted value must not be reported — there is nothing left that reads
+    it, so a corrupt value here can never affect anything."""
+    checks, _ = await _analyze(links_data={"all_links": b"not json at all"})
+    by_id = _by_id(checks)
+    assert by_id["unrecognized_key"]["count"] == 0
+    assert by_id["unreadable_value"]["count"] == 0
+
+
+async def test_leftover_owner_links_key_is_known_and_inert_not_unrecognized():
+    checks, _ = await _analyze(links_data={"owner_links:carol": _j(["ghost"])})
+    by_id = _by_id(checks)
+    assert by_id["unrecognized_key"]["count"] == 0
+    assert by_id["unreadable_value"]["count"] == 0
+
+
+async def test_healthy_store_with_leftover_index_keys_reports_ok_true():
+    """The plan's own worked example: a store with leftover all_links /
+    owner_links:<U> keys PLUS a healthy set of links reports ok: true with
+    every remaining check at count: 0."""
+    links_data = {
+        "slug:x": _j({"owner": "carol"}),
+        "slug:y": _j({"owner": "carol"}),
+        "all_links": _j(["x"]),  # leftover — stale, missing y, doesn't matter
+        "owner_links:carol": _j(["x", "y", "ghost-that-never-existed"]),  # leftover
+    }
+    users_data = {"user:carol": _j({}), "_meta:usernames": _j(["carol"])}
+    collected = await consistency.collect(
+        {"links": FakeStore(links_data), "users": FakeStore(users_data)}, fake_list_keys, fake_get_many)
+    checks, totals = consistency.analyze(collected)
+    report = consistency.build_report(checks, totals, collected["scanned"], generated_at="x", generated_by="admin")
+    assert report["ok"] is True
+    assert all(c["count"] == 0 for c in checks)
+
+
 # --- _meta:url_policy: a known shape, not an unrecognized key ---
 
 
@@ -324,21 +278,10 @@ async def test_url_policy_key_corrupted_reports_unreadable_value():
     assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": consistency.URL_POLICY_KEY}]
 
 
-# --- Skip rules ---
+# --- Skip rule ---
 
 
-async def test_all_links_unreadable_skips_checks_1_and_2():
-    checks, totals = await _analyze(links_data={"all_links": b"not-json", "slug:x": _j({"owner": "carol"})})
-    by_id = _by_id(checks)
-    assert by_id["unindexed_link"]["skipped"] is True
-    assert by_id["unindexed_link"]["count"] == 0
-    assert by_id["missing_link_record"]["skipped"] is True
-    assert by_id["missing_link_record"]["count"] == 0
-    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": "all_links"}]
-    assert totals["checks_skipped"] == 2
-
-
-async def test_meta_usernames_unreadable_skips_checks_8_and_9():
+async def test_meta_usernames_unreadable_skips_unindexed_user_and_missing_user_record():
     checks, totals = await _analyze(users_data={"_meta:usernames": b"not-json"})
     by_id = _by_id(checks)
     assert by_id["unindexed_user"]["skipped"] is True
@@ -347,36 +290,14 @@ async def test_meta_usernames_unreadable_skips_checks_8_and_9():
     assert totals["checks_skipped"] == 2
 
 
-async def test_unreadable_owner_links_excludes_only_that_owner_not_globally():
-    checks, totals = await _analyze(
-        links_data={
-            "owner_links:carol": b"not-json",
-            "slug:x": _j({"owner": "carol"}),
-            "slug:y": _j({"owner": "dave"}),
-            "all_links": _j(["x", "y"]),
-            "owner_links:dave": _j(["y"]),
-        },
-        users_data={"user:carol": _j({}), "user:dave": _j({}), "_meta:usernames": _j(["carol", "dave"])},
-    )
-    by_id = _by_id(checks)
-    # Carol's own drift can't be assessed (her index is unreadable), so she
-    # is excluded rather than reported as a false-positive storm.
-    assert by_id["unindexed_owner_link"]["count"] == 0
-    # dave is unaffected — his index is readable and correct.
-    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": "owner_links:carol"}]
-    # Not a global skip: no "skipped" check appears for this.
-    assert not any(c["skipped"] for c in checks)
-    assert totals["checks_skipped"] == 0
-
-
 # --- The cap ---
 
 
 async def test_cap_leaves_count_exact_and_sets_truncated():
-    links_data = {"all_links": _j([f"ghost{i}" for i in range(120)])}
-    checks, totals = await _analyze(links_data=links_data)
+    users_data = {"_meta:usernames": _j([f"ghost{i}" for i in range(120)])}
+    checks, totals = await _analyze(users_data=users_data)
     by_id = _by_id(checks)
-    missing = by_id["missing_link_record"]
+    missing = by_id["missing_user_record"]
     assert missing["count"] == 120
     assert missing["truncated"] is True
     assert len(missing["findings"]) == consistency.MAX_FINDINGS_PER_CHECK == 100
@@ -398,11 +319,7 @@ def test_build_report_sets_top_level_truncated_when_any_check_truncated():
 
 
 async def test_all_clear_on_a_healthy_store():
-    links_data = {
-        "slug:x": _j({"owner": "carol"}),
-        "all_links": _j(["x"]),
-        "owner_links:carol": _j(["x"]),
-    }
+    links_data = {"slug:x": _j({"owner": "carol"})}
     users_data = {"user:carol": _j({}), "_meta:usernames": _j(["carol"])}
     collected = await consistency.collect(
         {"links": FakeStore(links_data), "users": FakeStore(users_data)}, fake_list_keys, fake_get_many)
@@ -438,7 +355,7 @@ async def test_handle_consistency_ok_true_on_fresh_stores():
     body = json.loads(resp.body)
     assert body["ok"] is True
     assert body["format"] == "spin-shortener-consistency-report"
-    assert len(body["checks"]) == 12
+    assert len(body["checks"]) == 6
     assert body["totals"]["checks_skipped"] == 0
     assert body["max_findings_per_check"] == consistency.MAX_FINDINGS_PER_CHECK
 
@@ -461,19 +378,16 @@ async def test_handle_consistency_never_leaks_password_hash():
 
 
 async def test_handle_consistency_performs_zero_writes_over_a_store_with_real_drift():
-    """Seeds findings from at least four different checks (unindexed_link,
-    missing_link_record, dangling_owner_index, orphan_session) and exercises
-    `handle_consistency` against stores whose `set`/`delete` raise. If this
-    read-only handler ever gains a write, this test fails loudly instead of
-    the write silently landing.
+    """Seeds findings from at least two different checks (unknown_link_owner,
+    orphan_session) and exercises `handle_consistency` against stores whose
+    `set`/`delete` raise. If this read-only handler ever gains a write, this
+    test fails loudly instead of the write silently landing.
 
     Verified live during development that this actually guards something:
     temporarily adding `await links_store.set("probe", b"1")` inside
     `consistency.collect` makes this test FAIL (reverted before commit)."""
     links_store = WriteRaisingStore({
-        "slug:foo": _j({"owner": "carol"}),          # -> unindexed_link
-        "all_links": _j(["ghost"]),                   # -> missing_link_record
-        "owner_links:nobody": _j(["ghost2"]),         # -> dangling_owner_index
+        "slug:foo": _j({"owner": "nobody"}),          # -> unknown_link_owner
     })
     users_store = WriteRaisingStore({
         "session:tok1": _j({"username": "nobody", "csrf_token": "x"}),  # -> orphan_session
@@ -484,9 +398,7 @@ async def test_handle_consistency_performs_zero_writes_over_a_store_with_real_dr
     assert resp.status == 200
     body = json.loads(resp.body)
     by_id = _by_id(body["checks"])
-    assert by_id["unindexed_link"]["count"] >= 1
-    assert by_id["missing_link_record"]["count"] >= 1
-    assert by_id["dangling_owner_index"]["count"] >= 1
+    assert by_id["unknown_link_owner"]["count"] >= 1
     assert by_id["orphan_session"]["count"] >= 1
     assert body["ok"] is False
 

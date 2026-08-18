@@ -167,7 +167,7 @@ async def test_handle_orphan_report_requires_users_manage():
 
 
 async def test_handle_orphan_report_makes_exactly_two_kv_operations():
-    links_store = RecordingStore({"all_links": json.dumps(["keepme"]).encode("utf-8")})
+    links_store = RecordingStore({"slug:keepme": b"{}"})
     analytics_store = RecordingStore({
         "count:keepme:1": _count(3),
         "count:killme:1": _count(9),
@@ -178,15 +178,17 @@ async def test_handle_orphan_report_makes_exactly_two_kv_operations():
         links_store, analytics_store, _principal(), fake_list_keys,
     )
     assert resp.status == 200
-    # One get on the links store (all_links). fake_list_keys reads the store's
-    # keys directly rather than issuing a "get", matching the real list_keys
-    # callable's shape, so the one enumeration doesn't show up as a `get`.
-    assert links_store.ops == [("get", "all_links")]
+    # docs/plans/derived-link-indexes.md: liveness is a slug: key enumeration
+    # now, not a get of all_links. fake_list_keys reads the store's keys
+    # directly rather than issuing a "get", matching the real list_keys
+    # callable's shape, so the one enumeration doesn't show up as a `get`
+    # either — both stores' KV op is the same list_keys shape.
+    assert links_store.ops == []
     assert analytics_store.ops == []
 
 
 async def test_handle_orphan_report_names_orphans_and_excludes_live_slugs():
-    links_store = FakeStore({"all_links": json.dumps(["keepme"]).encode("utf-8")})
+    links_store = FakeStore({"slug:keepme": b"{}"})
     analytics_store = FakeStore({
         "count:keepme:1": _count(3),
         "count:killme:1": _count(9),
@@ -208,30 +210,26 @@ async def test_handle_orphan_report_names_orphans_and_excludes_live_slugs():
     assert "keepme" not in slugs_reported
 
 
-async def test_handle_orphan_report_fails_closed_on_unreadable_links_index():
-    links_store = FakeStore({"all_links": b"not json"})
-    analytics_store = FakeStore()
+async def test_handle_orphan_report_ignores_a_leftover_all_links_key():
+    """docs/plans/derived-link-indexes.md: all_links is an inert leftover
+    key now, not a maintained index. A present-but-garbage value must not
+    affect liveness at all (it isn't even read) or produce a 409 — that
+    whole failure mode (an unreadable index blocking the report) disappeared
+    with the index itself."""
+    links_store = FakeStore({"all_links": b"not json", "slug:keepme": b"{}"})
+    analytics_store = FakeStore({"count:killme:1": _count(9)})
     resp = await orphans_mod.handle_orphan_report(
         links_store, analytics_store, _principal(), fake_list_keys,
     )
-    assert resp.status == 409
-    assert json.loads(resp.body)["error"] == "links_index_unreadable"
-
-
-async def test_handle_orphan_report_fails_closed_when_index_is_not_a_list_of_strings():
-    """A value that parses as JSON but isn't a list of strings (e.g. an
-    object) must not silently succeed with wrong "live" membership."""
-    links_store = FakeStore({"all_links": json.dumps({"not": "a list"}).encode("utf-8")})
-    analytics_store = FakeStore()
-    resp = await orphans_mod.handle_orphan_report(
-        links_store, analytics_store, _principal(), fake_list_keys,
-    )
-    assert resp.status == 409
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    slugs_reported = [o["slug"] for o in body["orphans"]]
+    assert slugs_reported == ["killme"]
 
 
 async def test_handle_orphan_report_truncates_at_max_and_totals_stay_exact():
     slugs = [f"slug{i:04d}" for i in range(orphans_mod.MAX_ORPHAN_SLUGS_REPORTED + 5)]
-    links_store = FakeStore({"all_links": b"[]"})
+    links_store = FakeStore()
     analytics_store = FakeStore({f"count:{s}:1": _count(1) for s in slugs})
 
     resp = await orphans_mod.handle_orphan_report(

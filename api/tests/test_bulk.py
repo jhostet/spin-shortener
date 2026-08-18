@@ -245,9 +245,11 @@ async def test_bulk_create_success_shared_created_at_and_public_shape():
         assert "password_hash" not in link
         assert link["password_protected"] is False
 
-    all_slugs = await links.all_slugs(store)
-    assert set(all_slugs) == slugs
-    assert set(await links.owned_slugs(store, "alice")) == slugs
+    # docs/plans/derived-link-indexes.md, Stage 2: there is no index any
+    # more — a record's existence, and its own owner field, are the truth.
+    for slug in slugs:
+        record = json.loads(await store.get(f"slug:{slug}"))
+        assert record["owner"] == "alice"
 
 
 async def test_bulk_create_body_too_large_rejected():
@@ -354,7 +356,7 @@ async def test_bulk_create_invalid_batch_password_rejected_before_any_write():
     resp = await bulk.handle_bulk_create(store, _principal(), _request({"text": text, "password": "ab"}), fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_password"
-    assert await links.all_slugs(store) == []
+    assert store._data == {}  # nothing written at all (docs/plans/derived-link-indexes.md: no index to check either)
 
 
 async def test_bulk_create_invalid_window_range_rejected():
@@ -471,10 +473,13 @@ async def test_bulk_create_mixed_submission_custom_slug_forbidden_on_every_slugg
     assert body["error"] == "bulk_validation_failed"
     assert [e["line"] for e in body["row_errors"]] == [1, 3]
     assert all(e["error"] == "custom_slug_forbidden" for e in body["row_errors"])
-    assert await links.all_slugs(store) == []
+    assert store._data == {}  # nothing written at all (docs/plans/derived-link-indexes.md: no index to check either)
 
 
-async def test_bulk_create_writes_indexes_exactly_once(monkeypatch):
+async def test_bulk_create_ten_rows_performs_exactly_ten_kv_writes(monkeypatch):
+    """docs/plans/derived-link-indexes.md, Stage 2: no index writes any
+    more — 10 rows is exactly 10 record writes (12 before this change: 10
+    records + all_links + owner_links:alice)."""
     store = FakeStore()
     set_calls = []
     original_set = store.set
@@ -489,8 +494,9 @@ async def test_bulk_create_writes_indexes_exactly_once(monkeypatch):
     resp = await bulk.handle_bulk_create(store, _principal(), _request({"text": text}), fake_get_many, kvretry.direct)
     assert resp.status == 201
 
-    assert set_calls.count("all_links") == 1
-    assert set_calls.count("owner_links:alice") == 1
+    assert len(set_calls) == 10
+    assert "all_links" not in set_calls
+    assert "owner_links:alice" not in set_calls
 
 
 def _request_for_links(payload):
@@ -610,8 +616,6 @@ async def test_bulk_action_enable_disable_round_trip():
         record = json.loads(await store.get(f"slug:{slug}"))
         assert record["status"] == "disabled"
 
-    # Indexes are untouched by enable/disable.
-    assert set(await links.owned_slugs(store, "alice")) == {slug1, slug2}
 
     resp2 = await bulk.handle_bulk_action(
         store, FakeStore(), _principal(username="alice"), _action_request({"slugs": [slug1, slug2], "action": "enable"}), fake_get_many, kvretry.direct)
@@ -635,32 +639,39 @@ async def test_bulk_action_delete_cross_owner_by_edit_all_updates_both_owner_ind
 
     assert await store.exists(f"slug:{alice_slug}") is False
     assert await store.exists(f"slug:{bob_slug}") is False
-    assert alice_slug not in await links.owned_slugs(store, "alice")
-    assert bob_slug not in await links.owned_slugs(store, "bob")
-    assert await links.all_slugs(store) == []
+    # docs/plans/derived-link-indexes.md, Stage 2: no index to update, so
+    # deleting both records leaves the store empty.
+    assert store._data == {}
 
 
-async def test_bulk_action_delete_writes_indexes_exactly_once_per_owner(monkeypatch):
+async def test_bulk_action_delete_writes_exactly_one_delete_per_slug_no_index_writes(monkeypatch):
+    """docs/plans/derived-link-indexes.md, Stage 2: bulk delete no longer
+    writes any index — one `delete` per slug and zero `set` calls."""
     store = FakeStore()
     alice_slugs = [await _make_link(store, owner="alice") for _ in range(3)]
     bob_slugs = [await _make_link(store, owner="bob") for _ in range(2)]
 
     set_calls = []
-    original_set = store.set
+    delete_calls = []
+    original_set, original_delete = store.set, store.delete
 
     async def counting_set(key, value):
         set_calls.append(key)
         await original_set(key, value)
 
+    async def counting_delete(key):
+        delete_calls.append(key)
+        await original_delete(key)
+
     monkeypatch.setattr(store, "set", counting_set)
+    monkeypatch.setattr(store, "delete", counting_delete)
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
     resp = await bulk.handle_bulk_action(
         store, FakeStore(), editor, _action_request({"slugs": alice_slugs + bob_slugs, "action": "delete"}), fake_get_many, kvretry.direct)
     assert resp.status == 200
-    assert set_calls.count("all_links") == 1
-    assert set_calls.count("owner_links:alice") == 1
-    assert set_calls.count("owner_links:bob") == 1
+    assert set_calls == []
+    assert sorted(delete_calls) == sorted(f"slug:{s}" for s in alice_slugs + bob_slugs)
 
 
 # --- handle_bulk_action: tag / untag ---
@@ -894,13 +905,14 @@ async def test_bulk_action_reassign_skips_per_row_can_edit_but_keeps_not_found()
     assert record["owner"] == "alice"
 
 
-async def test_bulk_action_reassign_success_updates_owner_and_indexes_all_links_unchanged():
+async def test_bulk_action_reassign_success_updates_owner_field_only():
+    """docs/plans/derived-link-indexes.md, Stage 2: reassign is now a pure
+    record rewrite — no owner index to update, so no all_links key at all."""
     store = FakeStore()
     alice_slug = await _make_link(store, owner="alice")
     users_store = FakeStore()
     await _seed_user(users_store, "bob")
     manager = _principal(username="mgr", permissions=["users.manage"])
-    all_links_before = await store.get(links.ALL_SLUGS_INDEX_KEY)
 
     resp = await bulk.handle_bulk_action(
         store, users_store, manager,
@@ -911,12 +923,11 @@ async def test_bulk_action_reassign_success_updates_owner_and_indexes_all_links_
 
     record = json.loads(await store.get(f"slug:{alice_slug}"))
     assert record["owner"] == "bob"
-    assert alice_slug in await links.owned_slugs(store, "bob")
-    assert alice_slug not in await links.owned_slugs(store, "alice")
-    assert await store.get(links.ALL_SLUGS_INDEX_KEY) == all_links_before
+    assert "all_links" not in store._data
+    assert not any(k.startswith("owner_links:") for k in store._data)
 
 
-async def test_bulk_action_reassign_two_old_owners_updates_both_old_indexes_and_new_one():
+async def test_bulk_action_reassign_two_old_owners_updates_both_records():
     store = FakeStore()
     alice_slug = await _make_link(store, owner="alice")
     bob_slug = await _make_link(store, owner="bob")
@@ -931,9 +942,9 @@ async def test_bulk_action_reassign_two_old_owners_updates_both_old_indexes_and_
     body = json.loads(resp.body)
     assert body == {"ok": True, "action": "reassign", "count": 2, "owner": "carol"}
 
-    assert set(await links.owned_slugs(store, "carol")) == {alice_slug, bob_slug}
-    assert await links.owned_slugs(store, "alice") == []
-    assert await links.owned_slugs(store, "bob") == []
+    for slug in (alice_slug, bob_slug):
+        record = json.loads(await store.get(f"slug:{slug}"))
+        assert record["owner"] == "carol"
 
 
 async def test_bulk_action_delete_leaves_analytics_untouched():
@@ -971,40 +982,15 @@ async def test_bulk_action_delete_leaves_analytics_untouched():
 # --- Write-throttle resilience (docs/plans/write-throttle-resilience.md) ---
 
 
-async def test_bulk_create_throttled_index_write_yields_index_updated_false_but_every_record_written():
-    """A ThrottlingStore that fails ONLY the all_links write (persistently,
-    past INDEX_WRITE's 6-attempt budget) must still leave every record
-    written — this is the test that pins bulk.py actually threading `write`
-    down into add_slugs_to_indexes."""
-    from tests.fakes import recording_sleep
-
-    store = ThrottlingStore(fail_times={"all_links": 10})
-    sleep, _ = recording_sleep()
-    write = kvretry.make_writer(sleep)
-
-    text = "\n".join(f",https://example.com/{i}" for i in range(3))
-    resp = await bulk.handle_bulk_create(store, _principal(), _request({"text": text}), fake_get_many, write)
-
-    assert resp.status == 200
-    body = json.loads(resp.body)
-    assert body["ok"] is False
-    assert body["partial"] is True
-    assert body["count"] == 3
-    assert body["not_created"] == []
-    assert body["index_updated"] is False
-    assert body["write_error"] == "throttled"
-    assert body["next_step"] == "consistency_repair"
-
-    for link in body["links"]:
-        assert await store.exists(f"slug:{link['slug']}") is True
-
-
-async def test_bulk_create_throttled_32nd_record_write_indexes_exactly_what_landed():
-    """The headline scenario: the 32nd record write is throttled past
-    RECORD_WRITE's 3-attempt budget. The loop must abandon the remaining 19
-    rows, index exactly the 31 that landed, and a subsequent consistency
-    check must report ZERO unindexed_link findings — the fix is 'index what
-    landed', not 'retry harder'."""
+async def test_bulk_create_throttled_32nd_record_write_reports_exactly_what_landed():
+    """docs/plans/derived-link-indexes.md, Stage 2: there is no index write
+    left for this scenario to exercise (the whole class of test the old
+    test_bulk_create_throttled_index_write_... pinned no longer applies —
+    there is no index to fail to update). What remains is the record-write
+    retry: the 32nd record write is throttled past RECORD_WRITE's 3-attempt
+    budget, the loop abandons the remaining 19 rows, and every one of the 31
+    that landed is a real, independently-listed slug: record — nothing about
+    it depends on an index that no longer exists."""
     from tests.fakes import recording_sleep
 
     store = ThrottlingStore(fail_times={"slug:s32": 10})
@@ -1023,16 +1009,11 @@ async def test_bulk_create_throttled_32nd_record_write_indexes_exactly_what_land
     assert len(body["not_created"]) == 19
     assert all(row["error"] == "write_failed" for row in body["not_created"])
     assert body["not_created"][0] == {"line": 32, "slug": "s32", "error": "write_failed"}
-    assert body["index_updated"] is True
     assert body["next_step"] == "resubmit"
+    assert "index_updated" not in body
 
-    # No unindexed_link findings: the index describes exactly the 31 records
-    # that landed.
-    users_store = FakeStore()
-    collected = await consistency.collect({"links": store, "users": users_store}, fake_list_keys, fake_get_many)
-    checks, totals = consistency.analyze(collected)
-    unindexed = next(c for c in checks if c["check"] == "unindexed_link")
-    assert unindexed["count"] == 0
+    for link in body["links"]:
+        assert await store.exists(f"slug:{link['slug']}") is True
 
 
 async def test_bulk_create_all_writes_succeed_response_byte_identical_to_today():
@@ -1052,6 +1033,48 @@ async def test_bulk_create_all_writes_succeed_response_byte_identical_to_today()
     assert delays == []  # nothing ever retried
 
 
+async def test_bulk_create_single_row_performs_exactly_one_kv_write(monkeypatch):
+    """docs/plans/derived-link-indexes.md, Stage 2: a bulk create of one row
+    is exactly one KV write (the record) — there is no index write left."""
+    store = FakeStore()
+    set_calls = []
+    original_set = store.set
+
+    async def counting_set(key, value):
+        set_calls.append(key)
+        await original_set(key, value)
+
+    monkeypatch.setattr(store, "set", counting_set)
+
+    text = "ok-one,https://example.com/a\n"
+    principal = _principal(permissions=["links.create_custom_slug"])
+    resp = await bulk.handle_bulk_create(store, principal, _request({"text": text}), fake_get_many, kvretry.direct)
+    assert resp.status == 201
+    assert set_calls == ["slug:ok-one"]
+
+
+async def test_bulk_create_fifty_rows_performs_exactly_fifty_kv_writes(monkeypatch):
+    """docs/plans/derived-link-indexes.md, Stage 2: a 50-row bulk create is
+    exactly 50 KV writes (52 before this change: 50 records + all_links +
+    owner_links:<owner>)."""
+    store = FakeStore()
+    set_calls = []
+    original_set = store.set
+
+    async def counting_set(key, value):
+        set_calls.append(key)
+        await original_set(key, value)
+
+    monkeypatch.setattr(store, "set", counting_set)
+
+    text = "\n".join(f"s{i:02d},https://example.com/{i}" for i in range(1, 51))
+    principal = _principal(permissions=["links.create_custom_slug"])
+    resp = await bulk.handle_bulk_create(store, principal, _request({"text": text}), fake_get_many, kvretry.direct)
+    assert resp.status == 201
+    assert len(set_calls) == 50
+    assert sorted(set_calls) == sorted(f"slug:s{i:02d}" for i in range(1, 51))
+
+
 async def test_bulk_create_validation_still_all_or_nothing_writes_nothing():
     from tests.fakes import recording_sleep
 
@@ -1066,7 +1089,11 @@ async def test_bulk_create_validation_still_all_or_nothing_writes_nothing():
     assert store._data == {}
 
 
-async def test_bulk_action_delete_throttled_leaves_zero_missing_link_record_or_orphan_owner_index_entry():
+async def test_bulk_action_delete_throttled_leaves_the_undeleted_records_intact():
+    """docs/plans/derived-link-indexes.md, Stage 2: there is no index to
+    check for drift any more — what matters is that the records the loop
+    never reached are still there, byte-identical, and the ones it did
+    reach are gone."""
     from tests.fakes import recording_sleep
 
     store = ThrottlingStore()
@@ -1087,21 +1114,18 @@ async def test_bulk_action_delete_throttled_leaves_zero_missing_link_record_or_o
     assert body["action"] == "delete"
     assert set(body["applied"]) == {slugs[0], slugs[1]}
     assert set(body["not_applied"]) == {slugs[2], slugs[3]}
-    assert body["index_updated"] is True
     assert body["next_step"] == "resubmit"
+    assert "index_updated" not in body
 
-    users_store = FakeStore()
-    collected = await consistency.collect({"links": store, "users": users_store}, fake_list_keys, fake_get_many)
-    checks, totals = consistency.analyze(collected)
-    missing = next(c for c in checks if c["check"] == "missing_link_record")
-    orphan = next(c for c in checks if c["check"] == "orphan_owner_index_entry")
-    assert missing["count"] == 0
-    assert orphan["count"] == 0
+    assert await store.exists(f"slug:{slugs[0]}") is False
+    assert await store.exists(f"slug:{slugs[1]}") is False
+    assert await store.exists(f"slug:{slugs[2]}") is True
+    assert await store.exists(f"slug:{slugs[3]}") is True
 
 
-async def test_bulk_action_enable_disable_report_partial_with_index_updated_true():
-    """enable/disable have no index step, so a throttled write there is
-    structurally incapable of drift — index_updated must always be True."""
+async def test_bulk_action_enable_disable_report_partial_with_no_index_field():
+    """enable/disable never had an index step; Stage 2 just removes the
+    (always-true) index_updated field from the response entirely."""
     from tests.fakes import recording_sleep
 
     store = ThrottlingStore()
@@ -1118,12 +1142,12 @@ async def test_bulk_action_enable_disable_report_partial_with_index_updated_true
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["partial"] is True
-    assert body["index_updated"] is True
+    assert "index_updated" not in body
     assert body["applied"] == [slug1]
     assert body["not_applied"] == [slug2]
 
 
-async def test_bulk_action_tag_untag_report_partial_with_index_updated_true():
+async def test_bulk_action_tag_untag_report_partial_with_no_index_field():
     from tests.fakes import recording_sleep
 
     store = ThrottlingStore()
@@ -1140,7 +1164,7 @@ async def test_bulk_action_tag_untag_report_partial_with_index_updated_true():
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["partial"] is True
-    assert body["index_updated"] is True
+    assert "index_updated" not in body
     assert body["applied"] == [slug1]
     assert body["not_applied"] == [slug2]
     assert body["tags"] == ["sale"]

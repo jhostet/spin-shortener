@@ -794,10 +794,6 @@ async function handleBulkAction(action) {
     errorEl.textContent =
       `${verb} ${data.count} of ${slugs.length} links. The store was busy for the rest — ` +
       `they're still selected below so you can try again.`;
-    if (data.index_updated === false) {
-      errorsEl.innerHTML = renderIndexNotUpdatedWarning();
-      errorsEl.hidden = false;
-    }
     await loadLinks();
     narrowSelectionTo(data.not_applied || []);
     return;
@@ -855,10 +851,6 @@ async function handleBulkTag(action) {
     errorEl.textContent =
       `${verb} ${data.count} of ${slugs.length} links. The store was busy for the rest — ` +
       `they're still selected below so you can try again.`;
-    if (data.index_updated === false) {
-      errorsEl.innerHTML = renderIndexNotUpdatedWarning();
-      errorsEl.hidden = false;
-    }
     await loadLinks();
     narrowSelectionTo(data.not_applied || []);
     return;
@@ -913,10 +905,6 @@ async function handleBulkReassign() {
     errorEl.textContent =
       `Reassigned ${data.count} of ${slugs.length} links to "${owner}". The store was busy for the rest — ` +
       `they're still selected below so you can try again.`;
-    if (data.index_updated === false) {
-      errorsEl.innerHTML = renderIndexNotUpdatedWarning();
-      errorsEl.hidden = false;
-    }
     await loadLinks();
     narrowSelectionTo(data.not_applied || []);
     return;
@@ -946,19 +934,6 @@ const BULK_ROW_MESSAGES = {
   // / renderRowErrorList either way, no new function needed.
   write_failed: "The store was busy and this row wasn't written. Try again.",
 };
-
-// Shared by every bulk flow's `index_updated: false` branch
-// (docs/plans/write-throttle-resilience.md): the affected records exist and
-// resolve at /r/{slug}, they're just invisible in the dashboard until the
-// store's index is repaired. Renders through the existing .form-error class
-// — no new token, following DESIGN.md's decision not to invent a distinct
-// warning color for "needs attention but isn't broken".
-function renderIndexNotUpdatedWarning() {
-  const repairLink = canManageUsers()
-    ? ` <a href="admin/backup.html">Open Store maintenance to repair it.</a>`
-    : " Ask an administrator to run the store consistency repair (requires the users.manage permission).";
-  return `<p class="form-error">Some links are not yet listed in the dashboard. They work, but they're invisible here until the store index is repaired.${repairLink}</p>`;
-}
 
 // Mirrors api/bulk.py's MAX_BULK_BODY_BYTES so a large file can be rejected
 // before FileReader ever reads it. The server is authoritative — a drift
@@ -1076,7 +1051,7 @@ document.getElementById("bulk-form").addEventListener("submit", async (e) => {
       `Created ${data.count} of ${data.row_count} links. ${notCreated.length} row${notCreated.length === 1 ? "" : "s"} ` +
       `could not be written because the store was busy. The list below has been left as you submitted it — ` +
       `re-submit only the rows listed here.`;
-    errorsEl.innerHTML = renderBulkErrorTable(notCreated) + (data.index_updated === false ? renderIndexNotUpdatedWarning() : "");
+    errorsEl.innerHTML = renderBulkErrorTable(notCreated);
     errorsEl.hidden = false;
     loadLinks();
     return;

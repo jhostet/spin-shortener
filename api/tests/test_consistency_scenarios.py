@@ -1,22 +1,24 @@
-"""Seeds each of the twelve inconsistencies one at a time and asserts the
-endpoint reports exactly it — the "a checker that cries wolf on a healthy
-store is worse than none" property from docs/plans/kv-consistency-check.md.
+"""Seeds each of the six surviving inconsistencies one at a time and asserts
+the endpoint reports exactly it — the "a checker that cries wolf on a
+healthy store is worse than none" property from
+docs/plans/kv-consistency-check.md.
 
-Also carries the healthy-store test (built through the real handlers) and
-the motivating-case test: `unindexed_owner_link` is the check that detects
-the known hole in `users.handle_delete`'s index-read 409 gate, and this test
-pins both halves — the report shows the drift, and the deletion the gate was
-built to prevent still goes through.
+docs/plans/derived-link-indexes.md, Stage 2: six of the original twelve
+checks (everything about all_links/owner_links:<owner>) were retired along
+with the indexes they described, because links.py no longer writes either
+index — see consistency.py's module docstring. This file used to seed all
+twelve, including the "motivating case" (an owner_links: drift that used to
+hide a link from users.handle_delete's 409 gate) and the 2026-08-15
+throttled-index-write incident's repair. Both scenarios are gone along with
+the mechanism they exercised: the gate has derived ownership from records
+since Stage 1 regardless of any index's state, and a throttled bulk create
+can no longer produce index drift at all because there is no index write
+left to throttle (see api/bulk.py's write-abandonment comments). What
+replaces them here is the upgrade-path property Stage 2 introduces: a store
+carrying leftover, never-again-written index keys must still report ok: true
+alongside a healthy set of real links.
 
-One documented exception to "all eleven others stay at 0": `dangling_owner_index`
-(check 7) cannot be seeded in isolation. Its own definition — `owner_links:<U>`
-non-empty, `U` unknown — forces whatever slug it lists into exactly one of
-three states: no record at all (`orphan_owner_index_entry`), a record whose
-owner also happens to be `U` (`unknown_link_owner`), or a record owned by
-someone else (`owner_index_mismatch`). There is no fourth option, so one of
-those three checks always co-fires. This matches the plan's own live
-verification table, which pairs this exact seed with
-`orphan_owner_index_entry` for the same reason.
+Also carries the healthy-store test (built through the real handlers).
 """
 
 import json
@@ -24,7 +26,6 @@ import json
 import auth
 import bulk
 import consistency
-import consistencyrepair
 import kvretry
 import links
 import users
@@ -84,7 +85,7 @@ async def _report(links_store, users_store, principal=None) -> dict:
 
 def _assert_only_this_check_fired(report: dict, expect_check: str, also_expect: tuple[str, ...] = ()) -> dict:
     """Asserts `expect_check` (and, if given, the documented `also_expect`
-    companions) have findings, and every other one of the twelve is at 0."""
+    companions) have findings, and every other one of the six is at 0."""
     by_id = _by_id(report["checks"])
     exempt = {expect_check, *also_expect}
     for check_id in ALL_CHECK_IDS:
@@ -95,64 +96,7 @@ def _assert_only_this_check_fired(report: dict, expect_check: str, also_expect: 
     return by_id
 
 
-# --- One seed per check ---
-
-
-async def test_seed_unindexed_link():
-    links_store = FakeStore({
-        "slug:foo": _j({"owner": "carol"}),
-        "all_links": _j([]),
-        "owner_links:carol": _j(["foo"]),
-    })
-    users_store = FakeStore({"user:carol": _j({}), "_meta:usernames": _j(["carol"])})
-    report = await _report(links_store, users_store)
-    by_id = _assert_only_this_check_fired(report, "unindexed_link")
-    assert by_id["unindexed_link"]["findings"] == [{"slug": "foo", "owner": "carol"}]
-
-
-async def test_seed_missing_link_record():
-    links_store = FakeStore({"all_links": _j(["ghost"])})
-    users_store = FakeStore()
-    report = await _report(links_store, users_store)
-    by_id = _assert_only_this_check_fired(report, "missing_link_record")
-    assert by_id["missing_link_record"]["findings"] == [{"slug": "ghost"}]
-
-
-async def test_seed_unindexed_owner_link():
-    links_store = FakeStore({
-        "slug:spring-sale": _j({"owner": "carol"}),
-        "all_links": _j(["spring-sale"]),
-        "owner_links:carol": _j([]),
-    })
-    users_store = FakeStore({"user:carol": _j({}), "_meta:usernames": _j(["carol"])})
-    report = await _report(links_store, users_store)
-    by_id = _assert_only_this_check_fired(report, "unindexed_owner_link")
-    assert by_id["unindexed_owner_link"]["findings"] == [{"slug": "spring-sale", "owner": "carol"}]
-
-
-async def test_seed_owner_index_mismatch():
-    links_store = FakeStore({
-        "slug:x": _j({"owner": "dave"}),
-        "all_links": _j(["x"]),
-        "owner_links:carol": _j(["x"]),
-        "owner_links:dave": _j(["x"]),
-    })
-    users_store = FakeStore({
-        "user:carol": _j({}), "user:dave": _j({}), "_meta:usernames": _j(["carol", "dave"]),
-    })
-    report = await _report(links_store, users_store)
-    by_id = _assert_only_this_check_fired(report, "owner_index_mismatch")
-    assert by_id["owner_index_mismatch"]["findings"] == [
-        {"slug": "x", "indexed_under": "carol", "record_owner": "dave"}
-    ]
-
-
-async def test_seed_orphan_owner_index_entry():
-    links_store = FakeStore({"owner_links:carol": _j(["ghost"]), "all_links": _j([])})
-    users_store = FakeStore({"user:carol": _j({}), "_meta:usernames": _j(["carol"])})
-    report = await _report(links_store, users_store)
-    by_id = _assert_only_this_check_fired(report, "orphan_owner_index_entry")
-    assert by_id["orphan_owner_index_entry"]["findings"] == [{"slug": "ghost", "indexed_under": "carol"}]
+# --- One seed per surviving check ---
 
 
 async def test_seed_unknown_link_owner():
@@ -161,22 +105,6 @@ async def test_seed_unknown_link_owner():
     report = await _report(links_store, users_store)
     by_id = _assert_only_this_check_fired(report, "unknown_link_owner")
     assert by_id["unknown_link_owner"]["findings"] == [{"slug": "x", "owner": "nobody"}]
-
-
-async def test_seed_dangling_owner_index():
-    """See the module docstring: this check cannot be seeded without also
-    tripping exactly one of orphan_owner_index_entry / unknown_link_owner /
-    owner_index_mismatch, by construction. This seed (a dangling index
-    entry pointing at a slug with no record at all) is the one the plan's
-    own live verification table uses, and pairs it with the same companion."""
-    links_store = FakeStore({"owner_links:nobody": _j(["ghost"]), "all_links": _j([])})
-    users_store = FakeStore()
-    report = await _report(links_store, users_store)
-    by_id = _assert_only_this_check_fired(
-        report, "dangling_owner_index", also_expect=("orphan_owner_index_entry",)
-    )
-    assert by_id["dangling_owner_index"]["findings"] == [{"username": "nobody", "slug_count": 1}]
-    assert by_id["orphan_owner_index_entry"]["findings"] == [{"slug": "ghost", "indexed_under": "nobody"}]
 
 
 async def test_seed_unindexed_user():
@@ -275,10 +203,48 @@ async def test_healthy_store_through_real_handlers_reports_all_clear():
         assert check["skipped"] is False
 
 
-# --- The motivating case ---
+# --- The upgrade-path property Stage 2 introduces ---
 
 
-async def test_motivating_case_unindexed_owner_link_no_longer_lets_carol_be_deleted():
+async def test_healthy_store_with_leftover_index_keys_from_before_stage_2_reports_all_clear():
+    """docs/plans/derived-link-indexes.md, Stage 2's own worked example, built
+    through the real handlers rather than hand-constructed dicts (see
+    test_consistency.py for the unit-level version): a store that has
+    leftover all_links/owner_links:<U> keys from before this change landed —
+    never written to again, never cleaned up (the plan explicitly leaves them
+    in place as inert) — must still report ok: true once its links are
+    healthy. A store that predates Stage 2 is exactly this shape."""
+    links_store = FakeStore()
+    users_store = FakeStore()
+    admin = _principal("admin", role="admin")
+    await _make_user(users_store, admin, "carol")
+    carol = _principal("carol")
+
+    created = await links.handle_create(
+        links_store, carol, _links_request({"target_url": "https://example.com/spring-sale"}),
+    )
+    assert created.status == 201
+    slug = json.loads(created.body)["slug"]
+
+    # Simulate leftover pre-Stage-2 index keys: stale, inconsistent with the
+    # real record above, and never touched by any handler any more.
+    await links_store.set("all_links", _j(["some-other-slug-that-never-existed"]))
+    await links_store.set("owner_links:carol", _j([slug, "a-ghost-slug"]))
+
+    report = await _report(links_store, users_store, admin)
+    assert report["ok"] is True
+    for check in report["checks"]:
+        assert check["count"] == 0, check
+
+
+async def test_motivating_case_owner_index_drift_no_longer_hides_carol_from_the_delete_gate():
+    """The direct descendant of the old "motivating case" test. Before
+    docs/plans/derived-link-indexes.md's Stage 1, users.handle_delete's 409
+    gate read owner_links:<username> directly, so a drifted (or, since Stage
+    2, simply never-updated) index entry could hide a link from it entirely.
+    The gate now derives ownership from the records themselves
+    (links.slugs_owned_by) regardless of what any owner_links: key says —
+    including a leftover key that is flat-out wrong, as seeded here."""
     links_store = FakeStore()
     users_store = FakeStore()
     admin = _principal("admin", role="admin")
@@ -292,94 +258,18 @@ async def test_motivating_case_unindexed_owner_link_no_longer_lets_carol_be_dele
     assert created.status == 201
     slug = json.loads(created.body)["slug"]
 
-    # Drift: carol's record still names her as owner, but her own index no
-    # longer lists the slug (an interrupted write, or a KV-explorer edit).
-    # This USED to be the state users.handle_delete's 409 gate could not see,
-    # because that gate read only this index.
-    owned = json.loads(await links_store.get("owner_links:carol"))
-    assert slug in owned
-    await links_store.set("owner_links:carol", json.dumps([s for s in owned if s != slug]).encode("utf-8"))
+    # A leftover owner_links:carol key that names nothing at all — the exact
+    # shape Stage 2 leaves behind (nothing writes this key any more, so it
+    # simply never reflects the slug created above).
+    await links_store.set("owner_links:carol", _j([]))
 
+    # The consistency check no longer has any concept of this drift at all —
+    # the key is known-and-inert, never parsed, never reported.
     report = await _report(links_store, users_store)
-    by_id = _by_id(report["checks"])
-    assert by_id["unindexed_owner_link"]["count"] == 1
-    assert by_id["unindexed_owner_link"]["findings"] == [{"slug": slug, "owner": "carol"}]
+    assert report["ok"] is True
 
-    # INVERTED by docs/plans/derived-link-indexes.md's Stage 1, and this
-    # inversion is the whole point of that change. The gate now derives
-    # ownership from the RECORDS (links.slugs_owned_by) rather than reading
-    # the drifted `owner_links:carol` index, so the drift above no longer
-    # hides carol's link from it: she is correctly refused deletion, and the
-    # link she still owns cannot be orphaned by the very flow built to
-    # prevent orphans. Before Stage 1 this asserted 200 -- the gap.
-    #
-    # Note the consistency check above still reports `unindexed_owner_link`,
-    # because Stage 1 changes only the READ paths and the indexes are still
-    # written. That combination -- drift visible to the checker, invisible to
-    # behaviour -- is the expected Stage 1 state.
+    # And the gate still correctly refuses to delete carol, entirely from the
+    # record itself.
     resp = await users.handle_delete(users_store, links_store, admin, "carol", fake_list_keys, fake_get_many)
     assert resp.status == 409
     assert json.loads(resp.body)["error"] == "user_owns_links"
-
-
-# --- The 2026-08-15 throttled-write incident, and its repair ---------------
-
-
-def _j(obj) -> bytes:
-    return json.dumps(obj).encode("utf-8")
-
-
-def _repair_request(payload):
-    return Request(
-        method="POST", uri="/api/admin/consistency/repair", headers={},
-        body=json.dumps(payload).encode("utf-8"),
-    )
-
-
-async def test_the_2026_08_15_throttled_write_incident_repairs_in_two_writes():
-    """Reproduces the incident recorded in docs/plans/consistency-repair.md:
-    throttled index writes past Akamai's 50/s cap left 20 unindexed_link, 20
-    unindexed_owner_link, 152 missing_link_record and 152
-    orphan_owner_index_entry findings — 344 findings touching exactly two KV
-    keys (`all_links` and `owner_links:admin`), which is the whole reason a
-    repair here is cheap, bounded and safe."""
-    links_data = {"all_links": _j([f"ghost{i}" for i in range(152)])}
-    for i in range(20):
-        links_data[f"slug:extra{i}"] = _j({"owner": "admin"})
-    links_data["owner_links:admin"] = _j([f"gone{i}" for i in range(152)])
-    users_data = {"user:admin": _j({}), "_meta:usernames": _j(["admin"])}
-
-    links_store = FakeStore(links_data)
-    users_store = FakeStore(users_data)
-    admin = _principal("admin", role="admin")
-
-    report = await consistency.handle_consistency(
-        {"links": links_store, "users": users_store}, admin, fake_list_keys, fake_get_many)
-    assert report.status == 200
-    body = json.loads(report.body)
-    assert body["ok"] is False
-    by_id = _by_id(body["checks"])
-    assert by_id["unindexed_link"]["count"] == 20
-    assert by_id["unindexed_owner_link"]["count"] == 20
-    assert by_id["missing_link_record"]["count"] == 152
-    assert by_id["orphan_owner_index_entry"]["count"] == 152
-
-    repair_resp = await consistencyrepair.handle_repair(
-        {"links": links_store, "users": users_store}, admin,
-        _repair_request({
-            "confirm": "REPAIR",
-            "checks": ["unindexed_link", "missing_link_record", "unindexed_owner_link", "orphan_owner_index_entry"],
-        }),
-        fake_list_keys, fake_get_many, kvretry.direct)
-    assert repair_resp.status == 200
-    repair_body = json.loads(repair_resp.body)
-    assert repair_body["writes"] == 2
-    assert repair_body["complete"] is True
-
-    fresh_report = await consistency.handle_consistency(
-        {"links": links_store, "users": users_store}, admin, fake_list_keys, fake_get_many)
-    fresh_body = json.loads(fresh_report.body)
-    assert fresh_body["ok"] is True
-    assert len(fresh_body["checks"]) == 12
-    for check in fresh_body["checks"]:
-        assert check["count"] == 0, check

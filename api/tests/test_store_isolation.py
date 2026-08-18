@@ -271,10 +271,13 @@ async def test_inline_delete_purge_through_views_touches_only_the_deleted_slugs_
     for key, value in before_unrelated_links_and_analytics.items():
         assert physical._data.get(key) == value
 
-    # killme's record, index entries and analytics are all gone.
+    # killme's record and analytics are all gone. The leftover all_links/
+    # owner_links: keys are inert since docs/plans/derived-link-indexes.md's
+    # Stage 2 — handle_delete no longer touches either, so they stay exactly
+    # as seeded, stale and unread, rather than being corrected.
     assert "links:slug:killme" not in physical._data
-    assert physical._data["links:all_links"] == b'["keepme"]'
-    assert physical._data["links:owner_links:admin"] == b'["keepme"]'
+    assert physical._data["links:all_links"] == b'["killme", "keepme"]'
+    assert physical._data["links:owner_links:admin"] == b'["killme", "keepme"]'
     assert "analytics:count:killme:1" not in physical._data
     assert "analytics:count:killme:2" not in physical._data
     assert "analytics:events:killme:5" not in physical._data

@@ -1,6 +1,7 @@
 """Read-only KV consistency check: a two-store walk (links, users) that
-reports where the links index, the owner indexes, and the users index have
-drifted out of step with the records they're supposed to describe.
+reports where the users index and sessions have drifted out of step with
+the records they're supposed to describe, plus corrupt/unrecognized values
+in either store.
 
 Zero WASI SDK imports — `store` objects and the `list_keys` callable arrive
 as plain parameters, and `Response`/`json_response`/`iso_now` come from
@@ -8,12 +9,20 @@ as plain parameters, and `Response`/`json_response`/`iso_now` come from
 `CLAUDE.md`). `api/backup.py` is the model, line for line.
 
 It reports; it never repairs. See docs/plans/kv-consistency-check.md for the
-full design, the twelve checks' causes/effects/actions, and the rejected
-alternatives.
+original twelve-check design and docs/plans/derived-link-indexes.md for why
+six of them (every check about `all_links`/`owner_links:<owner>`) were
+retired: since that plan's Stage 2, links.py no longer writes either index at
+all — `GET /api/links` and every authoring handler derive slug lists and
+ownership from a `slug:` key enumeration instead (`links.enumerate_slugs`,
+`links.slugs_owned_by`) — so there is no index left for those six checks to
+find drifted. `unknown_link_owner` survives as the one remaining owner check:
+a record naming an owner with no user: record is still real drift, derived
+entirely from `link_records` with no index involved.
 
 A `user:` record's VALUE is never read here — only its key name — so this
-module can never hold a password_hash. Checks 6-9 need only the key names,
-and check 10 needs only the `username` field of a `session:` value.
+module can never hold a password_hash. The remaining checks need only key
+names (`unindexed_user`, `missing_user_record`) or the `username` field of a
+`session:` value (`orphan_session`).
 """
 
 import json
@@ -27,24 +36,25 @@ SCHEMA_VERSION = 1
 
 CONSISTENCY_STORES = ("links", "users")
 
-ALL_SLUGS_INDEX_KEY = "all_links"  # == links.ALL_SLUGS_INDEX_KEY
 USERNAMES_INDEX_KEY = "_meta:usernames"  # == auth.USERNAMES_INDEX_KEY
 BOOTSTRAPPED_KEY = "_meta:bootstrapped"  # == auth.BOOTSTRAPPED_KEY
 SLUG_PREFIX = "slug:"
-OWNER_LINKS_PREFIX = "owner_links:"  # == backup.OWNER_LINKS_PREFIX
 URL_POLICY_KEY = "_meta:url_policy"  # == urlpolicy.POLICY_KEY
 USER_PREFIX = "user:"  # == backup.USER_PREFIX
 SESSION_PREFIX = "session:"  # == auth.SESSION_PREFIX
 
+# docs/plans/derived-link-indexes.md, Stage 2: all_links and every
+# owner_links:<U> are inert leftover keys now, not a maintained index —
+# nothing writes them any more. They must be recognised as a KNOWN shape (the
+# same treatment _meta:bootstrapped already gets below) or they would report
+# as unrecognized_key on every single run, forever, on any store that was
+# ever used before this change landed. They are never parsed or acted on.
+ALL_SLUGS_INDEX_KEY = "all_links"  # leftover, inert — see module docstring
+OWNER_LINKS_PREFIX = "owner_links:"  # leftover, inert — see module docstring
+
 # Ordered. Every check appears in every report, at count 0 when clean.
 CHECKS: tuple[tuple[str, str], ...] = (
-    ("unindexed_link", "warning"),
-    ("missing_link_record", "info"),
-    ("unindexed_owner_link", "warning"),
-    ("owner_index_mismatch", "warning"),
-    ("orphan_owner_index_entry", "info"),
     ("unknown_link_owner", "warning"),
-    ("dangling_owner_index", "warning"),
     ("unindexed_user", "warning"),
     ("missing_user_record", "info"),
     ("orphan_session", "warning"),
@@ -53,19 +63,17 @@ CHECKS: tuple[tuple[str, str], ...] = (
 )
 
 
-# The eight checks with exactly one safe, derivable, automatic repair, in
+# The three checks with exactly one safe, derivable, automatic repair, in
 # CHECKS order — consistencyrepair.py's whole mandate. Named here, not in the
 # repairing module, so `build_report` can publish it without `consistency`
 # importing its repairing sibling (which imports `consistency`). See
 # docs/plans/consistency-repair.md for the per-check verdict and why the
-# other four (owner_index_mismatch, unknown_link_owner, unreadable_value,
-# unrecognized_key) are never repaired.
+# other three (unknown_link_owner, unreadable_value, unrecognized_key) are
+# never repaired. The five index-repair branches this list used to name
+# (unindexed_link, missing_link_record, unindexed_owner_link,
+# orphan_owner_index_entry, dangling_owner_index) were deleted along with the
+# checks and the indexes they repaired — docs/plans/derived-link-indexes.md.
 REPAIRABLE_CHECKS: tuple[str, ...] = (
-    "unindexed_link",
-    "missing_link_record",
-    "unindexed_owner_link",
-    "orphan_owner_index_entry",
-    "dangling_owner_index",
     "unindexed_user",
     "missing_user_record",
     "orphan_session",
@@ -140,17 +148,12 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
 
         {
           "link_records": {slug: {"owner": str}},   # parsed slug:<slug> records
-          "all_links": list[str] | None,            # None only if unreadable
-          "owner_index": {username: list[str]},     # readable owner_links: only
-          "unreadable_owners": set[str],             # owner_links: that failed
           "usernames": list[str] | None,            # None only if unreadable
           "user_records": set[str],                 # from user: KEY NAMES only
           "session_usernames": list[str],           # from session: values
           "sessions_by_username": {username: [session KEY names]},
           "unreadable": [{"store": str, "key": str}],
           "unrecognized": [{"store": str, "key": str}],
-          "present_slugs": set[str],                # every slug: key name seen,
-                                                      # readable or not
           "scanned": {...},
         }
 
@@ -158,12 +161,10 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     `unreadable` and the key is excluded from everything else. A diagnostic
     that 500s on a broken store fails exactly when it is needed.
 
-    An absent index key (`all_links`, `_meta:usernames`, or a given
-    `owner_links:<U>`) is treated as an empty list, not as unreadable — a
-    missing index is real drift the checks below must still report (e.g.
-    `unindexed_link` for every record when `all_links` was never written at
-    all), whereas a present-but-malformed value can't be trusted for any
-    check that depends on it, so those checks are skipped instead.
+    An absent index key (`_meta:usernames`) is treated as an empty list, not
+    as unreadable — a missing index is real drift `unindexed_user`/
+    `missing_user_record` must still report, whereas a present-but-malformed
+    value can't be trusted for either check, so both are skipped instead.
 
     A `user:` record's VALUE is never read — only its key name — so this
     function can never hold a password_hash.
@@ -172,12 +173,8 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     users_store = stores_by_name["users"]
 
     link_records: dict[str, dict] = {}
-    all_links: list[str] | None = []
-    owner_index: dict[str, list[str]] = {}
-    unreadable_owners: set[str] = set()
     unreadable: list[dict] = []
     unrecognized: list[dict] = []
-    present_slugs: set[str] = set()
 
     links_keys = await list_keys(links_store)
     # One get_many host call for the whole store (docs/plans/batch-kv-reads.md,
@@ -189,42 +186,27 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     # unreadable.
     links_values = await get_many(links_store, links_keys)
     slug_count = 0
-    owner_index_count = 0
     for key in links_keys:
-        if key == ALL_SLUGS_INDEX_KEY:
-            raw = links_values[key]
-            parsed = parse_str_list(raw)
-            if raw is not None and parsed is None:
-                unreadable.append({"store": "links", "key": key})
-                all_links = None
-            elif parsed is not None:
-                all_links = parsed
+        if key == ALL_SLUGS_INDEX_KEY or key.startswith(OWNER_LINKS_PREFIX):
+            # docs/plans/derived-link-indexes.md, Stage 2: known-and-inert,
+            # the same treatment BOOTSTRAPPED_KEY gets below. Never parsed,
+            # never reported — reporting it as unrecognized_key would fire on
+            # every single run forever for any store that predates this
+            # change, and there is nothing left that could act on its content.
+            continue
         elif key.startswith(SLUG_PREFIX):
             slug_count += 1
             slug = key[len(SLUG_PREFIX):]
-            present_slugs.add(slug)  # readable or not — see consistencyrepair.py's
-            # present_slugs guard: a corrupt-but-present record must never be
-            # treated as absent by a removal repair.
             raw = links_values[key]
             record = _parse_link_record(raw)
             if raw is not None and record is None:
                 unreadable.append({"store": "links", "key": key})
             elif record is not None:
                 link_records[slug] = record
-        elif key.startswith(OWNER_LINKS_PREFIX):
-            owner_index_count += 1
-            username = key[len(OWNER_LINKS_PREFIX):]
-            raw = links_values[key]
-            parsed = parse_str_list(raw)
-            if raw is not None and parsed is None:
-                unreadable.append({"store": "links", "key": key})
-                unreadable_owners.add(username)
-            elif parsed is not None:
-                owner_index[username] = parsed
         elif key == URL_POLICY_KEY:
             # Known shape. Parsed only far enough to report a corrupted
             # policy as unreadable_value — no new check id, and no field of
-            # it is needed by any of the twelve.
+            # it is needed by any of the remaining checks.
             raw = links_values[key]
             if raw is not None and _parse_policy(raw) is None:
                 unreadable.append({"store": "links", "key": key})
@@ -278,18 +260,14 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
 
     return {
         "link_records": link_records,
-        "all_links": all_links,
-        "owner_index": owner_index,
-        "unreadable_owners": unreadable_owners,
         "usernames": usernames,
         "user_records": user_records,
         "session_usernames": session_usernames,
         "sessions_by_username": sessions_by_username,
         "unreadable": unreadable,
         "unrecognized": unrecognized,
-        "present_slugs": present_slugs,
         "scanned": {
-            "links": {"keys": len(links_keys), "records": slug_count, "owner_indexes": owner_index_count},
+            "links": {"keys": len(links_keys), "records": slug_count},
             "users": {"keys": len(users_keys), "records": user_count, "sessions": session_count},
         },
     }
@@ -303,7 +281,7 @@ def _finding_sort_key(finding: dict) -> tuple[str, str, str]:
 
 def analyze(collected: dict, max_findings: int | None = MAX_FINDINGS_PER_CHECK) -> tuple[list[dict], dict]:
     """Pure. Returns (checks, totals). One entry per CHECKS member, always
-    all twelve, in CHECKS order, each
+    all six, in CHECKS order, each
     {"check", "severity", "count", "truncated", "skipped", "findings"}.
     Findings are sorted deterministically and capped at `max_findings` while
     `count` stays the true, untruncated total.
@@ -315,9 +293,6 @@ def analyze(collected: dict, max_findings: int | None = MAX_FINDINGS_PER_CHECK) 
     every finding, not just the first `MAX_FINDINGS_PER_CHECK` of each check
     (see docs/plans/consistency-repair.md, rejected alternative #10)."""
     link_records: dict[str, dict] = collected["link_records"]
-    all_links: list[str] | None = collected["all_links"]
-    owner_index: dict[str, list[str]] = collected["owner_index"]
-    unreadable_owners: set[str] = collected["unreadable_owners"]
     usernames: list[str] | None = collected["usernames"]
     user_records: set[str] = collected["user_records"]
     session_usernames: list[str] = collected["session_usernames"]
@@ -325,74 +300,33 @@ def analyze(collected: dict, max_findings: int | None = MAX_FINDINGS_PER_CHECK) 
     findings_by_check: dict[str, list[dict]] = {check_id: [] for check_id, _ in CHECKS}
     skipped: set[str] = set()
 
-    links_index_skipped = all_links is None
-    if links_index_skipped:
-        skipped.add("unindexed_link")
-        skipped.add("missing_link_record")
-
     users_index_skipped = usernames is None
     if users_index_skipped:
         skipped.add("unindexed_user")
         skipped.add("missing_user_record")
 
-    # 1. unindexed_link
-    if not links_index_skipped:
-        all_links_set = set(all_links)
-        for slug, record in link_records.items():
-            if slug not in all_links_set:
-                findings_by_check["unindexed_link"].append({"slug": slug, "owner": record["owner"]})
-
-    # 2. missing_link_record
-    if not links_index_skipped:
-        for slug in all_links:
-            if slug not in link_records:
-                findings_by_check["missing_link_record"].append({"slug": slug})
-
-    # 3. unindexed_owner_link — excludes records whose owner has no user:
-    # record (that's check 6) and any owner whose own index was unreadable.
-    for slug, record in link_records.items():
-        owner = record["owner"]
-        if owner in unreadable_owners or owner not in user_records:
-            continue
-        if slug not in owner_index.get(owner, []):
-            findings_by_check["unindexed_owner_link"].append({"slug": slug, "owner": owner})
-
-    # 4. owner_index_mismatch, 5. orphan_owner_index_entry
-    for owner, slugs in owner_index.items():
-        for slug in slugs:
-            record = link_records.get(slug)
-            if record is None:
-                findings_by_check["orphan_owner_index_entry"].append({"slug": slug, "indexed_under": owner})
-            elif record["owner"] != owner:
-                findings_by_check["owner_index_mismatch"].append(
-                    {"slug": slug, "indexed_under": owner, "record_owner": record["owner"]}
-                )
-
-    # 6. unknown_link_owner
+    # 1. unknown_link_owner — the one surviving owner check. Derived entirely
+    # from link_records, with no index involved: a record naming an owner
+    # with no user: record is real drift regardless of any index's state.
     for slug, record in link_records.items():
         owner = record["owner"]
         if owner not in user_records:
             findings_by_check["unknown_link_owner"].append({"slug": slug, "owner": owner})
 
-    # 7. dangling_owner_index — never an empty index key, by design.
-    for owner, slugs in owner_index.items():
-        if owner not in user_records and slugs:
-            findings_by_check["dangling_owner_index"].append({"username": owner, "slug_count": len(slugs)})
-
-    # 8. unindexed_user
+    # 2. unindexed_user
     if not users_index_skipped:
         usernames_set = set(usernames)
         for username in user_records:
             if username not in usernames_set:
                 findings_by_check["unindexed_user"].append({"username": username})
 
-    # 9. missing_user_record
+    # 3. missing_user_record
     if not users_index_skipped:
         for username in usernames:
             if username not in user_records:
                 findings_by_check["missing_user_record"].append({"username": username})
 
-    # 10. orphan_session — grouped by username, the token is never emitted.
+    # 4. orphan_session — grouped by username, the token is never emitted.
     session_counts: dict[str, int] = {}
     for username in session_usernames:
         if username not in user_records:
@@ -400,11 +334,11 @@ def analyze(collected: dict, max_findings: int | None = MAX_FINDINGS_PER_CHECK) 
     for username, count in session_counts.items():
         findings_by_check["orphan_session"].append({"username": username, "session_count": count})
 
-    # 11. unreadable_value
+    # 5. unreadable_value
     for entry in collected["unreadable"]:
         findings_by_check["unreadable_value"].append(dict(entry))
 
-    # 12. unrecognized_key
+    # 6. unrecognized_key
     for entry in collected["unrecognized"]:
         findings_by_check["unrecognized_key"].append(dict(entry))
 
