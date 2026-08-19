@@ -2199,117 +2199,6 @@ links, 37 analytics keys, 0 orphan slugs, `ok: true`**.
 
 ---
 
-# START HERE — session handoff, 2026-08-17
-
-**Read this section first; it is the most recent state of the world.** Everything above is
-history. Written deliberately at a session boundary, so nothing below assumes context you do not
-have.
-
-## Where things stand
-
-- **Repo:** `main` clean. **Deployed:** `188a11d-cleanup`.
-- **HEAD is NOT live — one behaviour change is waiting for the next deploy, by decision.**
-  `d055e41` ("Stop re-fetching click totals on every dashboard mutation") is committed, tested and
-  browser-verified locally but **deliberately not deployed on its own**: it is a `gui/`-only change,
-  so it is correct on disk and simply does not reach the live dashboard until something else ships.
-  **Fold it into the next deploy rather than deploying it alone** — that was the explicit call, not
-  an oversight. The other two undeployed commits (`8148975`, `3221cfc`) are TASKS.md-only and carry
-  no runtime change at all. Nothing here is urgent: the live build is fully functional, it just
-  re-fetches click totals on dashboard mutations, which is a cost rather than a defect.
-- **Whenever that next deploy happens**, the one thing worth re-checking in the browser afterwards
-  is the measured result this change is about: an initial dashboard load should issue exactly one
-  `GET /api/analytics/click-totals`, and a bulk create / disable / tag should issue none.
-- **The link indexes are GONE.** `all_links` and `owner_links:<owner>` are no longer written or
-  read; a record's existence is the only truth. Stages 1 and 2 of
-  `docs/plans/derived-link-indexes.md` both shipped, deployed and traced — see
-  `### STAGE 2 DEPLOYED AND TRACED (2026-08-18)` above for the measurements.
-- **Store:** clean and back at baseline — 14 links, 37 analytics keys, 0 orphan slugs,
-  `GET /api/admin/consistency` returns `ok: true` with zero findings, over **6** checks (was 12)
-  and **3** repairable ones (was 8).
-- **Two instructions below this line are now OBSOLETE and are left only because the sections they
-  sit in are historical record:** deleting junk links no longer needs to be *paced* (concurrent
-  bulk deletes were measured clean on 2026-08-18), and a concurrent bulk run no longer produces
-  `unindexed_link` findings to repair afterwards.
-
-## What the trace settled, and what it opened
-
-**Settled:** retry works on the deployed build (`write_retry=3–4`, `write_failed=1` per request),
-the bare `500` is gone (six concurrent 50-row creates all returned `200` with `"partial": true`),
-and timing beat the model by ~8× (1.07–1.40 s handler against a modelled ~11.2 s worst case).
-
-**Opened, and this is the finding that matters:** the claim "a throttled bulk run leaves zero
-`unindexed_link`" is **false under concurrency, for a reason that has nothing to do with
-throttling.** A control run of 4 concurrent 5-row creates — ~28 writes, far under the 50/s cap,
-four clean `201`s, **zero retries and zero write failures** — still left 5 `unindexed_link`.
-`links:all_links` is a read-modify-write with no compare-and-swap, so concurrent requests clobber
-each other's index additions. **Retry cannot touch this and neither can any `kvretry` constant.**
-Two new Future-work entries carry it: the lost-update race itself (with four uncosted options),
-and the separate `write_error=other` observability gap (Akamai's real write-failure message is
-unknown and nothing logs it).
-
-**The reproduction is committed, not left in a temp dir:** `dev/bulk-concurrent.sh <requests>
-<rows> <prefix>`, alongside `dev/click-load.sh` and carrying the same kind of warning header. It
-logs in, sends `X-CSRF-Token` and `X-SS-Debug`, prints each response's
-`partial`/`count`/`index_updated`/`write_error` plus `Server-Timing`, and tells you which regime
-you are in (`6 50` crosses the cap and exercises retry; `4 5` stays under it and isolates the lost
-update). **Run both before concluding anything about drift** — that is the mistake this whole
-section exists to prevent. Read the log lines back with
-`spin aka logs --app-name "$APP_NAME" --since 15m -n 200 | grep -o 'ss comp=api[^"]*'`.
-
-**Cleanup after any such run, and note the pleasing symmetry:** delete the junk links *paced*
-(sequential batches — a concurrent burst is what causes the drift, now proven rather than
-suspected), then `POST /api/admin/consistency/repair` with
-`{"checks":[...],"confirm":"REPAIR"}` for anything left, and confirm `ok: true`. The tool built to
-fix the original incident is what cleans up after its own test — it fixed 65 findings in 2 writes.
-
-## Deploying (for reference — deploys are the user's call)
-
-Variables live in the operator's chmod-600 file outside the repo — see the
-`deploy-secrets-location` memory; read it, do not re-ask for the values. All five must be
-re-supplied every time or the omitted one silently reverts to its `spin.toml` default (the
-`public_base_urls` → `localhost` trap):
-
-```
-spin aka app deploy --app-id "$APP_ID" --build --no-confirm \
-  --variable admin_bootstrap_password="$SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD" \
-  --variable cookie_secure=true \
-  --variable public_base_urls="$APP_URL" \
-  --variable log_debug_token="$SPIN_VARIABLE_LOG_DEBUG_TOKEN" \
-  --variable app_version=<sha>-<label>
-```
-
-**The CLI will exit 1 with `failed to wait for deployment to go live`. That is a FALSE NEGATIVE
-and has been on every deploy this month, including 2026-08-17's — do NOT redeploy.** Poll instead
-until `curl -sI "$APP_URL/" | grep -i x-ss-version` reports the label you passed; it took **100 s**
-on 2026-08-17, consistent with the 100–120 s seen before. A request made during that window
-returns the OLD build and will mislead you.
-
-Then verify, in this order: login works (`admin_bootstrap_password` survived), `/api/auth/me`
-reports the real `fwf.app` domain and **no `localhost`** (`public_base_urls` survived), and
-`GET /api/links` returns 200.
-
-## Other work that is decided but NOT built
-
-- **Stop re-fetching click totals on mutation-driven dashboard reloads.** Decided 2026-08-12
-  (leave decoupled, add **no** refresh control) and **never implemented** — `loadLinks()` in
-  `gui/dashboard.js` still calls `loadClickTotals()` unconditionally, so all nine mutation call
-  sites re-pay a full-store enumeration plus the whole read fan-out for data that provably cannot
-  have changed. The task line and its verification step are both still open above.
-
-## Standing rules worth carrying over
-
-- **Deploys are the user's call.** Do not deploy without being asked.
-- **The `fwf.app` deployment is a disposable test site** — reshape its data freely for
-  measurements; the caution costs accuracy. See the `deployed-app-is-a-test-site` memory.
-- **Seeding links alone measures nothing about analytics** — an unclicked link creates no count
-  keys. Seed *clicks*. A 9,000-link run once reported a false all-clear this way.
-- **A module in the venv proves nothing about the built component.** componentize-py bundles only
-  what a **module-scope** import reaches; a function-scoped import fails with a bare
-  `ModuleNotFoundError` that reads like "unsupported". This produced one published-and-retracted
-  conclusion already.
-- **Editing anything under `gui/` requires restarting `spin up`** — `spin_static_fs` serves a
-  startup snapshot, and a correct fix will keep reproducing the old error at the old line numbers.
-
 ## Derived link indexes (fixing the concurrent index lost update)
 
 Plan: `docs/plans/derived-link-indexes.md`. Fixes the lost update measured on
@@ -2772,3 +2661,113 @@ Store returned to baseline: 14 links, 37 analytics keys, 0 orphan slugs, `ok: tr
 - [x] Re-measure the click-loss knee on a deployed build carrying the change — **DONE 2026-08-18 on `43d66c6-no-events`. The prediction held: the knee moved from ~25 to ~50 clicks/second.** See the results section below. — file(s): (none — measurement step) — done when: the same four rates from the baseline task are re-run against the deployed build, the new knee is recorded beside the baseline in that task line, and an X-SS-Debug trace of one /r/{slug} shows set=1 with kv_ops=5 (2 open, 2 get, 1 set) against 6 before — **BLOCKED: requires `spin aka app deploy`, which is a deploy action explicitly outside the builder's authority for this task. Left unticked pending explicit user authorization to deploy. Everything else in this plan is implemented and verified locally (redirect Go tests + mutation check, API/gui-pages pytest suites, and a full spin up --build end-to-end run); this is the only remaining item and it requires the user's go-ahead.**
 - [x] End-to-end manual verification of the dropped events write — file(s): (none — verification step) — done when: against spin up --build with NO --runtime-config-file (so KV persists to .spin/sqlite_key_value.db), a freshly created link clicked 10 times yields only analytics:count: keys and zero analytics:events: keys in that database, GET /api/links/{slug}/analytics returns total and days with no recent_events key, and links/detail.html renders a full-width Clicks per day table with no Recent events heading and a clean browser console — **note: deleted a stale .spin/sqlite_key_value.db from a prior session first, and had to kill a leftover `spin trigger http --runtime-config-file` process squatting on :3000 from an earlier round before this one could bind. Ran `spin up --build` (no --runtime-config-file) with SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD/SPIN_VARIABLE_COOKIE_SECURE=false. Logged in via the real login FORM (both via curl POST /api/auth/login for the API checks and via Playwright filling #username/#password and clicking Log in for the browser check — never a raw fetch). Created link slug S9WrXUC, clicked /r/S9WrXUC 10 times (all 302), sqlite query showed exactly 10 `analytics:count:S9WrXUC:<shard>` rows and ZERO `analytics:events:` rows. GET /api/links/S9WrXUC/analytics returned exactly {"total":10,"days":{"2026-08-18":10}} — no recent_events key at all. GET /api/admin/analytics/orphans showed obsolete_event_keys:0 (this fresh store never had any). Playwright snapshot of links/detail.html confirmed a single full-width "Clicks per day" table (10 clicks, Aug 18 2026), no "Recent events" heading, accuracy hint reads "roughly 50 clicks per second", and browser_console_messages reported 0 errors/0 warnings.**
 
+
+---
+
+# START HERE — session handoff, 2026-08-18
+
+**Read this section first. It is the end of the file and the most recent state of the world;
+everything above is history.** The previous handoff was stranded mid-file when later sections were
+appended after it — if you add a section, add it ABOVE this one.
+
+## Where things stand
+
+- **Repo:** `main` clean, HEAD = `fd8e299`, everything pushed.
+- **Deployed:** `43d66c6-no-events`. **Two commits are undeployed and neither carries a runtime
+  change** — `e53b8b4` and `fd8e299` are both TASKS.md-only measurement write-ups. There is
+  nothing waiting to ship.
+- **Store:** baseline — 14 links, 37 analytics keys (**32 of them leftover `events:` keys** from
+  before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless),
+  0 orphan slugs, `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable.
+
+## What shipped this session, in order
+
+1. **Write-throttle resilience** deployed and traced. Retry works; the bare `500` is gone.
+2. **Derived link indexes, Stages 1 and 2** (`docs/plans/derived-link-indexes.md`). `all_links` and
+   `owner_links:<owner>` are **gone** — not merely untrusted. A record's existence is the only
+   truth. Concurrent bulk creates went from 10-of-20 links invisible to a clean store.
+3. **Cleanup batch**: `kv_ops` no longer counts memoized cache hits; `MAX_TARGET_URL_BYTES = 4096`
+   at all three authoring paths.
+4. **Click-totals decoupling** — mutations no longer re-fetch totals (4 requests → 1 per session).
+5. **Dropped the recent-events write** (`docs/plans/drop-events-write.md`). One KV write per click.
+   **Measured: the click ceiling doubled from ~25 to ~50 clicks/second.**
+
+## The two things most worth knowing
+
+**1. There is an open correctness bug, filed but not fixed.** Above ~700 req/s, live links return
+**404** — `lookupLink` collapses a KV read failure and a genuinely absent link into one `false`.
+Measured 0% wrongly-404 at 690 rps, 7% at 726, 43% at 1292. See the Future-work entry and the
+`### THE "~58 req/s CEILING"` section. The fix is a judgement call (503 vs bounded retry vs
+threading absent-vs-unreadable out of `lookupLink`) and wants its own plan. **Cheap first step: a
+`log_level=summary` build would show whether this happens in real traffic at all.**
+
+**2. Sharding is still required and is under MORE pressure than before.** Dropping the events
+write raised the ceiling; it did nothing for per-key contention. Measured: at the same write rate,
+loss rose 1.5% → 3.5% when the request rate doubled. One slug at 38.9 clicks/s loses 0.5% —
+against 25% at 9.4 clicks/s pre-sharding. `CountShards = 64`, **RAISE ONLY, NEVER LOWER**.
+
+## Measurement traps learned the hard way this session — all cost a wrong conclusion first
+
+- **Your load driver is probably the bottleneck.** A reported "~58 req/s ceiling" was `knee.sh`
+  forking `curl` + 2 `awk` + 2 `perl` per request. `hey` on the same build: 690 req/s.
+- **`hey` follows redirects by default** — measure `/r/{slug}` with `-disable-redirects`, or you
+  are timing `example.com`. It reports `NaN` latency and an empty status distribution when the
+  downstream host refuses TLS, which looks like an app failure and is not.
+- **`hey` divides `-n` across `-c`** by integer division: `-n 300 -c 80` issues 240. Use `n = c×k`.
+- **Establish a baseline by measurement immediately before a run, and verify every mutation's
+  status code.** An "enumeration is stale 5/5" result was one surviving link from the probe's own
+  round 1; it was measuring its own litter.
+- **Seeding links measures nothing about analytics** — seed *clicks*. An unclicked link creates no
+  count keys.
+- **Discard the first traced sample after idle** (~175 ms vs 60–70 ms warm for `list_keys`).
+
+## Deploying (deploys are the user's call — do not deploy unasked)
+
+Variables live in the operator's chmod-600 file outside the repo (`deploy-secrets-location`
+memory). All five must be re-supplied every time or the omitted one silently reverts to its
+`spin.toml` default.
+
+```
+spin aka app deploy --app-id "$APP_ID" --build --no-confirm \
+  --variable admin_bootstrap_password="$SPIN_VARIABLE_ADMIN_BOOTSTRAP_PASSWORD" \
+  --variable cookie_secure=true \
+  --variable public_base_urls="$APP_URL" \
+  --variable log_debug_token="$SPIN_VARIABLE_LOG_DEBUG_TOKEN" \
+  --variable app_version=<sha>-<label>
+```
+
+**The CLI exits 1 with `failed to wait for deployment to go live` on EVERY deploy. It is a false
+negative — do NOT redeploy.** Poll `curl -sI "$APP_URL/" | grep -i x-ss-version` until it reports
+your label; it has taken 100–110 s every time this month. **Manual spot-checks can show the OLD
+version for minutes after the poller sees the new one** — the edge is inconsistent during
+propagation, so poll in a loop and trust the flip. Then verify: login works, `/api/auth/me` shows
+the real `fwf.app` domain and no `localhost`, `GET /api/links` returns 200.
+
+## Local dev traps
+
+- **`--runtime-config-file` gives a FRESH IN-MEMORY store; omitting it persists to
+  `.spin/sqlite_key_value.db`.** A persisted store keeps an old admin password, so
+  `admin_bootstrap_password` will not match and login fails confusingly. Pass the flag, or delete
+  the db file.
+- **A stale `spin up` can survive `pkill -f "spin up"` and hold port 3000**, serving from a store
+  file you have already moved. `lsof -ti :3000 | xargs kill -9` is what actually clears it.
+- **Editing anything under `gui/` requires restarting `spin up`** — `spin_static_fs` serves a
+  startup snapshot, so a correct fix keeps reproducing the old behaviour. Check with
+  `curl localhost:3000/<asset>` before doubting the change.
+- The pre-existing local dev KV store was replaced on 2026-08-18 and preserved at
+  `~/.claude/projects/-Users-jhostetler-git-tirerack-spin-shortener/local-kv-backup-2026-08-18.db`.
+
+## Housekeeping noticed but not done
+
+Two stale git worktrees under `.claude/worktrees/` (`click-count-sharding`,
+`deploy-051cfa7-measurements`) hold months-old copies of the tree. Harmless, but they pollute
+repo-wide `grep` — exclude them, or remove the worktrees.
+
+## What to pick up next
+
+- **The 404-under-load bug** above. The only known correctness defect.
+- **`write_error` reports `other`, not `throttled`** — Akamai's real write-failure message is
+  still unknown and nothing logs it. Needs a diagnostic build.
+- **A single-link DELETE returned 200 without deleting**, seen once on 2026-08-18, not reproduced
+  in 10 further attempts. Filed with the trace needed to diagnose a repeat.
+- Everything else in Future work is trigger-gated; check the trigger before starting.
