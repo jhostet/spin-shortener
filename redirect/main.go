@@ -314,11 +314,12 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 
 	store, err := openTimedStore(collector)
 	if err != nil {
+		emitFailureLine("open", "-", slug, err)
 		serviceUnavailable(w)
 		return
 	}
 
-	l, disp := linkgate.Resolve(store, slug, time.Now())
+	l, disp, resolveErr := linkgate.Resolve(store, slug, time.Now())
 	switch disp {
 	case linkgate.DispositionRedirect:
 		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
@@ -329,6 +330,9 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 	case linkgate.DispositionUnreadable:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
+		if resolveErr != nil {
+			emitFailureLine("get", "links", slug, resolveErr)
+		}
 		serviceUnavailable(w)
 	}
 }
@@ -342,11 +346,12 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 
 	store, err := openTimedStore(collector)
 	if err != nil {
+		emitFailureLine("open", "-", slug, err)
 		serviceUnavailable(w)
 		return
 	}
 
-	l, disp := linkgate.Resolve(store, slug, time.Now())
+	l, disp, resolveErr := linkgate.Resolve(store, slug, time.Now())
 	switch disp {
 	case linkgate.DispositionRedirect:
 		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
@@ -365,6 +370,9 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	case linkgate.DispositionUnreadable:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
+		if resolveErr != nil {
+			emitFailureLine("get", "links", slug, resolveErr)
+		}
 		serviceUnavailable(w)
 	}
 }
@@ -482,6 +490,126 @@ func recordClickCount(store linkgate.KVStore, slug string, now time.Time) {
 // sharding at all.
 func clickEntropy(now time.Time) uint64 {
 	return uint64(now.UnixNano()) ^ rand.Uint64()
+}
+
+// --- Observable KV failures (docs/plans/observable-kv-failures.md) ---
+//
+// One sanitized failure line per distinct failure, to stderr, UNCONDITIONAL
+// — independent of log_level and of X-SS-Debug, exactly like emitLogLine's
+// summary line is NOT (which stays gated on tracing, untouched by this
+// section). Only the two KV-fault arms named below ever call this:
+// DispositionUnreadable, DispositionNotFound and recordClickCount's
+// swallowed Get/Set errors emit nothing (see recordClickCount's own doc
+// comment and CLAUDE.md's "Toggleable structured logging" for why).
+
+// maxFailureDedupPairs caps failureDedupSeen. Novelty is what a diagnostic
+// needs; frequency is already visible as the response status distribution
+// and in Akamai's own logs (CLAUDE.md's "Toggleable structured logging").
+const maxFailureDedupPairs = 32
+
+// failureDedupMu guards failureDedupSeen, a PACKAGE-SCOPE map — but this is
+// NOT the forbidden shared-collector pattern the comments elsewhere in this
+// file warn against, even though the shape (a package-scope variable
+// touched by concurrent requests) looks similar. A shared *Collector* would
+// be wrong because it ACCUMULATES per-request statistics that must never be
+// attributed to the wrong request — concurrent requests interleaving into
+// one Collector produces one corrupted summary line. This map does none of
+// that: it never accumulates anything about a request, and correctness
+// does not depend on which concurrent caller "wins" a race to insert a
+// given (op, msg) key — the tuple gets logged once, system-wide, for the
+// life of this Wasm instance, which is exactly the deduplication this
+// section is designed to provide (see the plan's "Volume" section: request
+// rate is not bounded, but instance lifetime is what this dedup is scoped
+// to). The mutex exists only to make concurrent map access safe, not to
+// protect any per-request invariant.
+var (
+	failureDedupMu   sync.Mutex
+	failureDedupSeen = make(map[string]struct{})
+)
+
+// shouldEmitFailureLine reports whether (op, msg) has not yet been logged
+// by this Wasm instance, recording it if so. Once maxFailureDedupPairs
+// distinct pairs have been seen, every further pair (even a genuinely new
+// one) is also suppressed — a diagnostic is not owed unlimited stderr
+// volume, and this cap is what keeps a per-instance dedup honest under a
+// one-instance-per-request regime (see the plan's "Volume" section).
+func shouldEmitFailureLine(op, msg string) bool {
+	key := op + "\x00" + msg
+	failureDedupMu.Lock()
+	defer failureDedupMu.Unlock()
+	if _, seen := failureDedupSeen[key]; seen {
+		return false
+	}
+	if len(failureDedupSeen) >= maxFailureDedupPairs {
+		return false
+	}
+	failureDedupSeen[key] = struct{}{}
+	return true
+}
+
+// classifyKVFailure maps a KV error to a wording-independent etype, mirroring
+// spin-go-sdk/v3/kv.go's errorVariantToError, which flattens the WIT error
+// variant into one of four fixed English strings (or passes an Other's raw
+// host message through verbatim). Matching against those fixed strings is
+// NOT the same hazard as a substring match on "too many requests" for
+// control flow (CLAUDE.md, "Write-throttle resilience") — this only affects
+// a log field's spelling, never a retry/business decision, and an
+// unrecognised message still classifies safely as "other" rather than
+// erroring.
+func classifyKVFailure(err error) string {
+	switch err.Error() {
+	case "access denied":
+		return "access_denied"
+	case "no such store":
+		return "no_such_store"
+	case "store table full":
+		return "store_table_full"
+	case "no error provided by host implementation":
+		return "no_error_provided"
+	default:
+		return "other"
+	}
+}
+
+// emitFailureLine renders and writes one ev=kv_fail line for a single KV
+// operation failure, deduplicated per Wasm instance on (op, sanitized msg).
+// slug may be empty (it never is for this component's one route, but the
+// helper accepts it either way for clarity at call sites). route is always
+// hardcoded to this component's one route shape — never a raw path.
+func emitFailureLine(op, ns, slug string, err error) {
+	etype := classifyKVFailure(err)
+	sanitized, redacted, truncated := linkgate.SanitizeErrorMessage(err.Error())
+	msg := sanitized
+	if msg == "" {
+		msg = "-"
+	}
+
+	if !shouldEmitFailureLine(op, msg) {
+		return
+	}
+
+	fields := []linkgate.Field{
+		{Key: "comp", Value: "redirect"},
+		{Key: "ev", Value: "kv_fail"},
+		{Key: "route", Value: "/r/{slug}"},
+	}
+	if slug != "" {
+		fields = append(fields, linkgate.Field{Key: "slug", Value: slug})
+	}
+	fields = append(fields,
+		linkgate.Field{Key: "op", Value: op},
+		linkgate.Field{Key: "ns", Value: ns},
+		linkgate.Field{Key: "etype", Value: etype},
+	)
+	if redacted {
+		fields = append(fields, linkgate.Field{Key: "msg_redacted", Value: "1"})
+	}
+	if truncated {
+		fields = append(fields, linkgate.Field{Key: "msg_truncated", Value: "1"})
+	}
+	fields = append(fields, linkgate.Field{Key: "msg", Value: msg})
+
+	fmt.Fprintln(os.Stderr, linkgate.RenderFailureLine(fields))
 }
 
 // intVariable reads a Spin variable and parses it as an int, falling back to

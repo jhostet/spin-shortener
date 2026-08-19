@@ -5,7 +5,7 @@
 #   ./dev/bulk-concurrent.sh <requests> <rows-per-request> <slug-prefix> [outdir]
 #
 # Fires <requests> bulk creates CONCURRENTLY, each carrying <rows-per-request>
-# rows, and prints every response's partial/count/index_updated/write_error plus
+# rows, and prints every response's partial/count/write_error plus
 # its Server-Timing header. Reads credentials from the operator's chmod-600
 # deploy-secrets file (see the deploy-secrets-location memory) and traces every
 # request with X-SS-Debug, so the matching log lines can be read back with:
@@ -13,25 +13,38 @@
 #   spin aka logs --app-name "$APP_NAME" --since 15m -n 200 \
 #     | grep -o 'ss comp=api[^"]*' | grep links/bulk
 #
+# ...and, since docs/plans/observable-kv-failures.md, the unconditional
+# write-failure lines (independent of X-SS-Debug and log_level — CLAUDE.md's
+# "Toggleable structured logging") can be read back with:
+#
+#   spin aka logs --app-name "$APP_NAME" --since 15m -n 500 | grep 'ev=kv_fail'
+#
 # TWO REGIMES, AND THE SECOND IS THE ONE PEOPLE FORGET.
 #
-#   Above the cap  — e.g. 6 x 50 (~306 writes) crosses Akamai's 50 writes/second
+#   Above the cap  — e.g. 6 x 50 (~300 writes) crosses Akamai's 50 writes/second
 #                    app-wide cap. Expect `200` with "partial": true, write_retry
-#                    and write_failed in the log line. This exercises retry.
+#                    and write_failed in the log line, and (since
+#                    docs/plans/observable-kv-failures.md) at least one
+#                    ev=kv_fail line naming the real Akamai write-failure message.
+#                    This exercises retry.
 #
-#   Under the cap  — e.g. 4 x 5 (~28 writes) does NOT throttle. Expect four clean
-#                    `201`s with NO write_retry/write_failed field at all. This is
-#                    the control, and it still produces `unindexed_link` findings,
-#                    because `links:all_links` is a read-modify-write with no
-#                    compare-and-swap and concurrent requests clobber each other.
+#   Under the cap  — e.g. 4 x 5 (~20 writes) does NOT throttle. Expect four clean
+#                    `201`s with NO write_retry/write_failed field, and NO
+#                    ev=kv_fail line at all. This is the control — an absent
+#                    ev=kv_fail line here is what makes one in the over-cap run
+#                    mean something.
 #
-# RUN BOTH BEFORE CONCLUDING ANYTHING ABOUT DRIFT. Measured 2026-08-17: a 6x50 run
-# left 37 unindexed_link + 28 unindexed_owner_link, which reads like a throttling
-# failure and is not one — the 4x5 control produced the same class of finding with
-# nothing failing at all. Attributing drift to the throttle without the control is
-# exactly the wrong conclusion, and this script exists so that is one command away.
+# RUN BOTH BEFORE CONCLUDING ANYTHING. Since docs/plans/derived-link-indexes.md
+# (2026-08-18) there is no `all_links`/`owner_links:<owner>` index left to drift
+# — a record's existence is the only truth now, so neither regime produces
+# unindexed_link/unindexed_owner_link findings any more, and index_updated no
+# longer appears in the response at all. That whole failure mode (and the
+# "run the control before blaming the throttle" caution that used to accompany
+# it here) is retired along with the indexes themselves.
 #
-# ALWAYS CHECK THE STORE AFTERWARDS, and clean up PACED, never concurrently:
+# ALWAYS CHECK THE STORE AFTERWARDS, and clean up sequentially — writes are
+# cap-bound, so gathering them would queue against the cap rather than overlap,
+# the same rule every bulk/backup/repair write loop in this codebase follows:
 #   GET  /api/admin/consistency
 #   POST /api/links/bulk-action  {"slugs":[...],"action":"delete"}   (sequential batches)
 #   POST /api/admin/consistency/repair  {"checks":[...],"confirm":"REPAIR"}
@@ -51,7 +64,7 @@ PREFIX=${3:?usage: bulk-concurrent.sh <requests> <rows-per-request> <slug-prefix
 OUT=${4:-$(mktemp -d)}
 mkdir -p "$OUT"
 
-WRITES=$(( N * (R + 2) ))
+WRITES=$(( N * R ))
 echo "firing $N concurrent ${R}-row bulk creates — $(( N * R )) links, ~$WRITES writes"
 if [ "$WRITES" -gt 50 ]; then
   echo "  NOTE: ~$WRITES writes will cross the 50/second app-wide cap — this is the retry regime."
@@ -94,7 +107,7 @@ for i in $(seq 1 "$N"); do
   python3 - "$OUT/resp-$i.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-keys = ("count", "partial", "index_updated", "write_error", "next_step", "error")
+keys = ("count", "partial", "write_error", "next_step", "error")
 print(" ".join(f"{k}={d[k]}" for k in keys if k in d))
 if d.get("not_created"):
     print(f"    not_created={len(d['not_created'])} first={d['not_created'][0]}")
@@ -103,4 +116,8 @@ PY
 done
 echo
 echo "artifacts in $OUT"
-echo "now check: GET /api/admin/consistency — and read the log lines back (see header comment)"
+echo "now check: GET /api/admin/consistency"
+echo "read the traced X-SS-Debug lines back with:"
+echo "  spin aka logs --app-name \"\$APP_NAME\" --since 15m -n 200 | grep -o 'ss comp=api[^\"]*' | grep links/bulk"
+echo "read the unconditional write-failure lines back with (works even without X-SS-Debug):"
+echo "  spin aka logs --app-name \"\$APP_NAME\" --since 15m -n 500 | grep 'ev=kv_fail'"

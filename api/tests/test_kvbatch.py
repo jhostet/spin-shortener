@@ -223,3 +223,38 @@ async def test_collector_records_num_keys_equal_to_chunk_size():
     _, _, _, total_keys = collector.totals()
     assert collector._stats["get_many"][3] == 3
     assert total_keys == 3
+
+
+# --- on_error (docs/plans/observable-kv-failures.md) ---
+
+
+async def test_scoped_get_many_reports_the_raw_failure_via_on_error_before_falling_back():
+    physical = FakeStore({"links:slug:a": b"1", "links:slug:b": b"2"})
+    view = kvprefix.PrefixedStore(physical, "links:")
+    raw = fake_raw_get_many({}, raises=True)
+    calls: list[tuple] = []
+
+    def on_error(op, namespace, duration_ns, exc):
+        calls.append((op, namespace, exc))
+
+    get_many = kvbatch.scoped_get_many(raw, on_error=on_error)
+    result = await get_many(view, ["slug:a", "slug:b"])
+
+    # Fallback still succeeds — the values are correct — AND exactly one
+    # failure was reported.
+    assert result == {"slug:a": b"1", "slug:b": b"2"}
+    assert len(calls) == 1
+    op, namespace, exc = calls[0]
+    assert op == "get_many"
+    assert namespace == "links"
+    assert isinstance(exc, Exception)
+
+
+async def test_scoped_get_many_on_error_none_default_does_not_crash_the_fallback():
+    physical = FakeStore({"links:slug:a": b"1"})
+    view = kvprefix.PrefixedStore(physical, "links:")
+    raw = fake_raw_get_many({}, raises=True)
+    get_many = kvbatch.scoped_get_many(raw)  # no on_error passed
+
+    result = await get_many(view, ["slug:a"])
+    assert result == {"slug:a": b"1"}

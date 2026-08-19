@@ -3,6 +3,7 @@ signatures so business-logic functions (which take `store` as a plain
 parameter) can be tested without the real WASI KV bridge.
 """
 
+import dataclasses
 from typing import Optional
 
 
@@ -152,6 +153,58 @@ class ThrottlingStore(FakeStore):
     async def delete(self, key: str) -> None:
         await self._maybe_fail(key, self.delete_attempts)
         await super().delete(key)
+
+
+@dataclasses.dataclass(frozen=True)
+class Error_Other:  # noqa: N801 — deliberately mirrors the real WIT-generated class name
+    """Stands in for the real componentize_py_types-generated `Error_Other`
+    dataclass (a single `value: str` field) — see FakeWitErr below. Named
+    (not underscore-prefixed) to match the real generated class exactly,
+    because `obs.error_type_name` reads `type(exc.value).__name__`."""
+
+    value: str
+
+
+@dataclasses.dataclass(frozen=True)
+class FakeWitErr(Exception):
+    """Stands in for the real `componentize_py_types.Err` — a frozen
+    dataclass that SUBCLASSES Exception, whose `.value` holds the inner
+    `Error_*` variant instance. Reproduces the two-level structure verified
+    against a faithful reconstruction of both real generated dataclasses
+    (docs/plans/observable-kv-failures.md's "Key technical facts" section):
+    `str()` is exactly `"Error_Other(value='too many requests')"` and
+    `type(exc.value).__name__` is exactly `"Error_Other"` — so
+    `obs.error_type_name` is tested against the real shape rather than
+    against KvThrottleError's flat string.
+
+    A frozen dataclass subclassing Exception needs `__post_init__` to call
+    `Exception.__init__` itself: Exception's own `__init__` (which
+    populates `.args`, read by the default `__str__`/`__repr__`) is never
+    invoked automatically by the generated dataclass `__init__`.
+    """
+
+    value: object
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, self.value)
+
+
+def make_fake_wit_err(message: str = "too many requests") -> FakeWitErr:
+    """Convenience constructor: FakeWitErr wrapping an Error_Other of `message`."""
+    return FakeWitErr(Error_Other(message))
+
+
+@dataclasses.dataclass(frozen=True)
+class Error_AccessDenied:  # noqa: N801 — mirrors the real WIT-generated class name
+    """Stands in for the real fieldless `Error_AccessDenied` variant — its
+    repr (and therefore str()) is exactly `Error_AccessDenied()`, matching
+    api/app.py:60's `ensure_bootstrap_admin` fault used in the plan's local
+    verification step."""
+
+
+def make_fake_wit_access_denied() -> FakeWitErr:
+    """Convenience constructor: FakeWitErr wrapping a fieldless Error_AccessDenied."""
+    return FakeWitErr(Error_AccessDenied())
 
 
 def recording_sleep():

@@ -304,3 +304,105 @@ async def test_scoped_list_keys_type_error_guard_unchanged_with_collector():
 def test_prefixed_store_still_has_no_get_keys_with_collector():
     view = kvprefix.PrefixedStore(FakeStore(), "links:", _FakeCollector())
     assert not hasattr(view, "get_keys")
+
+
+# --- on_error (docs/plans/observable-kv-failures.md) ---
+
+
+class _RaisingStore:
+    """Raises the given exception on every operation, regardless of key."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    async def get(self, key: str):
+        raise self._exc
+
+    async def set(self, key: str, value: bytes) -> None:
+        raise self._exc
+
+    async def delete(self, key: str) -> None:
+        raise self._exc
+
+    async def exists(self, key: str) -> bool:
+        raise self._exc
+
+
+async def test_on_error_is_called_and_the_original_exception_still_reraises():
+    boom = RuntimeError("kv boom")
+    calls: list[tuple] = []
+
+    def on_error(op, namespace, duration_ns, exc):
+        calls.append((op, namespace, exc))
+
+    view = kvprefix.PrefixedStore(_RaisingStore(boom), "links:", on_error=on_error)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await view.get("slug:a")
+    assert excinfo.value is boom  # unchanged, not wrapped or replaced
+    assert calls == [("get", "links", boom)]
+
+
+async def test_on_error_fires_for_set_delete_and_exists_too():
+    boom = RuntimeError("kv boom")
+    calls: list[str] = []
+
+    def on_error(op, namespace, duration_ns, exc):
+        calls.append(op)
+
+    view = kvprefix.PrefixedStore(_RaisingStore(boom), "links:", on_error=on_error)
+
+    for coro in (view.set("slug:a", b"v"), view.delete("slug:a"), view.exists("slug:a")):
+        with pytest.raises(RuntimeError):
+            await coro
+
+    assert calls == ["set", "delete", "exists"]
+
+
+async def test_on_error_none_default_does_not_swallow_or_crash():
+    boom = RuntimeError("kv boom")
+    view = kvprefix.PrefixedStore(_RaisingStore(boom), "links:")  # no on_error passed
+
+    with pytest.raises(RuntimeError):
+        await view.get("slug:a")
+
+
+async def test_on_error_does_not_affect_collector_on_success():
+    """A successful call after on_error is wired must still record into the
+    collector exactly as before — on_error is a failure-only seam."""
+    physical = FakeStore()
+    collector = _FakeCollector()
+    calls = []
+    view = kvprefix.PrefixedStore(physical, "links:", collector, on_error=lambda *a: calls.append(a))
+
+    await view.set("slug:a", b"value")
+    assert await view.get("slug:a") == b"value"
+
+    assert calls == []  # on_error never fired
+    assert ("set", "links", 5) in collector.calls
+    assert ("get", "links", 5) in collector.calls
+
+
+async def test_nothing_is_recorded_into_the_collector_on_a_failure():
+    boom = RuntimeError("kv boom")
+    collector = _FakeCollector()
+    view = kvprefix.PrefixedStore(_RaisingStore(boom), "links:", collector, on_error=lambda *a: None)
+
+    with pytest.raises(RuntimeError):
+        await view.get("slug:a")
+
+    assert collector.calls == []
+
+
+async def test_open_views_threads_on_error_into_every_namespace():
+    physical = FakeStore()
+    calls: list[str] = []
+    views = kvprefix.open_views(physical, on_error=lambda op, ns, dur, exc: calls.append(ns))
+
+    # Force a failure by using a raising physical store for one view only —
+    # simplest is to swap the raw store directly on the view under test.
+    views["links"].raw = _RaisingStore(RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        await views["links"].get("slug:a")
+
+    assert calls == ["links"]

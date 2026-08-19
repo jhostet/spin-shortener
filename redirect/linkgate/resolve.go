@@ -86,29 +86,37 @@ func (d Disposition) String() string {
 // Returning the Link alongside a NotFound disposition (cases 4) is harmless
 // and keeps the signature uniform; callers must not read it, and no caller
 // does.
-func Resolve(store KVStore, slug string, now time.Time) (Link, Disposition) {
+//
+// The returned error is non-nil ONLY alongside DispositionUnavailable — it
+// is exactly the error store.Get produced, unmodified and unwrapped
+// (docs/plans/observable-kv-failures.md). Every other disposition returns a
+// nil error: there is no unknown host message to capture for a genuinely
+// absent key, an unparseable record or a business-rule mismatch, and a
+// non-nil error alongside any of those would invite a caller to log it as
+// if it meant something it doesn't.
+func Resolve(store KVStore, slug string, now time.Time) (Link, Disposition, error) {
 	raw, err := store.Get(LinkKey(slug))
 	if err != nil {
-		return Link{}, DispositionUnavailable
+		return Link{}, DispositionUnavailable, err
 	}
 	if len(raw) == 0 {
-		return Link{}, DispositionNotFound
+		return Link{}, DispositionNotFound, nil
 	}
 
 	l, err := ParseLink(raw)
 	if err != nil {
-		return Link{}, DispositionUnreadable
+		return Link{}, DispositionUnreadable, nil
 	}
 
 	if l.Status != "active" {
-		return l, DispositionNotFound
+		return l, DispositionNotFound, nil
 	}
 	if !IsWithinWindow(l.StartAt, l.EndAt, now) {
-		return l, DispositionNotFound
+		return l, DispositionNotFound, nil
 	}
 
 	if l.PasswordHash != "" {
-		return l, DispositionPrompt
+		return l, DispositionPrompt, nil
 	}
-	return l, DispositionRedirect
+	return l, DispositionRedirect, nil
 }

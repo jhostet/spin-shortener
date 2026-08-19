@@ -13,6 +13,7 @@ api/urlpolicy.py and every other pure module in this component.
 """
 
 import hmac
+import re
 from typing import Optional
 
 # Fixed emission order for per-op-type fields in the logfmt line. Matches
@@ -192,3 +193,191 @@ def token_matches(configured: str, provided: str) -> bool:
     if configured == "":
         return False
     return hmac.compare_digest(configured, provided)
+
+
+# --- Observable KV failures (docs/plans/observable-kv-failures.md) ---
+#
+# A SEPARATE line kind from render_log_line's summary line above, emitted to
+# stderr UNCONDITIONALLY on failure only — independent of log_level and of
+# X-SS-Debug, because the whole point is to catch a fault that has never
+# been reproduced on demand. render_log_line, Collector, _KV_OP_ORDER,
+# route_template, render_server_timing, parse_log_level and token_matches
+# above are all untouched by this section; nothing here changes what they
+# emit or when.
+#
+# The sanitizer (sanitize_error_message) is NOT pinned against
+# redirect/linkgate/obs.go's SanitizeErrorMessage in a cross-language test,
+# unlike keys.go's prefixes/CountShards — a divergence between the two
+# produces two slightly-differently-shaped log lines and nothing else,
+# where the keys.go pin exists because THAT divergence fails silently at
+# runtime (the API writes links the redirect path can't find). See the
+# plan's Trade-offs #8.
+
+MAX_ERROR_MESSAGE_CHARS = 200
+MAX_FAILURE_LINES_PER_REQUEST = 3
+
+# (a) A key-shaped substring: a leading word, a colon, then one or more
+# non-whitespace/quote/paren/bracket characters. The trailing character
+# class is what keeps "key-value error: internal server error" intact — a
+# colon followed by a space does not match, because the class requires at
+# least one non-whitespace character immediately after the colon. This is
+# complete for keys because every physical key this app sends is prefixed
+# (kvprefix.STORE_PREFIXES; redirect/linkgate/keys.go's LinkKey/
+# CountShardKey), so a host that echoes a key echoes a prefixed one. The
+# pattern is written generically rather than against the three known
+# prefixes so a future namespace is covered for free.
+_KEY_SHAPED_PATTERN = re.compile(r"([A-Za-z][A-Za-z0-9_-]*):[^\s'\")\]]+")
+
+# (b) A pbkdf2 hash token — a link password hash is the one place a *value*
+# (rather than a key) could plausibly be echoed by a set failure.
+_HASH_TOKEN_PATTERN = re.compile(r"\S*pbkdf2_sha256\S*")
+
+# (c) Control characters and newlines, so one failure is always one line.
+_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def sanitize_error_message(text: str) -> tuple[str, bool, bool]:
+    """Sanitizes a raw exception message for safe inclusion in a log line,
+    applying these rules IN ORDER:
+
+    (a) redact key-shaped substrings ("links:slug:promo" -> "[key:links]");
+    (b) redact any whitespace-delimited token containing "pbkdf2_sha256"
+        ("[hash]");
+    (c) replace control characters/newlines with "_";
+    (d) truncate to MAX_ERROR_MESSAGE_CHARS (200).
+
+    Returns (sanitized, redacted, truncated). `redacted` is True if (a) or
+    (b) fired at all — this is the one-command answer to "does an Akamai KV
+    error string ever embed a key": `grep 'msg_redacted=1'` on a captured
+    line, obtainable with no key ever having reached the log. An empty
+    `text` (or a text that redacts to nothing) returns an empty string; the
+    caller renders that as `msg=-`, exactly as `sanitize_error_message`
+    itself has no opinion on log-line formatting.
+    """
+    redacted = False
+
+    def _redact_key(match: re.Match) -> str:
+        nonlocal redacted
+        redacted = True
+        return f"[key:{match.group(1)}]"
+
+    sanitized = _KEY_SHAPED_PATTERN.sub(_redact_key, text)
+
+    def _redact_hash(_match: re.Match) -> str:
+        nonlocal redacted
+        redacted = True
+        return "[hash]"
+
+    sanitized = _HASH_TOKEN_PATTERN.sub(_redact_hash, sanitized)
+    sanitized = _CONTROL_CHAR_PATTERN.sub("_", sanitized)
+
+    truncated = False
+    if len(sanitized) > MAX_ERROR_MESSAGE_CHARS:
+        sanitized = sanitized[:MAX_ERROR_MESSAGE_CHARS]
+        truncated = True
+
+    return sanitized, redacted, truncated
+
+
+def error_type_name(exc: BaseException) -> str:
+    """Returns a wording-independent signal of the WIT error variant.
+
+    `componentize_py_types.Err` is a frozen dataclass subclassing Exception
+    whose `.value` holds the inner `Error_*` dataclass instance — so
+    `type(exc.value).__name__` identifies the variant with NO import at
+    all (duck-typed via getattr, never an isinstance check against a type
+    this module cannot import). When that shape is present, returns
+    "<OuterClassName>/<InnerClassName>" (e.g. "Err/Error_Other"); otherwise
+    falls back to the bare exception class name, so every other exception
+    in the app (a plain ValueError, a KeyError, ...) still gets a usable
+    etype.
+    """
+    inner = getattr(exc, "value", None)
+    inner_name = type(inner).__name__ if inner is not None else None
+    if inner_name is not None and inner_name.startswith("Error_"):
+        return f"{type(exc).__name__}/{inner_name}"
+    return type(exc).__name__
+
+
+def exc_location(exc: BaseException) -> str:
+    """Returns "<basename>:<lineno>" of the INNERMOST traceback frame — never
+    source text, never a value, so a 500 is diagnosable from one field that
+    provably contains no data. Returns "-" if the exception carries no
+    traceback at all (e.g. one constructed but never raised, as in a test).
+    """
+    tb = exc.__traceback__
+    if tb is None:
+        return "-"
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    filename = tb.tb_frame.f_code.co_filename
+    basename = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return f"{basename}:{tb.tb_lineno}"
+
+
+def render_failure_line(fields: list[tuple[str, str]]) -> str:
+    """Renders one "ss "-prefixed logfmt line from fields, in order, with
+    NOTHING appended after them — deliberately separate from render_log_line
+    so nothing (a dur_us, a kv_ops summary, anything) can ever land after
+    `msg`, which every caller places last."""
+    parts = ["ss"]
+    for key, value in fields:
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def make_failure_reporter(emit, *, comp: str, route: str, method: Optional[str] = None,
+                           max_distinct: int = MAX_FAILURE_LINES_PER_REQUEST):
+    """Returns `report(ev, op, namespace, duration_ns, exc, extra=None)`,
+    closing over ONE dedup set for the lifetime of THIS reporter instance.
+
+    That lifetime must be exactly one request — never module-level, for the
+    identical reason obs.Collector never is: a shared reporter would
+    interleave concurrent requests' dedup state (and their distinct-tuple
+    budgets) into one another.
+
+    Dedup key is (op, namespace, etype, msg) — the exact tuple named in the
+    plan — so a throttle storm producing the same failure 150 times in one
+    request still emits it once, and a request is capped at `max_distinct`
+    DISTINCT tuples total (further distinct tuples beyond the cap are
+    silently dropped, not queued).
+
+    Field order in the rendered line, all load-bearing: comp, ev, route,
+    [method], [op, ns, op_us] (only when op is not None — an `ev="exc"`
+    call has no KV operation to report), etype, [extra fields, e.g. "at"],
+    [msg_redacted=1], [msg_truncated=1], msg (always last).
+    """
+    seen: set[tuple[str, str, str, str]] = set()
+
+    def report(ev: str, op: Optional[str], namespace: Optional[str], duration_ns: Optional[int],
+                exc: BaseException, extra: Optional[list[tuple[str, str]]] = None) -> None:
+        etype = error_type_name(exc)
+        sanitized, redacted, truncated = sanitize_error_message(str(exc))
+        msg = sanitized if sanitized else "-"
+
+        key = (op or "-", namespace or "-", etype, msg)
+        if key in seen:
+            return
+        if len(seen) >= max_distinct:
+            return
+        seen.add(key)
+
+        fields: list[tuple[str, str]] = [("comp", comp), ("ev", ev), ("route", route)]
+        if method is not None:
+            fields.append(("method", method))
+        if op is not None:
+            fields.append(("op", op))
+            fields.append(("ns", namespace if namespace is not None else "-"))
+            fields.append(("op_us", str((duration_ns or 0) // 1000)))
+        fields.append(("etype", etype))
+        if extra:
+            fields.extend(extra)
+        if redacted:
+            fields.append(("msg_redacted", "1"))
+        if truncated:
+            fields.append(("msg_truncated", "1"))
+        fields.append(("msg", msg))
+
+        emit(render_failure_line(fields))
+
+    return report

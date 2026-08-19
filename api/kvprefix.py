@@ -37,18 +37,36 @@ class PrefixedStore:
     method records its own duration and (for get/set) the value's byte
     length into it, namespaced by this view's prefix with the trailing
     colon stripped (e.g. "links", not "links:") — never by key.
+
+    `on_error` is an optional callable `(op, namespace, duration_ns, exc) ->
+    None` (docs/plans/observable-kv-failures.md), defaulting to None so
+    every existing caller is unaffected. Each of get/set/delete/exists
+    wraps its await in try/except BaseException: on a failure it calls
+    on_error (when set) and then RE-RAISES the original exception
+    UNCHANGED — this module never swallows a failure, it only reports it on
+    the way past. Nothing is recorded into `collector` on a failure,
+    deliberately: this change's whole purpose is diagnosis, so an existing
+    traced line's kv_ops/kv_us/kv_bytes must stay byte-identical to before
+    it existed. `on_error` never receives a key, the same structural move
+    `Collector.record` already makes.
     """
 
-    __slots__ = ("raw", "prefix", "collector")
+    __slots__ = ("raw", "prefix", "collector", "on_error")
 
-    def __init__(self, raw, prefix: str, collector=None):
+    def __init__(self, raw, prefix: str, collector=None, on_error=None):
         self.raw = raw
         self.prefix = prefix
         self.collector = collector
+        self.on_error = on_error
 
     async def get(self, key: str):
         start = time.monotonic_ns()
-        value = await self.raw.get(self.prefix + key)
+        try:
+            value = await self.raw.get(self.prefix + key)
+        except BaseException as exc:
+            if self.on_error is not None:
+                self.on_error("get", self._namespace(), time.monotonic_ns() - start, exc)
+            raise
         if self.collector is not None:
             self.collector.record(
                 "get", self._namespace(), time.monotonic_ns() - start, len(value) if value else 0
@@ -57,19 +75,34 @@ class PrefixedStore:
 
     async def set(self, key: str, value: bytes) -> None:
         start = time.monotonic_ns()
-        await self.raw.set(self.prefix + key, value)
+        try:
+            await self.raw.set(self.prefix + key, value)
+        except BaseException as exc:
+            if self.on_error is not None:
+                self.on_error("set", self._namespace(), time.monotonic_ns() - start, exc)
+            raise
         if self.collector is not None:
             self.collector.record("set", self._namespace(), time.monotonic_ns() - start, len(value))
 
     async def delete(self, key: str) -> None:
         start = time.monotonic_ns()
-        await self.raw.delete(self.prefix + key)
+        try:
+            await self.raw.delete(self.prefix + key)
+        except BaseException as exc:
+            if self.on_error is not None:
+                self.on_error("delete", self._namespace(), time.monotonic_ns() - start, exc)
+            raise
         if self.collector is not None:
             self.collector.record("delete", self._namespace(), time.monotonic_ns() - start, 0)
 
     async def exists(self, key: str) -> bool:
         start = time.monotonic_ns()
-        result = await self.raw.exists(self.prefix + key)
+        try:
+            result = await self.raw.exists(self.prefix + key)
+        except BaseException as exc:
+            if self.on_error is not None:
+                self.on_error("exists", self._namespace(), time.monotonic_ns() - start, exc)
+            raise
         if self.collector is not None:
             self.collector.record("exists", self._namespace(), time.monotonic_ns() - start, 0)
         return result
@@ -78,16 +111,17 @@ class PrefixedStore:
         return self.prefix.rstrip(":")
 
 
-def open_views(physical_store, collector=None) -> dict[str, PrefixedStore]:
+def open_views(physical_store, collector=None, on_error=None) -> dict[str, PrefixedStore]:
     """{"links": view, "users": view, "analytics": view} over one open store.
 
     `collector` is an optional obs.Collector, threaded into every view so
     PrefixedStore's get/set/delete/exists calls record their own timing.
-    Defaults to None so every existing caller (which never passes one)
-    is unaffected.
+    `on_error` is an optional failure-reporting callable, threaded the same
+    way (docs/plans/observable-kv-failures.md). Both default to None so
+    every existing caller (which never passes either) is unaffected.
     """
     return {
-        name: PrefixedStore(physical_store, prefix, collector)
+        name: PrefixedStore(physical_store, prefix, collector, on_error)
         for name, prefix in STORE_PREFIXES.items()
     }
 

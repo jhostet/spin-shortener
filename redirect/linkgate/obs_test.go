@@ -254,3 +254,105 @@ func TestTimedStore_NilCollectorIsNoOp(t *testing.T) {
 		t.Fatalf("Set: want error to propagate through nil-collector wrapper")
 	}
 }
+
+// --- Observable KV failures (docs/plans/observable-kv-failures.md) ---
+
+func TestSanitizeErrorMessage_RedactsKeyShapedSubstringAndDropsTheOriginalWord(t *testing.T) {
+	msg := "read failed for users:session:9f8a7b6c-abcd"
+	sanitized, redacted, truncated := SanitizeErrorMessage(msg)
+	if strings.Contains(sanitized, "9f8a7b6c-abcd") {
+		t.Errorf("sanitized = %q, must not contain the token", sanitized)
+	}
+	if strings.Contains(sanitized, "session") {
+		t.Errorf("sanitized = %q, must not contain the word 'session'", sanitized)
+	}
+	if !strings.Contains(sanitized, "[key:users]") {
+		t.Errorf("sanitized = %q, want it to contain [key:users]", sanitized)
+	}
+	if !redacted {
+		t.Errorf("redacted = false, want true")
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false")
+	}
+}
+
+func TestSanitizeErrorMessage_RedactsPbkdf2HashToken(t *testing.T) {
+	msg := "value was pbkdf2_sha256$100000$saltsalt$hashhash rejected"
+	sanitized, redacted, _ := SanitizeErrorMessage(msg)
+	want := "value was [hash] rejected"
+	if sanitized != want {
+		t.Errorf("sanitized = %q, want %q", sanitized, want)
+	}
+	if !redacted {
+		t.Errorf("redacted = false, want true")
+	}
+}
+
+func TestSanitizeErrorMessage_LeavesKeyValueErrorColonSpaceIntact(t *testing.T) {
+	msg := "key-value error: internal server error"
+	sanitized, redacted, truncated := SanitizeErrorMessage(msg)
+	if sanitized != msg {
+		t.Errorf("sanitized = %q, want unchanged %q", sanitized, msg)
+	}
+	if redacted {
+		t.Errorf("redacted = true, want false")
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false")
+	}
+}
+
+func TestSanitizeErrorMessage_TruncatesAt200AndSetsTruncated(t *testing.T) {
+	msg := strings.Repeat("x", 300)
+	sanitized, redacted, truncated := SanitizeErrorMessage(msg)
+	if len(sanitized) != MaxErrorMessageChars {
+		t.Errorf("len(sanitized) = %d, want %d", len(sanitized), MaxErrorMessageChars)
+	}
+	if !truncated {
+		t.Errorf("truncated = false, want true")
+	}
+	if redacted {
+		t.Errorf("redacted = true, want false")
+	}
+}
+
+func TestSanitizeErrorMessage_ReplacesControlCharsAndNewlines(t *testing.T) {
+	sanitized, _, _ := SanitizeErrorMessage("line one\nline two\ttabbed")
+	if strings.ContainsAny(sanitized, "\n\t") {
+		t.Errorf("sanitized = %q, must not contain control characters", sanitized)
+	}
+}
+
+func TestSanitizeErrorMessage_MsgLastIsUpToTheCaller(t *testing.T) {
+	// SanitizeErrorMessage itself has no opinion on field ordering; that
+	// property lives in RenderFailureLine, tested below.
+	sanitized, _, _ := SanitizeErrorMessage("too many requests")
+	if sanitized != "too many requests" {
+		t.Errorf("sanitized = %q, want unchanged", sanitized)
+	}
+}
+
+func TestRenderFailureLine_MsgIsFinalFieldAndNothingFollows(t *testing.T) {
+	line := RenderFailureLine([]Field{
+		{Key: "comp", Value: "redirect"},
+		{Key: "ev", Value: "kv_fail"},
+		{Key: "etype", Value: "other"},
+		{Key: "msg", Value: "too many requests"},
+	})
+	want := "ss comp=redirect ev=kv_fail etype=other msg=too many requests"
+	if line != want {
+		t.Errorf("line = %q, want %q", line, want)
+	}
+	if !strings.HasSuffix(line, "msg=too many requests") {
+		t.Errorf("line = %q, want it to end with the msg field", line)
+	}
+}
+
+func TestRenderFailureLine_FieldOrderIsExactlyAsGiven(t *testing.T) {
+	line := RenderFailureLine([]Field{{Key: "b", Value: "2"}, {Key: "a", Value: "1"}})
+	want := "ss b=2 a=1"
+	if line != want {
+		t.Errorf("line = %q, want %q", line, want)
+	}
+}

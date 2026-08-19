@@ -17,7 +17,7 @@ func TestResolve_ZeroValueOfDispositionIsUnavailable(t *testing.T) {
 
 func TestResolve_GetErrorIsUnavailable(t *testing.T) {
 	store := fakeStore{getErr: errors.New("too many requests")}
-	l, disp := Resolve(store, "abc123", time.Now())
+	l, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionUnavailable {
 		t.Errorf("disp = %v, want DispositionUnavailable", disp)
 	}
@@ -26,9 +26,53 @@ func TestResolve_GetErrorIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestResolve_GetErrorIsReturnedUnchanged pins that the error Resolve
+// returns alongside DispositionUnavailable is EXACTLY the error store.Get
+// produced — unwrapped, unmodified — which is what lets a caller log the
+// host's own message (docs/plans/observable-kv-failures.md).
+func TestResolve_GetErrorIsReturnedUnchanged(t *testing.T) {
+	wantErr := errors.New("too many requests")
+	store := fakeStore{getErr: wantErr}
+	_, disp, err := Resolve(store, "abc123", time.Now())
+	if disp != DispositionUnavailable {
+		t.Errorf("disp = %v, want DispositionUnavailable", disp)
+	}
+	if err != wantErr {
+		t.Errorf("err = %v, want the exact error fakeStore.getErr produced (%v)", err, wantErr)
+	}
+}
+
+// TestResolve_ErrorIsNilForEveryOtherDisposition pins the other half of the
+// contract: a non-nil error must never accompany any disposition but
+// DispositionUnavailable.
+func TestResolve_ErrorIsNilForEveryOtherDisposition(t *testing.T) {
+	now := time.Now()
+
+	cases := map[Disposition]KVStore{
+		DispositionNotFound:   fakeStore{getResult: []byte("")},
+		DispositionUnreadable: fakeStore{getResult: []byte("not json")},
+		DispositionRedirect: fakeStore{getResult: []byte(
+			`{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`,
+		)},
+		DispositionPrompt: fakeStore{getResult: []byte(
+			`{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"somehash","start_at":"","end_at":""}`,
+		)},
+	}
+
+	for wantDisp, store := range cases {
+		_, disp, err := Resolve(store, "abc123", now)
+		if disp != wantDisp {
+			t.Errorf("disp = %v, want %v", disp, wantDisp)
+		}
+		if err != nil {
+			t.Errorf("disposition %v: err = %v, want nil", disp, err)
+		}
+	}
+}
+
 func TestResolve_AbsentKeyIsNotFound(t *testing.T) {
 	store := fakeStore{getResult: []byte(""), getErr: nil}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -36,7 +80,7 @@ func TestResolve_AbsentKeyIsNotFound(t *testing.T) {
 
 func TestResolve_UnparseableRecordIsUnreadable(t *testing.T) {
 	store := fakeStore{getResult: []byte("not json")}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionUnreadable {
 		t.Errorf("disp = %v, want DispositionUnreadable", disp)
 	}
@@ -45,7 +89,7 @@ func TestResolve_UnparseableRecordIsUnreadable(t *testing.T) {
 func TestResolve_ActiveNoPasswordIsRedirect(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	l, disp := Resolve(store, "abc123", time.Now())
+	l, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionRedirect {
 		t.Errorf("disp = %v, want DispositionRedirect", disp)
 	}
@@ -57,7 +101,7 @@ func TestResolve_ActiveNoPasswordIsRedirect(t *testing.T) {
 func TestResolve_ActiveWithPasswordIsPrompt(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"somehash","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionPrompt {
 		t.Errorf("disp = %v, want DispositionPrompt", disp)
 	}
@@ -66,7 +110,7 @@ func TestResolve_ActiveWithPasswordIsPrompt(t *testing.T) {
 func TestResolve_DisabledIsNotFound(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"disabled","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -75,7 +119,7 @@ func TestResolve_DisabledIsNotFound(t *testing.T) {
 func TestResolve_FutureStartAtIsNotFound(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"2999-01-01T00:00:00Z","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -84,7 +128,7 @@ func TestResolve_FutureStartAtIsNotFound(t *testing.T) {
 func TestResolve_PastEndAtIsNotFound(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"2020-01-01T00:00:00Z"}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -96,7 +140,7 @@ func TestResolve_UnparseableStartAtIsNotFound(t *testing.T) {
 	// silently ignored.
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"not-a-date","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now())
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -111,15 +155,15 @@ func TestResolve_AbsentDisabledAndOutOfWindowAreEqualToEachOther(t *testing.T) {
 	now := time.Now()
 
 	absentStore := fakeStore{getResult: []byte("")}
-	_, absentDisp := Resolve(absentStore, "abc123", now)
+	_, absentDisp, _ := Resolve(absentStore, "abc123", now)
 
 	disabledRec := `{"slug":"abc123","target_url":"https://example.com","status":"disabled","password_hash":"","start_at":"","end_at":""}`
 	disabledStore := fakeStore{getResult: []byte(disabledRec)}
-	_, disabledDisp := Resolve(disabledStore, "abc123", now)
+	_, disabledDisp, _ := Resolve(disabledStore, "abc123", now)
 
 	windowRec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"2020-01-01T00:00:00Z"}`
 	windowStore := fakeStore{getResult: []byte(windowRec)}
-	_, windowDisp := Resolve(windowStore, "abc123", now)
+	_, windowDisp, _ := Resolve(windowStore, "abc123", now)
 
 	if absentDisp != disabledDisp || disabledDisp != windowDisp {
 		t.Errorf("absent=%v disabled=%v out-of-window=%v, want all three equal to each other",

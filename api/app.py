@@ -180,6 +180,15 @@ class HttpHandler(Handler):
         componentize_py_async_support.spawn), measures wall time, and
         always emits exactly one log line — including on the exception path,
         which is the only evidence anyone will have of a handler that raised.
+
+        Also builds exactly ONE obs.make_failure_reporter per request
+        (docs/plans/observable-kv-failures.md) — same reasoning as the
+        collector: never module-level, so its dedup budget and distinct-
+        tuple cap belong to this request alone. Unlike the collector, this
+        reporter is unconditional — its lines are emitted to stderr
+        regardless of log_level or whether X-SS-Debug was sent, because the
+        entire point is to catch a fault that has never been reproduced on
+        demand under tracing.
         """
         log_level, debug_token = await _obs_config()
         provided_token = get_header(request.headers, "X-SS-Debug") or ""
@@ -187,10 +196,16 @@ class HttpHandler(Handler):
         summary = log_level == "summary"
         collector = obs.Collector() if (traced or summary) else None
 
+        route = obs.route_template(urlparse(request.uri).path)
+        failure_reporter = obs.make_failure_reporter(
+            lambda line: print(line, file=sys.stderr),
+            comp="api", route=route, method=request.method,
+        )
+
         start_ns = time.monotonic_ns()
         err = False
         try:
-            response = await self._dispatch(request, collector)
+            response = await self._dispatch(request, collector, failure_reporter)
         except links.UnreadableLinkError as exc:
             # Caught here rather than at each of get_link's six call sites,
             # so every read path answers the same way with no per-handler
@@ -199,7 +214,11 @@ class HttpHandler(Handler):
             # — and rather than 404, which would claim the link does not
             # exist when a record is sitting right there needing attention.
             # `error` names the one tool that can explain it; the operator is
-            # otherwise told nothing actionable.
+            # otherwise told nothing actionable. Deliberately NOT reported
+            # through failure_reporter: this is a data-quality fault (a
+            # record that will not parse), not a KV operation failure or an
+            # unhandled exception, and it already has its own diagnosis path
+            # (the consistency check's unreadable_value finding).
             response = json_response(422, {
                 "error": "link_record_unreadable",
                 "slug": exc.slug,
@@ -207,8 +226,13 @@ class HttpHandler(Handler):
                         "(Store maintenance), which reports it as unreadable_value. Deleting the "
                         "link is the only repair; its content cannot be recovered.",
             })
-        except Exception:
+        except Exception as exc:
             err = True
+            # Unconditional, independent of log_level/X-SS-Debug — this is
+            # the only evidence anyone will ever have of what a bare 500
+            # actually was. `at` names the innermost frame; never a
+            # traceback, never source text.
+            failure_reporter("exc", None, None, None, exc, extra=[("at", obs.exc_location(exc))])
             response = json_response(500, {"error": "internal_error"})
         dur_ns = time.monotonic_ns() - start_ns
 
@@ -229,10 +253,9 @@ class HttpHandler(Handler):
             response.headers["vary"] = "X-SS-Debug"
 
         if collector is not None:
-            parsed_uri = urlparse(request.uri)
             fields = [
                 ("comp", "api"),
-                ("route", obs.route_template(parsed_uri.path)),
+                ("route", route),
                 ("method", request.method),
                 ("status", str(response.status)),
             ]
@@ -242,17 +265,25 @@ class HttpHandler(Handler):
 
         return response
 
-    async def _dispatch(self, request: Request, collector) -> Response:
+    async def _dispatch(self, request: Request, collector, failure_reporter) -> Response:
         parsed_uri = urlparse(request.uri)
         path = parsed_uri.path
         query = parse_qs(parsed_uri.query)
         method = request.method
 
+        # Narrowed adapter into the one per-request failure_reporter
+        # (docs/plans/observable-kv-failures.md): PrefixedStore's and
+        # scoped_get_many's on_error signature is (op, namespace,
+        # duration_ns, exc) — this closes over failure_reporter to add the
+        # "kv_fail" ev and this request's route/method, unconditionally.
+        def on_kv_error(op, namespace, duration_ns, exc):
+            failure_reporter("kv_fail", op, namespace, duration_ns, exc)
+
         start_ns = time.monotonic_ns()
         physical_store = await key_value.open(kvprefix.PHYSICAL_STORE)
         if collector is not None:
             collector.record("open", "-", time.monotonic_ns() - start_ns, 0)
-        stores = kvprefix.open_views(physical_store, collector)
+        stores = kvprefix.open_views(physical_store, collector, on_kv_error)
         links_store = stores["links"]
         users_store = stores["users"]
         analytics_store = stores["analytics"]
@@ -261,7 +292,7 @@ class HttpHandler(Handler):
         # (docs/plans/derived-link-indexes.md) — never to backup.handle_restore,
         # which must see keys written earlier in the SAME request.
         list_keys_once = kvprefix.scoped_list_keys(_memoized_kv_keys(), collector)
-        get_many = kvbatch.scoped_get_many(_make_raw_get_many(collector), collector)
+        get_many = kvbatch.scoped_get_many(_make_raw_get_many(collector), collector, on_kv_error)
         write = kvretry.make_writer(_sleep_ns, collector)
         admin_username = await variables.get("admin_bootstrap_username")
         admin_password = await variables.get("admin_bootstrap_password")

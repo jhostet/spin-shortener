@@ -72,7 +72,7 @@ async def gather_reads(coros, limit: int = MAX_CONCURRENT_READS) -> list:
     return await asyncio.gather(*(run(coro) for coro in coros))
 
 
-def scoped_get_many(raw_get_many, collector=None):
+def scoped_get_many(raw_get_many, collector=None, on_error=None):
     """Wrap a raw `get_many(physical_keys) -> list[tuple[str, bytes | None]]`
     callable (synchronous — see below) into an async callable that takes a
     `PrefixedStore` and a list of LOGICAL keys, and returns
@@ -106,7 +106,12 @@ def scoped_get_many(raw_get_many, collector=None):
        re-read through `gather_reads(store.get(k) for k in chunk)` and the
        request still succeeds; the failure is recorded as a `get_many_error`
        operation (never silent) so a trace shows it rather than the path
-       merely being slow forever.
+       merely being slow forever. `on_error` (optional, docs/plans/
+       observable-kv-failures.md), when set, is called with the raw
+       exception BEFORE the fallback runs — this is the blind spot with the
+       most known failure modes (K>=10,000 -> internal server error; batch
+       throttling) and today it is otherwise invisible whenever tracing is
+       off.
 
     The WIT-documented form (a `(key, None)` pair for a miss) and the
     2026-08-15 local-Spin-observed form (the pair OMITTED entirely) are
@@ -130,7 +135,9 @@ def scoped_get_many(raw_get_many, collector=None):
             t0 = time.monotonic_ns()
             try:
                 pairs = raw_get_many([prefix + key for key in chunk])
-            except Exception:
+            except Exception as exc:
+                if on_error is not None:
+                    on_error("get_many", store._namespace(), time.monotonic_ns() - t0, exc)
                 if collector is not None:
                     collector.record(
                         "get_many_error", store._namespace(), time.monotonic_ns() - t0, 0, num_keys=len(chunk)

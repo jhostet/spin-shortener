@@ -3,6 +3,7 @@ package linkgate
 import (
 	"crypto/subtle"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -225,4 +226,81 @@ func TokenMatches(configured, provided string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(configured), []byte(provided)) == 1
+}
+
+// --- Observable KV failures (docs/plans/observable-kv-failures.md) ---
+//
+// SanitizeErrorMessage and RenderFailureLine mirror api/obs.py's
+// sanitize_error_message and render_failure_line, but the two
+// implementations are DELIBERATELY NOT PINNED against each other — unlike
+// keys.go's LinksPrefix/AnalyticsPrefix and CountShards, which
+// api/tests/test_kvprefix.py pins BECAUSE a divergence there fails
+// silently at runtime (the API would write links the redirect path can't
+// find). A divergence between these two sanitizers produces two slightly
+// differently-shaped log lines and nothing else — there is no shared data
+// structure for the two implementations to disagree about, so nothing here
+// needs, or gets, a cross-language test. See the plan's Trade-offs #8.
+//
+// Collector, kvOpOrder, TimedStore, RenderLogLine, RenderServerTiming,
+// ParseLogLevel and TokenMatches above are all untouched by this section.
+
+// (a) A key-shaped substring: a leading word, a colon, then one or more
+// non-whitespace/quote/paren/bracket characters. The trailing character
+// class is what keeps "key-value error: internal server error" intact — a
+// colon followed by a space does not match, since the class requires at
+// least one non-whitespace character immediately after the colon.
+var keyShapedPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_-]*:[^\s'")\]]+`)
+
+// (b) A pbkdf2 hash token.
+var hashTokenPattern = regexp.MustCompile(`\S*pbkdf2_sha256\S*`)
+
+// (c) Control characters and newlines.
+var controlCharPattern = regexp.MustCompile(`[\x00-\x1f\x7f]`)
+
+// MaxErrorMessageChars mirrors api/obs.py's MAX_ERROR_MESSAGE_CHARS. The two
+// known Akamai KV error messages are 17 and 40 characters, so 200 is 5x
+// headroom while still bounding an unbounded host string. Raising it needs
+// a real observed truncation, per this repo's standing rule for every
+// sibling constant.
+const MaxErrorMessageChars = 200
+
+// SanitizeErrorMessage sanitizes a raw KV error message for safe inclusion
+// in a log line, applying the same three rules (in order) as
+// api/obs.py's sanitize_error_message: (a) redact key-shaped substrings to
+// "[key:<word>]"; (b) redact any pbkdf2_sha256-bearing token to "[hash]";
+// (c) replace control characters/newlines with "_"; then truncate to
+// MaxErrorMessageChars. Returns (sanitized, redacted, truncated).
+func SanitizeErrorMessage(msg string) (sanitized string, redacted bool, truncated bool) {
+	sanitized = keyShapedPattern.ReplaceAllStringFunc(msg, func(match string) string {
+		redacted = true
+		word := match[:strings.IndexByte(match, ':')]
+		return "[key:" + word + "]"
+	})
+
+	sanitized = hashTokenPattern.ReplaceAllStringFunc(sanitized, func(string) string {
+		redacted = true
+		return "[hash]"
+	})
+
+	sanitized = controlCharPattern.ReplaceAllString(sanitized, "_")
+
+	if len(sanitized) > MaxErrorMessageChars {
+		sanitized = sanitized[:MaxErrorMessageChars]
+		truncated = true
+	}
+
+	return sanitized, redacted, truncated
+}
+
+// RenderFailureLine renders one "ss "-prefixed logfmt line from fields, in
+// order, with NOTHING appended after them — deliberately separate from
+// RenderLogLine so nothing can ever land after "msg", which every caller
+// places last.
+func RenderFailureLine(fields []Field) string {
+	var b strings.Builder
+	b.WriteString("ss")
+	for _, f := range fields {
+		fmt.Fprintf(&b, " %s=%s", f.Key, f.Value)
+	}
+	return b.String()
 }
