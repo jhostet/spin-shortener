@@ -277,28 +277,60 @@ func openTimedStore(collector *linkgate.Collector) (linkgate.KVStore, error) {
 	return linkgate.TimedStore{Store: store, Collector: collector}, nil
 }
 
+// retryAfterSeconds is what a 503 tells a client to wait. Modelled, not
+// measured: the read cap is a per-second window, so 1 is the minimum honest
+// value, but every throttled client retrying at exactly +1s re-collides on
+// the moment the window resets. 2 gives one clear window. A plain constant,
+// tunable — but change it with evidence, not a hunch, per this repo's rule
+// for every sibling constant.
+const retryAfterSeconds = "2"
+
+// serviceUnavailable answers a request the store could not serve. It makes NO
+// claim about the link, because when a read fails the handler does not know
+// whether the link exists. Cache-Control: no-store arrives from
+// setSecurityHeaders; Retry-After must be set before http.Error writes the
+// header. Akamai does not cache 503 by default (Property Manager docs) — this
+// is deliberately not on the by-default-cached list that 404 is on.
+//
+// Also used for a failed kv.Open (docs/plans/redirect-read-failure-not-404.md,
+// task 3): an Open failure is the same root cause as a failed Get — the store
+// is not available — so answering both with 503 keeps one cause mapped to one
+// status. This makes 500 mean exactly one thing in this component: a record
+// is present and will not parse. Accepted imprecision: kv.Open can also fail
+// PERMANENTLY (a manifest misconfiguration — e.g. key_value_stores missing
+// the store), in which case Retry-After: 2 occasionally invites a retry of
+// something that can never succeed. That is acceptable because a
+// misconfigured store fails 100% of requests on every route and is
+// discovered in seconds, so a wrong hint on a comprehensively broken deploy
+// costs nothing.
+func serviceUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", retryAfterSeconds)
+	http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+}
+
 func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	collector := collectorFrom(r.Context())
 
 	store, err := openTimedStore(collector)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		serviceUnavailable(w)
 		return
 	}
 
-	l, ok := lookupLink(store, slug)
-	if !ok || l.Status != "active" || !linkgate.IsWithinWindow(l.StartAt, l.EndAt, time.Now()) {
-		http.NotFound(w, r)
-		return
-	}
-
-	if l.PasswordHash != "" {
+	l, disp := linkgate.Resolve(store, slug, time.Now())
+	switch disp {
+	case linkgate.DispositionRedirect:
+		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
+	case linkgate.DispositionPrompt:
 		renderPasswordPrompt(w, http.StatusOK, slug, "")
-		return
+	case linkgate.DispositionNotFound:
+		http.NotFound(w, r)
+	case linkgate.DispositionUnreadable:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
+		serviceUnavailable(w)
 	}
-
-	sendRedirectThenRecord(w, slug, l.TargetURL, collector)
 }
 
 // handleRedirectPost re-fetches the link fresh from KV — never trusting a
@@ -310,32 +342,31 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 
 	store, err := openTimedStore(collector)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		serviceUnavailable(w)
 		return
 	}
 
-	l, ok := lookupLink(store, slug)
-	if !ok || l.Status != "active" || !linkgate.IsWithinWindow(l.StartAt, l.EndAt, time.Now()) {
-		http.NotFound(w, r)
-		return
-	}
-
-	if l.PasswordHash == "" {
+	l, disp := linkgate.Resolve(store, slug, time.Now())
+	switch disp {
+	case linkgate.DispositionRedirect:
 		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
-		return
+	case linkgate.DispositionPrompt:
+		if err := r.ParseForm(); err != nil {
+			renderPasswordPrompt(w, http.StatusBadRequest, slug, "Invalid form submission.")
+			return
+		}
+		if !linkgate.VerifyPassword(r.FormValue("password"), l.PasswordHash) {
+			renderPasswordPrompt(w, http.StatusUnauthorized, slug, "Incorrect password.")
+			return
+		}
+		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
+	case linkgate.DispositionNotFound:
+		http.NotFound(w, r)
+	case linkgate.DispositionUnreadable:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
+		serviceUnavailable(w)
 	}
-
-	if err := r.ParseForm(); err != nil {
-		renderPasswordPrompt(w, http.StatusBadRequest, slug, "Invalid form submission.")
-		return
-	}
-
-	if !linkgate.VerifyPassword(r.FormValue("password"), l.PasswordHash) {
-		renderPasswordPrompt(w, http.StatusUnauthorized, slug, "Incorrect password.")
-		return
-	}
-
-	sendRedirectThenRecord(w, slug, l.TargetURL, collector)
 }
 
 // sendRedirectThenRecord issues the 302 and only then records the click.
@@ -466,45 +497,6 @@ func intVariable(name string, fallback int) int {
 		return fallback
 	}
 	return parsed
-}
-
-// lookupLink fetches and decodes the link record for slug, returning ok=false
-// if the key is absent or the stored value can't be parsed. Takes the local
-// linkgate.KVStore interface rather than *kv.Store directly, so it can be
-// handed either a raw store (collector nil, off path) or a
-// linkgate.TimedStore (collector present) with no branching here.
-//
-// Deliberately ONE KV data operation, not two. The Exists probe this used to
-// do ahead of the Get was pure overhead: the SDK's Get returns
-// ([]byte(""), nil) for a missing key — an empty slice with NO error, see
-// spin-go-sdk/v3 kv.Store.Get — so an absent key is already distinguishable
-// without asking first. A stored link record is always JSON and can never be
-// zero-length, so len(raw) == 0 means absent and nothing else. The empty
-// check is explicit rather than left to ParseLink's json.Unmarshal failing,
-// so absence is a stated condition rather than a side effect of a decoder.
-//
-// Measured on the deployed Akamai app 2026-08-06: removing this probe saved
-// 5.2 ms of 38.8 ms, or 13.5%, measured like-for-like against the 7-op build
-// in the same latency window. Akamai charges per data operation and barely at
-// all per store handle (~150 µs), so one fewer data op is the whole win.
-// Do NOT read the absolute figure as a constant — the same 7 operations
-// measured 116.7 ms earlier the same day, a 3x regime swing, so per-op cost
-// there ranged 5.5-16.7 ms. The stable statement is "one operation's worth,
-// ~14% of the redirect's KV time". Locally the probe measured 13-18 us and
-// was correctly judged not worth removing; the local numbers do not transfer.
-// See CLAUDE.md's Akamai section.
-func lookupLink(store linkgate.KVStore, slug string) (linkgate.Link, bool) {
-	raw, err := store.Get(linkgate.LinkKey(slug))
-	if err != nil || len(raw) == 0 {
-		return linkgate.Link{}, false
-	}
-
-	l, err := linkgate.ParseLink(raw)
-	if err != nil {
-		return linkgate.Link{}, false
-	}
-
-	return l, true
 }
 
 // main function must be included for the compiler but is not executed.

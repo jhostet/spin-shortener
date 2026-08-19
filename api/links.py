@@ -89,9 +89,21 @@ class UnreadableLinkError(Exception):
     `json.loads` raise, every one of its six callers inherited that, and the
     handler turned it into `500 internal_error` — which tells an operator to
     retry a transient fault when it is a permanent data fault only they can
-    fix. Every other surface already knew better: `redirect` treats an
-    unparseable record as not-found and 404s (`lookupLink`), `handle_list`
-    skips it, and `GET /api/admin/consistency` names it `unreadable_value`.
+    fix. Every other surface already knew better: `handle_list` skips it, and
+    `GET /api/admin/consistency` names it `unreadable_value`.
+
+    `redirect` used to be the odd one out here: it treated an unparseable
+    record as not-found and 404'd (`lookupLink`). Since
+    docs/plans/redirect-read-failure-not-404.md it answers `500` instead
+    (`linkgate.Resolve` -> `DispositionUnreadable`), for the same reason this
+    class exists on the API side — a 404 tells a visitor "no such link",
+    which is false for a record that exists but is corrupt. This class's own
+    422 stays distinct from `redirect`'s 500 for a different reason than
+    before: `api` has an authenticated JSON client that can be told something
+    specific (`link_record_unreadable`), while a browser navigating to
+    `/r/{slug}` has no way to consume that detail — 500 is the right answer
+    there precisely because 503 (this codebase's new "transient, retry"
+    status) now exists to take the other meaning by contrast.
     """
 
     def __init__(self, slug: str):

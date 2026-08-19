@@ -15,10 +15,21 @@ type fakeStore struct {
 	getResult    []byte
 	getErr       error
 	setErr       error
+
+	// getKeyCapture, if non-nil, receives the key Get was called with. A
+	// pointer field so capture works even though fakeStore has value
+	// receivers and is passed around by value (resolve_test.go's key-shape
+	// pin needs this; no other test sets it, so this is additive).
+	getKeyCapture *string
 }
 
 func (f fakeStore) Exists(key string) (bool, error) { return f.existsResult, f.existsErr }
-func (f fakeStore) Get(key string) ([]byte, error)  { return f.getResult, f.getErr }
+func (f fakeStore) Get(key string) ([]byte, error) {
+	if f.getKeyCapture != nil {
+		*f.getKeyCapture = key
+	}
+	return f.getResult, f.getErr
+}
 func (f fakeStore) Set(key string, value []byte) error {
 	return f.setErr
 }
