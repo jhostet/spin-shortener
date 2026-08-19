@@ -2687,7 +2687,76 @@ no retry.**
 - [x] Correct the two comments that assert `redirect` 404s an unparseable record — file(s): redirect/linkgate/window.go, api/links.py — done when: neither file claims a `ParseLink`/unreadable record produces a 404, `api/links.py`'s `UnreadableLinkError` docstring records why 500 is now correct for `redirect` while 422 stays correct for the API, and `cd api && uv run pytest` still passes with no behaviour change — **note:** 648 passed.
 - [x] Add `dev/redirect-load.sh` so the `hey` traps cannot recur — file(s): dev/redirect-load.sh — done when: it always passes `-disable-redirects`, computes `-n` as `c × k` itself, prints `hey`'s status distribution, prints the implied read rate (rps × 2) against the 1,000 reads/second cap with a warning above it, exits non-zero if any `404` appears in the distribution, and refuses to run with an install hint when `hey` is absent — **note:** locally verified all four behaviours against a real `spin up`: an absent slug produced the read-rate warning and exited 1 on the `[404]` distribution line; a real slug (created via `POST /api/links` through a logged-in session) passed with exit 0; running with `hey` off `PATH` printed the install hint and exited 2; running with no args printed usage and exited 2.
 - [x] Record the `/r/{slug}` status contract in CLAUDE.md — file(s): CLAUDE.md — done when: the "Redirect caching" section carries the 404-is-product-states/5xx-is-faults principle and the per-condition table, cites that Akamai caches 404 for 10 s by default while 500/502/503/504 are not cached unless the behaviour is enabled, the "Security tradeoffs" enumerability bullet names what stays indistinguishable and the two accepted new disclosures, and the "Toggleable structured logging" section records that a read failure's log line was field-identical to a genuine miss and that the status code is now the signal — **note:** added as a new `### The /r/{slug} status contract` subsection right after the "Redirect caching" section's existing content (kept the 302 paragraphs untouched, as instructed) rather than editing inside it, since the table needed its own home; also added the task-3 accepted-imprecision sentence to `docs/plans/redirect-read-failure-not-404.md` per the parent agent's separate instruction.
-- [ ] End-to-end manual verification of the 503-under-saturation fix on a deployed build — file(s): (none — verification step) — done when: `dev/redirect-load.sh` at c=60, c=80 and c=90 against a live password-free `/r/{slug}` returns ZERO 404s at every concurrency (was 0%/31%/43%), 503s appear instead at the higher two, the slug returns 302 at rest immediately afterwards, a header capture taken during saturation shows a real 503 carrying `retry-after: 2` and `cache-control: no-store` with no `age`/`x-cache` header and distinct `akamai-grn` values, and a repeat of the c=60 baseline afterwards is still clean at ~690 rps
+- [ ] End-to-end manual verification of the 503-under-saturation fix on a deployed build — file(s): (none — verification step) — done when: `dev/redirect-load.sh` at c=60, c=80 and c=90 against a live password-free `/r/{slug}` returns ZERO 404s at every concurrency (was 0%/31%/43%), 503s appear instead at the higher two, the slug returns 302 at rest immediately afterwards, a header capture taken during saturation shows a real 503 carrying `retry-after: 2` and `cache-control: no-store` with no `age`/`x-cache` header and distinct `akamai-grn` values, and a repeat of the c=60 baseline afterwards is still clean at ~690 rps — **PARTIALLY DONE 2026-08-19 on `cb4793d-resolve503`, DELIBERATELY LEFT UNTICKED. Zero wrongly-404 at every concurrency from 60 to 500 (~9,200 requests), including 0 of 2,000 at 1,314 rps against 43% at 1,292 rps pre-fix; at-rest 302 immediately after; c=60 repeat clean; traces still `5 ops`. But NO 503 ever appeared, so the 'a real 503 carrying retry-after: 2' half of this done-when is UNMET and the `DispositionUnavailable` arm remains unexercised on Akamai. The read failures did not reproduce, and the read-cap explanation for them is now in doubt — 2,195–2,628 implied reads/s ran clean against a documented 1,000/s cap. See the results section below. Reproducing the fault is what would finish this task, and it needs a mechanism nobody has yet established.**
+
+### DEPLOYED AND MEASURED (2026-08-19) — `cb4793d-resolve503`. The 404s are gone; the 503 path is UNEXERCISED, and the read-cap diagnosis is now in doubt
+
+Live after 100 s (the CLI's `failed to wait for deployment to go live` false negative as
+always). Health: login `200`, `/api/auth/me` shows the real `fwf.app` domain and no
+`localhost`, `GET /api/links` `200`. One password-free slug, `hey` via the new
+`dev/redirect-load.sh` (so `-disable-redirects` and `n = c × k` are structural).
+
+| c | achieved rps | implied reads/s | distribution | wrongly 404 |
+|---|---|---|---|---|
+| 60 | 449 | 898 | 600× `302` | **0%** |
+| 60 (repeat, after saturation) | 516 | 1,033 | 600× `302` | **0%** |
+| 80 | 383 | 767 | 800× `302` | **0%** |
+| 80 (repeat) | 666 | 1,331 | 800× `302` | **0%** |
+| 90 | 621 | 1,241 | 900× `302` | **0%** |
+| 90 (repeat) | 791 | 1,582 | 900× `302` | **0%** |
+| 150 | 886 | 1,773 | 1,200× `302` | **0%** |
+| 250 | **1,314** | **2,628** | 2,000× `302` | **0%** |
+| 250 (header capture) | 1,107 | 2,215 | 2,000× `302` | **0%** |
+| 500 | 1,097 | 2,195 | 3,000× `302` | **0%** |
+
+**The like-for-like line: at 1,314 rps this build wrongly-404'd 0 of 2,000 requests, where
+`43dcb66c`-era `43d66c6-no-events` wrongly-404'd 43% at 1,292 rps.** Not one 404 appeared at any
+concurrency from 60 to 500, across ~9,200 requests.
+
+**But ZERO 503s appeared either, so the new code path is UNPROVEN in production.** The whole point
+of the change is what happens when a read fails, and no read failed. Task 7's own done-when
+requires "503s appear instead at the higher two" — that half is unmet and the task is therefore
+left UNTICKED. What *is* verified on Akamai is that the change is inert when reads succeed; the
+`DispositionUnavailable` arm has only ever run in a unit test (`fakeStore.getErr`) and against a
+locally forced `kv.Open` failure.
+
+**Three controls prove the origin really was doing the work, so this is not a false all-clear.**
+(1) **Edge caching is ruled out:** six probes taken *mid-saturation* all returned distinct
+`akamai-grn` values with no `age`, `x-cache` or `x-check-cacheable`, and `cache-control: no-store`
+on every one. (2) **The KV writes happened:** the slug recorded **566 clicks** — heavily lossy
+against ~9,200 requests exactly as the 50-writes/second cap (M2) predicts, but impossible unless
+the handler ran its full read-modify-write path. (3) **The hot path is unchanged:** three
+`X-SS-Debug` traces at rest read `kv;dur=64.6–71.1;desc="5 ops"` against `handler;dur=65.4–71.8`,
+i.e. still **5 KV operations**, confirming `Resolve` added none.
+
+**THE REFRAME, and it matters for reading the original table: throughput ROSE with the 404 rate
+because a 404 is CHEAPER than a 302.** A miss is 2 KV operations and no write; a successful
+redirect is 5 and one write. So the pre-fix run's "1,292 rps at c=90" was a *mixture* of 57%
+expensive 302s and 43% cheap 404s, while today's 1,314 rps is **100% expensive 302s** — strictly
+more origin work per second than the run that failed. The rising-throughput column in that table
+should be read as a *consequence* of the failures, not as evidence the client pushed harder.
+Concurrency past ~250 no longer buys rate (c=500 achieved *less* than c=250), so ~1,100–1,300 rps
+of all-302 traffic is this laptop's ceiling, not the app's.
+
+**THE NEW DOUBT, and it is the most important thing in this section: the read-cap explanation for
+the original 404s no longer holds up.** That diagnosis was arithmetic — "~700 rps × 2 gets ≈ 1,400
+reads/s against Akamai's documented 1,000/s cap." This run sustained **2,195–2,628 implied reads/s
+with zero failures of any kind**, i.e. 2.2–2.6× the documented cap, repeatedly. So either the
+1,000 RPS row does not bind the way it was modelled (plausible: repeated `get`s of one hot key may
+not each bill as a read), or the 2026-08-18 failures had a different cause altogether — a
+transient regional condition, or the 3× latency-regime swing this file already documents. **Do not
+keep quoting "2 reads/click against a 1,000/s cap" as the mechanism without re-establishing it.**
+
+**What this means for the fix.** It is correct, inert on the success path, and strictly better
+than what it replaced regardless of which explanation is true: any read failure, from any cause,
+now answers a retryable `503` instead of lying about the link. But **the defect it was built for
+did not reproduce**, so its value is currently insurance rather than a demonstrated repair, and
+the next attempt to reproduce should not assume the read cap is the lever.
+
+Store returned to baseline after the run: the load slug's DELETE inline-purged **64 of 64**
+analytics keys, `GET /api/admin/consistency` is `ok: true` with **zero findings** across 6 checks,
+and the orphan report reads 0 orphan slugs / 0 orphan keys / 37 live keys / 32 `obsolete_event_keys`
+— identical to the pre-run baseline.
 
 
 ---
@@ -2701,9 +2770,8 @@ appended after it — if you add a section, add it ABOVE this one.
 ## Where things stand
 
 - **Repo:** `main` clean, HEAD = `fd8e299`, everything pushed.
-- **Deployed:** `43d66c6-no-events`. **Two commits are undeployed and neither carries a runtime
-  change** — `e53b8b4` and `fd8e299` are both TASKS.md-only measurement write-ups. There is
-  nothing waiting to ship.
+- **Deployed:** `cb4793d-resolve503` (2026-08-19), carrying the redirect read-failure fix. Nothing
+  is waiting to ship except this session's own TASKS.md write-up.
 - **Store:** baseline — 14 links, 37 analytics keys (**32 of them leftover `events:` keys** from
   before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless),
   0 orphan slugs, `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable.
@@ -2722,12 +2790,16 @@ appended after it — if you add a section, add it ABOVE this one.
 
 ## The two things most worth knowing
 
-**1. There is an open correctness bug, filed but not fixed.** Above ~700 req/s, live links return
-**404** — `lookupLink` collapses a KV read failure and a genuinely absent link into one `false`.
-Measured 0% wrongly-404 at 690 rps, 7% at 726, 43% at 1292. See the Future-work entry and the
-`### THE "~58 req/s CEILING"` section. The fix is a judgement call (503 vs bounded retry vs
-threading absent-vs-unreadable out of `lookupLink`) and wants its own plan. **Cheap first step: a
-`log_level=summary` build would show whether this happens in real traffic at all.**
+**1. The 404-under-load bug is FIXED and deployed — but the fault never reproduced, so the fix is
+insurance, not a demonstrated repair.** `lookupLink` is gone; `linkgate.Resolve` returns a
+`Disposition` and a failed read now answers `503` + `Retry-After: 2` while absent/disabled/
+out-of-window keep an identical `404` (`docs/plans/redirect-read-failure-not-404.md`). Measured
+2026-08-19: zero wrongly-404 across ~9,200 requests at c=60–500, and **zero 503s** — no read
+failed. **Two things to carry forward:** the `DispositionUnavailable` arm has never run on Akamai,
+and the read-cap diagnosis is in doubt because 2,195–2,628 implied reads/s ran clean against a
+documented 1,000/s cap. Do not requote "2 reads/click vs a 1,000/s cap" as the mechanism. Note also
+that the filed entry's "cheap first step" of a `log_level=summary` build was impossible: a read
+failure logged field-for-field identically to a genuine miss.
 
 **2. Sharding is still required and is under MORE pressure than before.** Dropping the events
 write raised the ceiling; it did nothing for per-key contention. Measured: at the same write rate,
@@ -2793,7 +2865,10 @@ repo-wide `grep` — exclude them, or remove the worktrees.
 
 ## What to pick up next
 
-- **The 404-under-load bug** above. The only known correctness defect.
+- **Reproduce a KV read failure on Akamai** — the one thing that would finish the 404 fix's
+  verification (its `503` arm is deployed but has never run there). The read cap is no longer a
+  credible lever: 2,628 implied reads/s ran clean. Nobody has a mechanism for this yet, which is
+  itself the finding.
 - **`write_error` reports `other`, not `throttled`** — Akamai's real write-failure message is
   still unknown and nothing logs it. Needs a diagnostic build.
 - **A single-link DELETE returned 200 without deleting**, seen once on 2026-08-18, not reproduced
