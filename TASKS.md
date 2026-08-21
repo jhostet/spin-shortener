@@ -2747,8 +2747,11 @@ should be read as a *consequence* of the failures, not as evidence the client pu
 Concurrency past ~250 no longer buys rate (c=500 achieved *less* than c=250), so ~1,100–1,300 rps
 of all-302 traffic is this laptop's ceiling, not the app's.
 
-**THE NEW DOUBT, and it is the most important thing in this section: the read-cap explanation for
-the original 404s no longer holds up.** That diagnosis was arithmetic — "~700 rps × 2 gets ≈ 1,400
+**THE NEW DOUBT — RETRACTED 2026-08-21, see `### DEPLOYED AND ANSWERED (2026-08-21)` below. The
+reads WERE failing during these very runs; this build had no way to report it, and the clean 302s
+were the Akamai edge retrying the origin's 503 and serving the retry. Read the paragraph below as
+the reasoning that was available at the time, not as a live conclusion.** ~~the read-cap
+explanation for the original 404s no longer holds up.~~ That diagnosis was arithmetic — "~700 rps × 2 gets ≈ 1,400
 reads/s against Akamai's documented 1,000/s cap." This run sustained **2,195–2,628 implied reads/s
 with zero failures of any kind**, i.e. 2.2–2.6× the documented cap, repeatedly. So either the
 1,000 RPS row does not bind the way it was modelled (plausible: repeated `get`s of one hot key may
@@ -2811,8 +2814,97 @@ Akamai message — it just happens only to read, never to write.
 - [x] Add dev/kv-read-pressure.sh, the burst-shaped read-cap provoker — file(s): dev/kv-read-pressure.sh (new) — done when: it fires N parallel `GET /api/admin/backup` requests (each a measured ~999-operation gathered fan-out) against $APP_URL, defaults to the 10 parallel that produced `Error_Other('too many requests')` on 9 of 10 requests on 2026-08-15, prints every response's HTTP status and Server-Timing header, refuses to run with a clear message when the deploy-secrets file is unreadable, and prints the `spin aka logs ... | grep 'ev=kv_fail'` command needed to read the captured messages back
 - [x] Add dev/delete-verify.sh for the ghost-DELETE report — file(s): dev/delete-verify.sh (new) — done when: it loops N times creating a link, DELETEing it while recording the DELETE's own status code, then re-checking `GET /api/links/{slug}` and `GET /r/{slug}` immediately, at +2 s and at +10 s, traces every request with X-SS-Debug, treats ONLY a record still present at +10 s as an anomaly (sub-second redirect staleness is documented and self-heals), and on the first anomaly exits non-zero printing the slug, every recorded status code and the `spin aka logs` grep needed to pull the matching traces
 - [x] Document observable KV failures in CLAUDE.md (needs the api and redirect wiring tasks) — file(s): CLAUDE.md — done when: the "Toggleable structured logging" section records that failure lines are unconditional and independent of log_level and X-SS-Debug, the ev=kv_fail / ev=exc field vocabulary, the rule that msg is always the final field and nothing may ever be appended after it, the redaction rule with msg_redacted=1 named as the greppable answer to whether a host message embeds a key, the api-per-request (≤3 lines) versus redirect-per-instance (≤32 distinct) dedup asymmetry with the rate reasoning behind it, and that the collector itself still structurally cannot accept a key; and the "Write-throttle resilience" section records that etype is a wording-independent variant signal obtained by duck-typing type(exc.value).__name__ with no import, and that it is deliberately NOT control flow
-- [ ] End-to-end deployed capture of Akamai's KV write-failure message (needs a deploy — the user's call) — file(s): (none — verification step) — done when: on a deployed build carrying the api and redirect wiring, a baseline is measured first (`GET /api/admin/consistency` → ok: true, plus the orphan report), `dev/bulk-concurrent.sh 4 5` under the cap produces ZERO ev=kv_fail lines, `dev/bulk-concurrent.sh 6 50` over the cap produces at least one, at least one run sends NO X-SS-Debug header and still produces lines, `dev/kv-read-pressure.sh` captures a read-side message too, and TASKS.md records the verbatim etype and msg values, whether msg_redacted=1 ever appeared, and whether the label should now widen — with the store returned to its measured baseline and re-verified afterwards
-- [ ] End-to-end deployed attempt to provoke a redirect read failure (needs the deploy above) — file(s): (none — verification step) — done when: dev/kv-read-pressure.sh runs concurrently with `dev/redirect-load.sh -c 250 -k 8` against a live password-free slug, every /r/ status is 302 or 503 and never 404, and TASKS.md records either the first ev=kv_fail op=get line ever captured on Akamai or an explicit negative result naming the achieved request rate, the parallel-backup status distribution and the fact that the DispositionUnavailable arm remains unexercised
+- [x] End-to-end deployed capture of Akamai's KV write-failure message (needs a deploy — the user's call) — file(s): (none — verification step) — done when: on a deployed build carrying the api and redirect wiring, a baseline is measured first (`GET /api/admin/consistency` → ok: true, plus the orphan report), `dev/bulk-concurrent.sh 4 5` under the cap produces ZERO ev=kv_fail lines, `dev/bulk-concurrent.sh 6 50` over the cap produces at least one, at least one run sends NO X-SS-Debug header and still produces lines, `dev/kv-read-pressure.sh` captures a read-side message too, and TASKS.md records the verbatim etype and msg values, whether msg_redacted=1 ever appeared, and whether the label should now widen — with the store returned to its measured baseline and re-verified afterwards — **DONE 2026-08-21 on `e0bd7ef-kvfail`. The message is `key-value error: rate limit exceeded` — NOT the `too many requests` that `classify_write_error` matches on. And there are TWO messages, not one: the read-pressure run produced both, same `Err/Error_Other` variant, same `op=get`, same run. So the match is intermittently right, and `etype` cannot rescue it because both throttle messages are `Error_Other`. See the results section below.**
+- [x] End-to-end deployed attempt to provoke a redirect read failure (needs the deploy above) — file(s): (none — verification step) — done when: dev/kv-read-pressure.sh runs concurrently with `dev/redirect-load.sh -c 250 -k 8` against a live password-free slug, every /r/ status is 302 or 503 and never 404, and TASKS.md records either the first ev=kv_fail op=get line ever captured on Akamai or an explicit negative result naming the achieved request rate, the parallel-backup status distribution and the fact that the DispositionUnavailable arm remains unexercised — **DONE 2026-08-21, and it is NOT the honest negative this task budgeted for. Read failures are provocable and routine: 186 of 1,200 and 954 of 3,000 redirect link reads failed at the origin, every one returning 503 — and ZERO reached a client, because the Akamai edge retries a 5xx and serves the retry. That also RETRACTS the 2026-08-19 'read-cap diagnosis in doubt' conclusion: reads were failing all along with nothing to report them. See the results section below.**
+### DEPLOYED AND ANSWERED (2026-08-21) — `e0bd7ef-kvfail`. Both messages found, and the edge is MASKING origin 503s
+
+Live after 80 s. Health: login `200`, `GET /api/links` `200`, `/r/{slug}` `302`, consistency
+`ok: true`. Both deploy-gated tasks are now answered, and the second one overturned a conclusion
+written two days earlier in this file.
+
+**TASK 13 — Akamai's real KV write-failure message, captured at last. There are TWO of them.**
+`dev/bulk-concurrent.sh 6 50` (~300 writes, over the 50/s cap) produced six `200`s with
+`partial: true`, `write_error=other`, and one `ev=kv_fail` line each:
+
+```
+ss comp=api ev=kv_fail route=/api/links/bulk method=POST op=set ns=links op_us=2589 \
+   etype=Err/Error_Other msg=Error_Other(value='key-value error: rate limit exceeded')
+```
+
+The under-cap control (`4 5`, ~20 writes) produced four clean `201`s and **zero** `ev=kv_fail`
+lines, which is what makes the over-cap lines mean something.
+
+**`"too many requests"` — the string `api/kvretry.py`'s `classify_write_error` matches on — did not
+appear once in the write run.** But it *does* exist: the read-pressure run below produced **both**
+messages, from the same `op=get`, in the same run, under the same `Err/Error_Other` variant —
+`key-value error: rate limit exceeded` (18) and `too many requests` (8). **So the match is not
+simply wrong, it is INTERMITTENTLY RIGHT**, which is worse: it fires often enough to look
+functional and mislabels the rest. This is exactly the failure mode CLAUDE.md predicted for a
+substring match ("if Akamai rewords 'too many requests', the match silently stops firing"), except
+the wording was never uniform to begin with. **`etype` does not rescue it either: both messages
+carry `Err/Error_Other`, so the WIT variant cannot identify throttling at all** — there is no
+wording-independent signal for it, and any classifier must match both strings and accept that a
+third may exist.
+
+**TASK 14 — read failures ARE provocable, and the finding is much larger than the honest negative
+the plan budgeted for.** `dev/kv-read-pressure.sh 10` (ten parallel ~999-op `gather_reads` backup
+fan-outs) returned **10 of 10 non-200**, with read-side `ev=kv_fail` lines on `op=get` in both the
+`links` and `users` namespaces. The burst shape is what matters: a 999-operation fan-out saturates
+the cap where a single read does not.
+
+**THE HEADLINE, reproduced twice: the Akamai edge MASKS origin 503s, and this is why the 404 fix
+looked like it had nothing to fix.**
+
+| run | client-visible | origin `ev=kv_fail` (link `get`) | origin failure rate |
+|---|---|---|---|
+| c=100 × k=12 (1,200 req, 481 rps) | **1,200× `302`, zero non-302** | **186** | 15.5% |
+| c=300 × k=10 (3,000 req, 564 rps) | **3,000× `302`, zero non-302** | **954** | ~32% |
+
+Every one of those failures ran the `DispositionUnavailable` arm and returned `503` from the
+origin — the code path is emitted immediately before `serviceUnavailable(w)`, so a logged line
+*is* a 503 — and **not one reached a client.** The only mechanism that fits is the edge retrying
+the origin on a 5xx and serving the retry's `302`.
+
+**Why the pre-fix build behaved differently, and why this makes the fix a functional repair rather
+than a cosmetic one.** A `404` is a valid final answer, so the edge passes it straight through —
+which is why 43% of requests were client-visible 404s before the fix. A `503` is retryable, so the
+edge absorbs it. **Converting 404 → 503 therefore did not merely make the error honest; it moved
+the failure from "visitor is told the campaign link is dead" to "visitor gets the correct redirect,
+one edge retry later."** The 2026-08-19 sweep's "zero wrongly-404 at 1,314 rps" was not the fault
+failing to reproduce — the fault was reproducing constantly and being repaired in flight.
+
+**RETRACTION of this file's and CLAUDE.md's 2026-08-19 conclusion.** That entry said the read-cap
+diagnosis was "IN DOUBT" because "2,195–2,628 implied reads/s ran clean against a documented
+1,000/s cap." **That was wrong, and the error was an absence of instrumentation, not an absence of
+failures.** Reads were failing throughout those runs; nothing existed to report it, and the client
+saw 302s because the edge had already retried. The read cap binds roughly where the original
+arithmetic said it did. **The lesson is sharper than the correction: a clean client-side status
+distribution is not evidence the origin is healthy, on a platform that retries.** Any future
+capacity claim about this app needs origin-side failure counts, not response codes.
+
+**The security question is answered empirically, and the answer is no.** `msg_redacted=1` appears
+**zero** times across every run — bulk writes, read pressure, and ~5,000 redirects — so Akamai's KV
+error messages do not embed the key. That was established without a single key entering a 7-day
+retention window, which was the whole point of sanitizing by construction rather than inspecting
+first. `msg_truncated=1` is also zero: the real messages are 36 and 17 characters against
+`MAX_ERROR_MESSAGE_CHARS = 200`, so that constant has ~5.5× headroom and needs no change.
+
+**The dedup behaved as designed.** Six concurrent bulk creates produced exactly one line each
+(identical `(op, ns, etype, msg)` tuples collapsing, the 3-per-request cap never reached), while
+the redirect runs produced hundreds — confirming that `redirect`'s per-instance dedup is close to a
+no-op under a one-instance-per-request regime, exactly as its own comment predicts, and that the
+32-pair cap is what actually bounds volume there.
+
+**A measurement trap, self-inflicted, caught in the act.** `spin aka logs -n` caps at **5000**, and
+a fetch with `-n 900` returned exactly 900 lines — a count I briefly read as the failure total. It
+was my own limit. Re-fetching at `-n 1000/2000/5000` all returned the same 932, which is what
+proved the number real. **A round number equal to your own limit is never a measurement.**
+
+Store returned to baseline afterwards: 120 test links bulk-deleted in three clean batches, **14
+links**, consistency `ok: true` with zero findings, **0 orphan slugs / 0 orphan keys**, 32
+`obsolete_event_keys` as before. `live_keys` is 100 rather than 37 because the surviving load slug
+legitimately accumulated count shards.
+
 
 ---
 
@@ -2825,8 +2917,8 @@ appended after it — if you add a section, add it ABOVE this one.
 ## Where things stand
 
 - **Repo:** `main` clean, HEAD = `fd8e299`, everything pushed.
-- **Deployed:** `cb4793d-resolve503` (2026-08-19), carrying the redirect read-failure fix. Nothing
-  is waiting to ship except this session's own TASKS.md write-up.
+- **Deployed:** `e0bd7ef-kvfail` (2026-08-21), carrying the redirect read-failure fix plus
+  unconditional KV-failure logging. Nothing is waiting to ship.
 - **Store:** baseline — 14 links, 37 analytics keys (**32 of them leftover `events:` keys** from
   before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless),
   0 orphan slugs, `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable.
@@ -2920,12 +3012,16 @@ repo-wide `grep` — exclude them, or remove the worktrees.
 
 ## What to pick up next
 
-- **Reproduce a KV read failure on Akamai** — the one thing that would finish the 404 fix's
-  verification (its `503` arm is deployed but has never run there). The read cap is no longer a
-  credible lever: 2,628 implied reads/s ran clean. Nobody has a mechanism for this yet, which is
-  itself the finding.
-- **`write_error` reports `other`, not `throttled`** — Akamai's real write-failure message is
-  still unknown and nothing logs it. Needs a diagnostic build.
+- **Fix `classify_write_error` to match BOTH throttle messages.** Now unblocked and cheap: Akamai
+  emits `key-value error: rate limit exceeded` AND `too many requests`, both as `Err/Error_Other`,
+  so the current single-substring match is intermittently right. Note there is NO wording-
+  independent signal — the variant is `Other` for both — so a classifier must match strings and
+  tolerate a third appearing. See `### DEPLOYED AND ANSWERED (2026-08-21)`.
+- **Decide whether the edge masking origin 503s changes anything.** Newly known, not yet acted on:
+  ~32% of redirect link reads can fail at the origin with zero client impact, because the edge
+  retries. It makes the 404 fix a real repair, but it also means capacity problems are now
+  invisible from outside — the monitoring question ("what SHOULD page someone?") is open, and the
+  origin-side `ev=kv_fail` line is the only signal.
 - **A single-link DELETE returned 200 without deleting**, seen once on 2026-08-18, not reproduced
   in 10 further attempts. Filed with the trace needed to diagnose a repeat.
 - Everything else in Future work is trigger-gated; check the trigger before starting.
