@@ -75,12 +75,42 @@ class WriteFailed(Exception):
         self.cause = cause
 
 
+# Every throttle message Akamai has been OBSERVED to emit, measured on the
+# deployed app 2026-08-21 (TASKS.md, "### DEPLOYED AND ANSWERED (2026-08-21)").
+#
+# There are TWO, not one, and that is the whole point of this tuple. A bulk
+# create driven over the 50-writes/second cap produced only
+# "key-value error: rate limit exceeded"; a read-pressure run produced BOTH
+# that and "too many requests", from the same op, in the same run. So the
+# single-substring match this replaced was not simply wrong — it was
+# INTERMITTENTLY right, firing often enough to look functional while
+# mislabelling the rest as "other".
+#
+# Matching the distinctive tail ("rate limit exceeded") rather than the full
+# "key-value error: rate limit exceeded" is deliberate: the prefix is the
+# host's own wrapper and is the part most likely to be reworded.
+#
+# There is NO wording-independent alternative. Both messages arrive as
+# Err(Error_Other(...)), so the WIT variant identifies the shape of the error
+# but not throttling specifically — `obs.error_type_name` returns
+# "Err/Error_Other" for both. A THIRD message may well exist: this is what has
+# been seen, not what the vendor guarantees. That irreducible fragility is
+# precisely why this label must never drive control flow (see module
+# docstring) — a missed match degrades a log field, never a retry decision.
+#
+# api/backup.py inlines this same tuple rather than importing it, deliberately
+# keeping that path free of any retry-seam dependency;
+# test_backup_and_kvretry_agree_on_throttle_markers pins the two equal.
+THROTTLE_MESSAGE_MARKERS = ("too many requests", "rate limit exceeded")
+
+
 def classify_write_error(exc: BaseException) -> str:
     """Labels a write failure for the log line / response body only —
     NEVER used to decide whether to retry (see module docstring). Every
     write error is retried the same way regardless of what this returns.
     """
-    return "throttled" if "too many requests" in str(exc).lower() else "other"
+    text = str(exc).lower()
+    return "throttled" if any(m in text for m in THROTTLE_MESSAGE_MARKERS) else "other"
 
 
 @dataclass

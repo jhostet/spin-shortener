@@ -114,6 +114,22 @@ class KvThrottleError(Exception):
         super().__init__("Error_Other(value='too many requests')")
 
 
+class KvRateLimitError(Exception):
+    """Stands in for the SECOND real Akamai throttle message,
+    `Err(Error_Other(value='key-value error: rate limit exceeded'))`.
+
+    Measured on the deployed app 2026-08-21: this is the message a bulk create
+    driven over the 50-writes/second cap actually produces, and the one the
+    original single-substring `"too many requests"` match silently mislabelled
+    as "other" — see TASKS.md's "### DEPLOYED AND ANSWERED (2026-08-21)".
+    Both messages are real and both arrive under the same `Error_Other`
+    variant, which is why `kvretry.THROTTLE_MESSAGE_MARKERS` has two entries
+    and why no variant check can replace it."""
+
+    def __init__(self):
+        super().__init__("Error_Other(value='key-value error: rate limit exceeded')")
+
+
 class KvOtherError(Exception):
     """Stands in for a non-throttle write failure, e.g. `Err(Error_AccessDenied())`."""
 

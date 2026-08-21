@@ -321,7 +321,16 @@ async def handle_restore(
             # Same "throttled" vs "other" label kvretry.classify_write_error
             # renders elsewhere, inlined rather than imported: this path
             # takes no dependency on the retry seam at all, by design.
-            write_error = "throttled" if "too many requests" in str(exc).lower() else "other"
+            #
+            # BOTH observed Akamai throttle messages must be listed here, and
+            # this tuple must stay equal to kvretry.THROTTLE_MESSAGE_MARKERS —
+            # test_backup_and_kvretry_agree_on_throttle_markers pins it,
+            # because a label enforced in one of two places is not enforced.
+            # See that constant for why there are two and why no
+            # wording-independent check exists.
+            throttle_markers = ("too many requests", "rate limit exceeded")
+            text = str(exc).lower()
+            write_error = "throttled" if any(m in text for m in throttle_markers) else "other"
             return json_response(200, {
                 "ok": False,
                 "partial": True,

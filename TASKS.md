@@ -2906,6 +2906,42 @@ links**, consistency `ok: true` with zero findings, **0 orphan slugs / 0 orphan 
 legitimately accumulated count shards.
 
 
+## classify_write_error matches both throttle messages
+
+Follow-up to `### DEPLOYED AND ANSWERED (2026-08-21)`, which found Akamai emits **two** throttle
+messages where this code matched one. Not planned through `planner`/`builder` — a two-line logic
+change plus tests, below the threshold where that overhead pays.
+
+**What was wrong.** `classify_write_error` matched only `"too many requests"`, so
+`key-value error: rate limit exceeded` — the message a real over-cap bulk create actually produces
+— was labelled `other`. That is why every throttling incident recorded in this file reported
+`write_error=other`: not a missing feature, a mislabel. The match was **intermittently** right,
+which is why it survived two incidents without looking broken.
+
+**What changed.** `kvretry.THROTTLE_MESSAGE_MARKERS = ("too many requests", "rate limit exceeded")`,
+matched with `any(...)`. It matches the distinctive tail rather than the full
+`key-value error: rate limit exceeded`, since the prefix is the host's wrapper and the likelier
+part to be reworded. **`api/backup.py`'s deliberately-inlined copy was changed too** — it keeps the
+restore path free of any retry-seam dependency (CLAUDE.md, "Write-throttle resilience"), which
+makes it a drift risk rather than a duplicate to collapse, so
+`test_backup_and_kvretry_agree_on_throttle_markers` reads the literal back out of `backup.py`'s
+source and pins the two equal. That is the technique `api/tests/test_kvprefix.py` already uses on
+`keys.go`, applied for the same reason: a label enforced in one of two places is not enforced.
+
+**What did NOT change, and must not.** The label still never drives control flow — every write
+error is retried identically regardless of what this returns. That property is what makes the
+residual fragility acceptable: **there is no wording-independent alternative**, because both
+messages arrive as `Err(Error_Other(...))`, so the WIT variant identifies the error's shape but not
+throttling. A third message may exist; if it appears, it degrades a log field and nothing else.
+
+**Mutation-verified, both directions.** Reverting `THROTTLE_MESSAGE_MARKERS` to the single old
+entry fails `test_classify_write_error_labels_the_rate_limit_message_throttled_too` **and** the
+equality pin (2 failed); dropping the new marker from `backup.py` alone fails the pin only
+(1 failed). Both files restored byte-identical afterwards. Suites: api **679** (675 + 4),
+gui-pages 71, `redirect/linkgate` green.
+
+- [x] Match both observed Akamai throttle messages in classify_write_error — file(s): api/kvretry.py, api/backup.py, api/tests/fakes.py, api/tests/test_kvretry.py — done when: kvretry.THROTTLE_MESSAGE_MARKERS holds both observed markers with the reasoning for two entries and for the absence of any variant-based check recorded on it, classify_write_error matches any of them case-insensitively, api/backup.py's inlined tuple is updated to match, a test reads backup.py's literal back out and pins the two equal, a new fake stands in for the rate-limit message, reverting the tuple to one entry fails the new regression test, and cd api && uv run pytest passes — **note: 679 passed (675 baseline, +4: the rate-limit regression, a per-marker loop so no entry can be dead or a substring of another, a case-insensitivity check over both, and the backup.py equality pin). Both mutation directions verified and both files restored byte-identical. CLAUDE.md's "Throttling has no dedicated error variant" paragraph corrected — it still described the single-substring check. NOT DEPLOYED: the label is only visible in a log line and a response body, so an operator sees no change until this ships.**
+
 ---
 
 # START HERE — session handoff, 2026-08-18
@@ -3012,11 +3048,10 @@ repo-wide `grep` — exclude them, or remove the worktrees.
 
 ## What to pick up next
 
-- **Fix `classify_write_error` to match BOTH throttle messages.** Now unblocked and cheap: Akamai
-  emits `key-value error: rate limit exceeded` AND `too many requests`, both as `Err/Error_Other`,
-  so the current single-substring match is intermittently right. Note there is NO wording-
-  independent signal — the variant is `Other` for both — so a classifier must match strings and
-  tolerate a third appearing. See `### DEPLOYED AND ANSWERED (2026-08-21)`.
+- ~~Fix `classify_write_error` to match BOTH throttle messages.~~ **DONE 2026-08-21** — see
+  `## classify_write_error matches both throttle messages` above. Undeployed: the label is only
+  visible in a log line and a response body, so this needs a deploy to change what an operator
+  actually sees during the next throttling incident.
 - **Decide whether the edge masking origin 503s changes anything.** Newly known, not yet acted on:
   ~32% of redirect link reads can fail at the origin with zero client impact, because the edge
   retries. It makes the 404 fix a real repair, but it also means capacity problems are now

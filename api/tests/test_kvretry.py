@@ -1,7 +1,7 @@
 import pytest
 
 import kvretry
-from tests.fakes import KvOtherError, KvThrottleError, recording_sleep
+from tests.fakes import KvOtherError, KvRateLimitError, KvThrottleError, recording_sleep
 
 
 def _const_jitter(value: float = 0.5):
@@ -116,8 +116,54 @@ def test_classify_write_error_throttled():
     assert kvretry.classify_write_error(KvThrottleError()) == "throttled"
 
 
+def test_classify_write_error_labels_the_rate_limit_message_throttled_too():
+    """The regression this whole change exists for.
+
+    `key-value error: rate limit exceeded` is what a real over-cap bulk create
+    produced on the deployed app 2026-08-21, and the original
+    `"too many requests"`-only match labelled it `other` — the mislabel that
+    made `write_error=other` the reported value all through the 2026-08-15 and
+    2026-08-17 throttling incidents. Reducing THROTTLE_MESSAGE_MARKERS back to
+    a single entry must fail this test."""
+    assert kvretry.classify_write_error(KvRateLimitError()) == "throttled"
+
+
 def test_classify_write_error_other():
     assert kvretry.classify_write_error(KvOtherError()) == "other"
+
+
+def test_classify_write_error_matches_every_observed_marker():
+    """Each marker is independently load-bearing: a tuple that happens to
+    contain a substring of another entry, or an entry no branch reaches, would
+    pass the two tests above while leaving a real message mislabelled."""
+    for marker in kvretry.THROTTLE_MESSAGE_MARKERS:
+        exc = Exception(f"Error_Other(value='{marker}')")
+        assert kvretry.classify_write_error(exc) == "throttled", marker
+
+
+def test_classify_write_error_is_case_insensitive_on_both_markers():
+    for marker in kvretry.THROTTLE_MESSAGE_MARKERS:
+        assert kvretry.classify_write_error(Exception(marker.upper())) == "throttled"
+
+
+def test_backup_and_kvretry_agree_on_throttle_markers():
+    """`api/backup.py` inlines this tuple rather than importing it, so that the
+    restore path takes no dependency on the retry seam (CLAUDE.md, "Write-
+    throttle resilience"). That is a deliberate duplication, which makes it a
+    drift risk: a label enforced in one of two places is not enforced. This
+    reads the literal back out of backup.py's source and pins the two equal,
+    the same technique api/tests/test_kvprefix.py uses to pin keys.go's
+    prefixes against kvprefix.py's."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "backup.py").read_text()
+    match = re.search(r"throttle_markers = \(([^)]*)\)", source)
+    assert match, "backup.py no longer defines a throttle_markers tuple"
+    inlined = tuple(re.findall(r"\"([^\"]+)\"", match.group(1)))
+    assert inlined == kvretry.THROTTLE_MESSAGE_MARKERS, (
+        f"backup.py has {inlined}, kvretry has {kvretry.THROTTLE_MESSAGE_MARKERS}"
+    )
 
 
 @pytest.mark.asyncio
