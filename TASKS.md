@@ -2942,6 +2942,80 @@ gui-pages 71, `redirect/linkgate` green.
 
 - [x] Match both observed Akamai throttle messages in classify_write_error — file(s): api/kvretry.py, api/backup.py, api/tests/fakes.py, api/tests/test_kvretry.py — done when: kvretry.THROTTLE_MESSAGE_MARKERS holds both observed markers with the reasoning for two entries and for the absence of any variant-based check recorded on it, classify_write_error matches any of them case-insensitively, api/backup.py's inlined tuple is updated to match, a test reads backup.py's literal back out and pins the two equal, a new fake stands in for the rate-limit message, reverting the tuple to one entry fails the new regression test, and cd api && uv run pytest passes — **note: 679 passed (675 baseline, +4: the rate-limit regression, a per-marker loop so no entry can be dead or a substring of another, a case-insensitivity check over both, and the backup.py equality pin). Both mutation directions verified and both files restored byte-identical. CLAUDE.md's "Throttling has no dedicated error variant" paragraph corrected — it still described the single-substring check. NOT DEPLOYED: the label is only visible in a log line and a response body, so an operator sees no change until this ships.**
 
+## The edge's absorption cliff was NOT found, and the two knobs fight each other (2026-08-21)
+
+Follow-up to `### DEPLOYED AND ANSWERED (2026-08-21)`, which found the Akamai edge silently
+absorbing origin 503s at 15.5% and 32% origin failure and never established where that stops.
+Measurement only — no code changed, nothing deployed, run against `e0bd7ef-kvfail`.
+
+**The answer: no cliff is reachable from one laptop. The edge absorbed a measured 50.9% origin
+failure rate with ZERO client-visible failures.** Across roughly 17,000 redirects today, at every
+rate and duration tried, **not one non-302 ever reached a client.**
+
+`n` held small enough per rung that origin failure lines stayed under the `spin aka logs -n` cap of
+5,000, so these are counts rather than floors — except where noted:
+
+| c | n | achieved rps | origin `ev=kv_fail` | origin failure rate | client saw |
+|---|---|---|---|---|---|
+| 20 | 300 | 272 | 0 | 0% | 300× `302` |
+| 50 | 300 | 201 | 0 | 0% | 300× `302` |
+| 100 | 300 | 430 | 0 | 0% | 300× `302` |
+| 200 | 600 | 723 | 49 | 8.2% | 600× `302` |
+| 300 | 1,200 | 1,052 | 106 | 8.8% | 1,200× `302` |
+| 300 | 3,000 | 1,135 | 1,581 | **52.7%** | 3,000× `302` |
+| 300 | 9,000 | 796 | 4,580 | **50.9%** | **9,000× `302`** |
+
+**Finding 1 — failure onset is near ~700 rps, and it is DURATION-dependent, not purely
+rate-dependent.** The c=300 rows are the control: rate barely moved (1,052 → 1,135) while the
+failure rate went 8.8% → 52.7% purely because the run was longer. That is the signature of a token
+bucket with a burst allowance — a short burst passes on accumulated credit, a sustained load
+exhausts it and rejection climbs. **So "reads per second" alone does not predict whether reads
+fail; how long you have been doing it matters as much.** Any future capacity statement about this
+app has to name a duration.
+
+**Finding 2 — the edge absorbs everything tested, including a majority-failure origin.** 4,580 of
+9,000 link reads failed at the origin, every one of them returning `503` from the
+`DispositionUnavailable` arm, and all 9,000 clients received a correct `302`. `hey` reported no
+error distribution at any rung. The only mechanism that fits is the edge retrying a 5xx and serving
+the retry — and at >50% origin failure a single retry succeeding that reliably suggests the retry
+lands on a different instance or a moment when burst credit is available.
+
+**Finding 3 — WHY the cliff is out of reach, and this is the structurally interesting part: the two
+available knobs oppose each other.** Pushing origin failure higher means starving the read budget,
+which is what `dev/kv-read-pressure.sh` does — but every added pressure source *lowers the achieved
+redirect rate*, and a lower redirect rate produces *fewer* redirect failures. Measured directly:
+five concurrent read-pressure sources dragged the redirect run down to **150 rps and 0% origin
+failure**, against 52.7% for the same slug under no external pressure at all. **More load on the
+app produced a healthier redirect path.** So the redirect's failure rate is governed by the
+redirect's own arrival rate, not by total app-wide read demand, and no combination available here
+drives it toward the ~100% that would defeat the edge's retry.
+
+**What this means for monitoring, which was the question behind the experiment.** Client-side
+monitoring of `/r/{slug}` is **blind by construction**: at 50.9% origin failure the service looked
+flawless from outside — correct status, correct `Location`, no error rate, nothing to alert on.
+The origin-side `ev=kv_fail` line is the only signal that anything is wrong, and nothing reads it.
+**But the experiment also argues against alerting on that line naively:** a 50% origin failure rate
+caused zero user harm, so paging on it would page on a condition the platform is successfully
+handling. The honest state is that **the threshold that matters — where the edge stops absorbing —
+is unmeasured, and nothing here bounds it.** That is the gap to close before designing an alert,
+and it probably needs either a distributed load source or an Akamai-side answer about their retry
+policy, neither of which is available today.
+
+**Two negative results worth recording so nobody re-runs them.** Adding `dev/kv-read-pressure.sh`
+sources to amplify redirect failures does the opposite (Finding 3). And raising redirect
+concurrency past ~300 does not raise the achieved rate — the laptop plateaus at ~1,100–1,300 rps of
+all-302 traffic, so concurrency is not a lever for reaching higher origin failure either.
+
+**Every failure on this path carried `key-value error: rate limit exceeded`** — 4,580 of 4,580 in
+the final window, with `too many requests` appearing zero times. Consistent with the earlier
+finding that the write path produced only that message too, while the *read-pressure* path (backup
+fan-outs) produced both. So which of the two messages you see appears to depend on the shape of the
+request, not on read-versus-write.
+
+Store returned to baseline: probe slug deleted with a complete inline purge of **64 of 64**
+analytics keys, **14 links**, consistency `ok: true` with zero findings, 0 orphan slugs / 0 orphan
+keys, 32 `obsolete_event_keys`.
+
 ---
 
 # START HERE — session handoff, 2026-08-18
@@ -3052,11 +3126,17 @@ repo-wide `grep` — exclude them, or remove the worktrees.
   `## classify_write_error matches both throttle messages` above. Undeployed: the label is only
   visible in a log line and a response body, so this needs a deploy to change what an operator
   actually sees during the next throttling incident.
-- **Decide whether the edge masking origin 503s changes anything.** Newly known, not yet acted on:
-  ~32% of redirect link reads can fail at the origin with zero client impact, because the edge
-  retries. It makes the 404 fix a real repair, but it also means capacity problems are now
-  invisible from outside — the monitoring question ("what SHOULD page someone?") is open, and the
-  origin-side `ev=kv_fail` line is the only signal.
+- **The absorption cliff is unmeasured and probably not measurable from one laptop** — see
+  `## The edge's absorption cliff was NOT found` above. The edge absorbed a measured **50.9%**
+  origin failure rate with zero client impact, and the two available knobs oppose each other
+  (more read pressure lowers the achieved redirect rate, which lowers redirect failures). **Do not
+  design an alert until this is bounded**: 50% origin failure caused zero user harm, so paging on
+  `ev=kv_fail` would page on a condition the platform is handling. Closing it needs a distributed
+  load source or an Akamai answer about their retry policy.
+- **Failure onset is DURATION-dependent, not just rate-dependent** — at a fixed c=300 the failure
+  rate went 8.8% → 52.7% purely because the run was longer, at essentially the same rps. Any
+  capacity claim about this app must name a duration, not just a request rate. This supersedes
+  every bare "~N req/s" ceiling quoted earlier in this file.
 - **A single-link DELETE returned 200 without deleting**, seen once on 2026-08-18, not reproduced
   in 10 further attempts. Filed with the trace needed to diagnose a repeat.
 - Everything else in Future work is trigger-gated; check the trigger before starting.
