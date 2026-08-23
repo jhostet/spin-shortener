@@ -3066,12 +3066,13 @@ appended after it — if you add a section, add it ABOVE this one.
 
 ## Where things stand
 
-- **Repo:** `main` clean, HEAD = `fd8e299`, everything pushed.
-- **Deployed:** `e0bd7ef-kvfail` (2026-08-21), carrying the redirect read-failure fix plus
-  unconditional KV-failure logging. Nothing is waiting to ship.
-- **Store:** baseline — 14 links, 37 analytics keys (**32 of them leftover `events:` keys** from
-  before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless),
-  0 orphan slugs, `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable.
+- **Repo:** `main` clean, HEAD = `7ce879a`, everything pushed.
+- **Deployed:** `7ce879a-errpages` (2026-08-23) — styled visitor-facing error pages for all three
+  `/r/{slug}` statuses, plus the two-marker `classify_write_error` fix. **Nothing is undeployed.**
+- **Store:** baseline — 14 links, ~100 analytics keys (**32 of them leftover `events:` keys** from
+  before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless;
+  the rest are real count shards on the slug used for load probes), 0 orphan slugs / 0 orphan keys,
+  `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable.
 
 ## What shipped this session, in order
 
@@ -3162,10 +3163,13 @@ repo-wide `grep` — exclude them, or remove the worktrees.
 
 ## What to pick up next
 
-- ~~Fix `classify_write_error` to match BOTH throttle messages.~~ **DONE 2026-08-21** — see
-  `## classify_write_error matches both throttle messages` above. Undeployed: the label is only
-  visible in a log line and a response body, so this needs a deploy to change what an operator
-  actually sees during the next throttling incident.
+- ~~Fix `classify_write_error` to match BOTH throttle messages.~~ **DONE and DEPLOYED 2026-08-23** —
+  confirmed live on `7ce879a-errpages`: six concurrent over-cap bulk creates all reported
+  `write_error=throttled`, where the identical run reported `other` two days earlier.
+- **`gui-pages`' catch-all still answers a mistyped URL with a plain-text `Not found`** — the same
+  defect the error pages just removed from `/r/`, one route over, and a visitor who drops the `/r/`
+  from a shared URL lands on it. Its own trigger ("the next time a visitor-facing surface is
+  reviewed") has effectively fired. See the Future-work entry for the three real design questions.
 - **The absorption cliff is unmeasured and probably not measurable from one laptop** — see
   `## The edge's absorption cliff was NOT found` above. The edge absorbed a measured **50.9%**
   origin failure rate with zero client impact, and the two available knobs oppose each other
