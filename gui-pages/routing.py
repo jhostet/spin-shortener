@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
+from errorpages import ERROR_PAGES
+
 # Path -> file relative to the gui/ directory mounted at /gui in this
 # component's virtual filesystem (see spin.toml's [component.gui-pages]
 # `files` mapping). Only these exact paths are served; everything else is
@@ -88,7 +90,7 @@ def build_response(uri: str, read_file: Callable[[str], bytes]) -> Response:
     path = urlparse(uri).path
     filename = resolve_file(path)
     if filename is None:
-        return Response(404, {**SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8"}, b"Not found")
+        return Response(404, {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}, ERROR_PAGES[404])
 
     # A code review flagged that an unguarded read_file() call means a
     # ROUTES-vs-filesystem drift (a page renamed/removed on one side but not
@@ -99,7 +101,7 @@ def build_response(uri: str, read_file: Callable[[str], bytes]) -> Response:
     try:
         body = read_file(filename)
     except OSError:
-        return Response(500, {**SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8"}, b"Internal error")
+        return Response(500, {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}, ERROR_PAGES[500])
 
     headers = {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}
     return Response(200, headers, body)

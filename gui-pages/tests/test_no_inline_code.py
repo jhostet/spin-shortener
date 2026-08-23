@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from errorpages import ERROR_PAGES as GUI_PAGES_ERROR_PAGES
 from routing import ROUTES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -234,6 +235,74 @@ def test_error_page_links_both_stylesheets_with_leading_slash(template):
         f"{template.name} must link /theme.css with a leading slash — "
         "it is served from /r/{{slug}}, so a relative path would resolve under /r/"
     )
+
+
+# gui-pages' own catch-all error pages (gui-pages/errorpages.py) are neither
+# in ROUTES (they're not ordinary served pages, by design) nor a
+# redirect/*.html file, so neither PAGES nor REDIRECT_TEMPLATES picks them up.
+# The guard reaches them the only way it can: by importing the rendered
+# bytes, which is available precisely because errorpages.py is a pure,
+# host-importable module. Decoded and keyed by status for readable test ids.
+GUI_PAGES_ERROR_BODIES = sorted(
+    (status, body.decode("utf-8")) for status, body in GUI_PAGES_ERROR_PAGES.items()
+)
+
+
+def test_gui_pages_error_pages_discovered():
+    """A derivation that silently yields nothing would pass every assertion
+    below it — the same failure mode test_pages_list_is_not_empty/
+    test_scripts_list_is_not_empty/test_redirect_templates_discovered guard
+    against for the other three lists."""
+    assert set(GUI_PAGES_ERROR_PAGES) == {404, 500}
+    for status, body in GUI_PAGES_ERROR_PAGES.items():
+        assert body, f"errorpages.ERROR_PAGES[{status}] is empty"
+
+
+# These pages DO load /theme-init.js on purpose (see errorpages.py's module
+# docstring and docs/plans/gui-pages-error-pages.md, Trade-offs #3) — the
+# opposite of redirect's always-light error pages. So ANY_SCRIPT_TAG must NOT
+# be applied here; INLINE_SCRIPT (permits <script src=…>, forbids a srcless
+# one) is the right bar, matching what this component's own PAGES are
+# already held to.
+@pytest.mark.parametrize("status_and_body", GUI_PAGES_ERROR_BODIES, ids=lambda sb: str(sb[0]))
+def test_gui_pages_error_page_has_no_inline_script(status_and_body):
+    status, body = status_and_body
+    assert not INLINE_SCRIPT.search(body), f"gui-pages error page {status} has an inline <script>"
+
+
+@pytest.mark.parametrize("status_and_body", GUI_PAGES_ERROR_BODIES, ids=lambda sb: str(sb[0]))
+def test_gui_pages_error_page_has_no_style_block(status_and_body):
+    status, body = status_and_body
+    assert not STYLE_BLOCK.search(body), f"gui-pages error page {status} has a <style> block"
+
+
+@pytest.mark.parametrize("status_and_body", GUI_PAGES_ERROR_BODIES, ids=lambda sb: str(sb[0]))
+def test_gui_pages_error_page_has_no_style_attribute(status_and_body):
+    status, body = status_and_body
+    assert not STYLE_ATTR.search(body), f'gui-pages error page {status} has a style="..." attribute'
+
+
+@pytest.mark.parametrize("status_and_body", GUI_PAGES_ERROR_BODIES, ids=lambda sb: str(sb[0]))
+def test_gui_pages_error_page_has_no_event_handler(status_and_body):
+    status, body = status_and_body
+    assert not EVENT_HANDLER.search(body), f"gui-pages error page {status} has an on<event>= handler attribute"
+
+
+# The arbitrary-depth trap: these pages are served at any path depth
+# (/nope, /admin/nope, /links/nope), unlike every real page in gui/, which
+# uses paths relative to its own directory. A relative asset path here would
+# resolve under the requested depth instead of gui's root and 404 silently
+# unstyled — this is the gui-pages analogue of
+# test_error_page_links_both_stylesheets_with_leading_slash above.
+@pytest.mark.parametrize("status_and_body", GUI_PAGES_ERROR_BODIES, ids=lambda sb: str(sb[0]))
+def test_gui_pages_error_page_uses_absolute_asset_paths(status_and_body):
+    status, body = status_and_body
+    for asset in ("/vendor/pico.min.css", "/theme.css", "/theme-init.js"):
+        assert asset in body, (
+            f"gui-pages error page {status} must reference {asset} with a leading "
+            "slash — it is served at arbitrary path depth, so a relative path "
+            "would resolve under the requested depth instead of gui/'s root"
+        )
 
 
 def test_error_404_copy_does_not_distinguish_why_the_slug_is_unavailable():

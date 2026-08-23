@@ -1,5 +1,6 @@
 import pytest
 
+import errorpages
 from routing import SECURITY_HEADERS, build_response, resolve_file
 
 
@@ -58,6 +59,8 @@ def test_build_response_unknown_path_is_404_with_security_headers_still_set():
     response = build_response("/does-not-exist.html", fail_read_file)
 
     assert response.status == 404
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert response.body == errorpages.ERROR_PAGES[404]
     for key, value in SECURITY_HEADERS.items():
         assert response.headers[key] == value
 
@@ -74,8 +77,20 @@ def test_build_response_file_read_failure_is_500_with_security_headers_still_set
     response = build_response("/login.html", failing_read_file)
 
     assert response.status == 500
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert response.body == errorpages.ERROR_PAGES[500]
     for key, value in SECURITY_HEADERS.items():
         assert response.headers[key] == value
+
+
+def test_error_page_bodies_are_nonempty_and_distinct():
+    """A shared shell rendered twice is exactly where both pages end up
+    identical by copy-paste — this guards against that."""
+    not_found = errorpages.ERROR_PAGES[404]
+    internal_error = errorpages.ERROR_PAGES[500]
+    assert isinstance(not_found, bytes) and not_found
+    assert isinstance(internal_error, bytes) and internal_error
+    assert not_found != internal_error
 
 
 def test_security_headers_lock_down_framing_and_plugins():
