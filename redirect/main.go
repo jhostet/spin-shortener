@@ -305,7 +305,7 @@ const retryAfterSeconds = "2"
 // costs nothing.
 func serviceUnavailable(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", retryAfterSeconds)
-	http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	writeErrorPage(w, http.StatusServiceUnavailable, unavailableHTML)
 }
 
 func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
@@ -326,9 +326,9 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 	case linkgate.DispositionPrompt:
 		renderPasswordPrompt(w, http.StatusOK, slug, "")
 	case linkgate.DispositionNotFound:
-		http.NotFound(w, r)
+		notFound(w)
 	case linkgate.DispositionUnreadable:
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		internalError(w)
 	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
 		if resolveErr != nil {
 			emitFailureLine("get", "links", slug, resolveErr)
@@ -366,9 +366,9 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 		}
 		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
 	case linkgate.DispositionNotFound:
-		http.NotFound(w, r)
+		notFound(w)
 	case linkgate.DispositionUnreadable:
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		internalError(w)
 	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
 		if resolveErr != nil {
 			emitFailureLine("get", "links", slug, resolveErr)

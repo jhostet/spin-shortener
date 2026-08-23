@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Something went wrong</title>
+  <!-- Absolute paths: this page is served from /r/{slug}, so relative ones
+       would resolve under /r/. Both files are already exact routes on the gui
+       static component, so styling this page cost no new routes and no new
+       files. No script is loaded, deliberately: these pages keep script-src
+       'none', so the page always renders the light theme regardless of OS
+       preference (see docs/plans/redirect-error-pages.md). -->
+  <link rel="stylesheet" href="/vendor/pico.min.css" />
+  <link rel="stylesheet" href="/theme.css" />
+</head>
+<body class="auth-page">
+  <main class="container auth-shell">
+    <article>
+      <hgroup>
+        <h1>Something went wrong</h1>
+        <p>This request couldn&rsquo;t be completed.</p>
+      </hgroup>
+      <p>If someone shared this link with you, let them know it isn&rsquo;t working.</p>
+    </article>
+  </main>
+</body>
+</html>
