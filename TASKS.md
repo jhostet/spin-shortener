@@ -3120,8 +3120,9 @@ appended after it — if you add a section, add it ABOVE this one.
 ## Where things stand
 
 - **Repo:** `main` clean, HEAD = `7ce879a`, everything pushed.
-- **Deployed:** `7ce879a-errpages` (2026-08-23) — styled visitor-facing error pages for all three
-  `/r/{slug}` statuses, plus the two-marker `classify_write_error` fix. **Nothing is undeployed.**
+- **Deployed:** `d1cca7a-guipages404` (2026-08-23) — styled error pages on BOTH visitor-facing
+  surfaces (`/r/{slug}`'s three statuses and `gui-pages`' catch-all 404/500), plus the two-marker
+  `classify_write_error` fix. **Nothing is undeployed.**
 - **Store:** baseline — 14 links, ~100 analytics keys (**32 of them leftover `events:` keys** from
   before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless;
   the rest are real count shards on the slug used for load probes), 0 orphan slugs / 0 orphan keys,
