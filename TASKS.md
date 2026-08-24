@@ -3109,6 +3109,41 @@ catch-all. **All four paths must carry a leading slash:** a 404 is served at arb
 - [x] End-to-end manual verification of the gui-pages 404 and 500 in a real browser — file(s): (none — verification step) — done when: against a local `spin up --build`, /nope, /admin/nope and /links/nope all return 404 with content-type text/html and render the narrow centered card fully styled (proving the absolute asset paths work at depth), the same page renders dark for a visitor with ss-theme=dark in localStorage and light with no stored value on a light-OS machine, DevTools Console shows zero CSP violations on each, /r/nosuchslug still returns redirect's own page with redirect's own stricter CSP unchanged, a 500 induced by renaming gui/login.html aside renders the "Something went wrong" card, and `git status --porcelain gui/` is empty afterwards — **note:** confirmed via curl (4 depths: /nope, /admin/nope, /links/nope, /promo — all 404/text-html/unchanged CSP) and Playwright (/admin/nope and the induced /login.html 500 both rendered styled, zero CSP violations besides the browser's own navigation-failure entry; dark override via localStorage ss-theme=dark confirmed, then cleared). Confirmed the plan's own UNCONFIRMED item: a mid-run `mv gui/login.html` was NOT visible without a restart (still 200, stale content) — restarting made it visible (500). Restored gui/login.html and restarted again; login.html/dashboard.html both 200 afterward and `git status --porcelain gui/` empty throughout. /r/nosuchslug confirmed still 404 with redirect's own `default-src 'none'; script-src 'none'; …` CSP, untouched.
 - [x] Record the gui-pages error pages in CLAUDE.md and DESIGN.md — file(s): CLAUDE.md, DESIGN.md — done when: CLAUDE.md's Architecture gui-pages bullet says an unknown path and a read failure now render inlined styled HTML (not a file, so the 500 handler does no I/O) with absolute asset paths because a 404 can be served at any depth; its "Security response headers" gui-pages bullet records that the error pages keep the component's existing header set including its CSP unchanged and therefore DO load /theme-init.js, unlike redirect's always-light error pages, with the divergence marked deliberate; its "Tests" bullet says test_no_inline_code.py also covers these bytes by import and that ANY_SCRIPT_TAG stays scoped to redirect/*.html; DESIGN.md's Layout "Auth page" bullet says six pages share the shell, two served by gui-pages; and a DESIGN.md note next to "Redirect error pages" carries this page's copy rules and states that redirect's "may never distinguish why" rule does not apply here and this page's specificity must not be back-ported to /r/ — **note:** all five updates made exactly as specified; new DESIGN.md subsection titled "`gui-pages` error pages" placed immediately after "Redirect error pages"
 
+## Corrected the product docs, which had drifted behind shipped work (2026-08-24)
+
+Not a feature — an audit prompted by asking "what product work do we have?" and finding that
+**`PRODUCT.md`, the document anyone would read to answer that, was wrong about the app's
+deployment state and about two shipped capabilities.** Eight corrections across four files, no
+code touched.
+
+**What was false, and for how long:**
+
+| file | claim | reality |
+|---|---|---|
+| `PRODUCT.md` | "not yet deployed to a production host — Akamai Functions is the intended target but is currently blocked on this app's multi-store KV architecture" | Deployed since **2026-08-06**; the consolidation shipped and unblocked it. Stale ~18 days. |
+| `README.md` | "Not yet deployable to Akamai Functions as-is" | Same. |
+| `CLAUDE.md` | "there is still no single-link status toggle anywhere in the dashboard" | `statusToggleHtml` shipped **and deployed 2026-08-10**. Stale ~14 days. |
+| `PRODUCT.md` | consistency check finds "links missing from an index, index entries with no link"; "Four kinds of finding are never auto-repaired" | Those six index checks were **retired** with the indexes. It is six checks, three repairable, three never. |
+| `PRODUCT.md` | "all three KV stores" | One physical store, three prefixed namespaces. |
+| `README.md` (×2) | "three components", and a three-component intro | **Four** — `gui-pages` has existed since the CSP work. |
+
+**Two shipped, visitor-facing capabilities were missing from `PRODUCT.md` entirely:** the
+row-level Disable/Enable control, and the styled error pages on both public surfaces (including
+the note that the short-link 404 is deliberately identical whatever the cause, while the
+mistyped-URL page is free to be specific).
+
+**The pattern worth noticing, because it will recur.** Every one of these was true when written
+and none was noticed at the moment it stopped being true. The reliability work of the last three
+weeks updated `CLAUDE.md` and `TASKS.md` religiously — those are the files the work touches — and
+never looked at `PRODUCT.md` or `README.md`, which describe the product rather than the code. The
+two shipped capabilities missing from `PRODUCT.md` are the same failure in the other direction:
+nobody adds a product-record line while writing a Go template. **A doc that is only read when
+choosing what to build next only gets audited when someone chooses what to build next** — which is
+exactly when being wrong costs the most. Worth re-reading `PRODUCT.md` at the START of any
+product-planning session, not the end.
+
+- [x] Audit and correct PRODUCT.md, README.md and CLAUDE.md against shipped reality — file(s): PRODUCT.md, README.md, CLAUDE.md — done when: no file claims the app is undeployed or blocked on the KV architecture, the consistency-check description matches `consistency.CHECKS`/`REPAIRABLE_CHECKS` (six/three), the component count reads four, the row-level status toggle and the styled error pages are both recorded as shipped capabilities, and CLAUDE.md's bulk-action paragraph no longer asserts that a single-link status toggle does not exist — **note: ground truth was read from `spin.toml` (four components), `api/consistency.py` (6 checks / 3 repairable, verified against the source tuples rather than from memory) and `gui/dashboard.js` (`statusToggleHtml` at line 382 PATCHing `{status}`). DESIGN.md was audited too and needed nothing. The CLAUDE.md fix is written as a CORRECTED note rather than a silent edit, and closes by telling the reader to check `gui/dashboard.js` before believing a claim here that a control does not exist — the same shape as this file's other retractions.**
+
 ---
 
 # START HERE — session handoff, 2026-08-18
