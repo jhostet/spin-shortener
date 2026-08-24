@@ -315,6 +315,49 @@
   gap: 0.5rem;
 }
 
+/* Bulk schedule cluster (docs/plans/bulk-schedule-and-repoint.md): a plain
+ * <span>, same reasoning as #bulk-tag-controls above — it holds two labelled
+ * datetime inputs plus an inner role=group of the two action buttons, and
+ * Pico's group styling must not wrap the whole cluster. */
+#bulk-schedule-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* Labels here are visible (a bare datetime-local input reads as
+ * "yyyy-mm-dd --:--" with nothing saying which side it is), but Pico's own
+ * label rule still gives them a bottom margin meant for stacked form
+ * layouts — neutralised the same way .tag-input-buffer neutralises it on
+ * the input itself. The input also gets width:auto: unlike the buttons and
+ * the repoint input below, it never sits inside a [role=group], so nothing
+ * else overrides Pico's default width:100% on it. */
+#bulk-schedule-controls label,
+#bulk-schedule-controls input[type="datetime-local"] {
+  margin-bottom: 0;
+}
+#bulk-schedule-controls input[type="datetime-local"] {
+  width: auto;
+}
+
+/* Bulk repoint cluster: #bulk-repoint-controls IS role=group (one input plus
+ * one button is exactly the segmented shape Pico's group is for, mirroring
+ * #bulk-owner-controls), so #bulk-bar [role=group] above already gives it
+ * width:auto and Pico's own [role=group]>* rule already gives the input
+ * flex:1 1 auto and zeroes its margin-bottom. Neither covers actual shrinking
+ * on a narrow screen, though: a flex item's default min-width is its content
+ * size, not 0, so a bare width (however small) still cannot shrink the group
+ * below the input's intrinsic min-content width — measured overflowing
+ * #bulk-bar by 82px at 390px wide before this rule existed. flex:1 1 18rem
+ * sets the *starting* width (a 4096-byte destination is far longer than any
+ * reasonable field, so it needs a real basis to grow toward on wide screens);
+ * min-width:10rem is what actually lets it shrink on narrow ones, the same
+ * two-property shape .tag-input-buffer uses above for the identical reason. */
+#bulk-repoint-url {
+  flex: 1 1 18rem;
+  min-width: 10rem;
+}
+
 #links-body [aria-busy="true"]::before {
   position: absolute;
   inset-inline-start: 50%;

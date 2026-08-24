@@ -154,6 +154,21 @@
           <button type="button" id="bulk-disable-btn" class="outline">Disable</button>
           <button type="button" id="bulk-delete-btn" class="secondary outline">Delete</button>
         </div>
+        <span id="bulk-schedule-controls">
+          <label for="bulk-schedule-start">Starts</label>
+          <input type="datetime-local" id="bulk-schedule-start" />
+          <label for="bulk-schedule-end">Expires</label>
+          <input type="datetime-local" id="bulk-schedule-end" />
+          <div role="group">
+            <button type="button" id="bulk-schedule-set-btn" class="outline">Set schedule</button>
+            <button type="button" id="bulk-schedule-clear-btn" class="outline">Clear schedule</button>
+          </div>
+        </span>
+        <div id="bulk-repoint-controls" role="group">
+          <label for="bulk-repoint-url" class="visually-hidden">New destination URL</label>
+          <input type="url" id="bulk-repoint-url" placeholder="New destination URL&hellip;" />
+          <button type="button" id="bulk-repoint-btn" class="outline">Repoint</button>
+        </div>
         <span id="bulk-tag-controls" hidden>
           <div class="tag-input" data-max="10" data-note="bulk-tag-input-note">
             <input type="text" id="bulk-tag-input" class="tag-input-buffer" list="tag-suggestions" aria-label="Tags to add or remove" placeholder="Add a tag&hellip;" />

@@ -159,6 +159,11 @@ const ERROR_MESSAGES = {
   cannot_delete_self: "You can't delete your own account while logged in as it.",
   cannot_disable_self: "You can't disable your own account while logged in as it.",
   invalid_target_url: "Enter a valid destination URL (including https://).",
+  // The 4,096-byte figure is api/links.py's MAX_TARGET_URL_BYTES, restated
+  // here for copy only — same reasoning as BULK_MAX_SELECTION above: the
+  // server is authoritative, so a drift here only ever produces a slightly
+  // stale number in this sentence, never wrong enforcement.
+  target_url_too_long: "That destination URL is too long — the limit is 4,096 bytes.",
   invalid_custom_slug: "Custom short links can only use letters, numbers, hyphens, and underscores (3–32 characters).",
   slug_taken: "That short link is already in use — try a different one.",
   invalid_start_at: "The start date/time isn't valid.",

@@ -438,6 +438,7 @@ function updateBulkBar() {
     : `${count} link${count === 1 ? "" : "s"} selected`;
 
   for (const id of ["bulk-enable-btn", "bulk-disable-btn", "bulk-delete-btn",
+                     "bulk-schedule-set-btn", "bulk-schedule-clear-btn", "bulk-repoint-btn",
                      "bulk-tag-add-btn", "bulk-tag-remove-btn", "bulk-reassign-btn"]) {
     document.getElementById(id).disabled = overCap;
   }
@@ -1254,6 +1255,148 @@ async function handleBulkReassign() {
 
 document.getElementById("bulk-reassign-btn").addEventListener("click", handleBulkReassign);
 
+// Both schedule and repoint confirm, and that is a decision, not a default
+// (DESIGN.md's Bulk Action Bar rule: confirm what is not reversible by the
+// adjacent control). Enable/Disable and tag/untag skip it because the
+// neighbouring button undoes them; reassign confirms because the UI no
+// longer shows each link's previous owner. Schedule and repoint are in
+// reassign's category — neither Set nor Clear nor Repoint can restore N
+// different previous per-link values.
+//
+// mode is "set" or "clear". A BLANK datetime input under "set" means "leave
+// this side alone" (posted as an omitted key), never "clear it" — the one
+// place this bulk bar deliberately diverges from the row edit form, where a
+// blank field clears. That divergence is the whole point: a bulk clear must
+// be asked for, not achieved by leaving a box empty. "clear" always posts
+// both sides as explicit null.
+async function handleBulkSchedule(mode) {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
+
+  const startInput = document.getElementById("bulk-schedule-start");
+  const endInput = document.getElementById("bulk-schedule-end");
+
+  const payload = { slugs, action: "schedule" };
+  const n = slugs.length;
+  let message, confirmLabel, verb;
+
+  if (mode === "clear") {
+    payload.start_at = null;
+    payload.end_at = null;
+    message = `Clear the schedule on ${n} link${n === 1 ? "" : "s"}? They become active immediately and never expire.`;
+    confirmLabel = `Clear schedule on ${n} link${n === 1 ? "" : "s"}`;
+    verb = "Cleared the schedule on";
+  } else {
+    const hasStart = Boolean(startInput.value);
+    const hasEnd = Boolean(endInput.value);
+    if (!hasStart && !hasEnd) return;
+    if (hasStart) payload.start_at = datetimeLocalToIso(startInput.value);
+    if (hasEnd) payload.end_at = datetimeLocalToIso(endInput.value);
+
+    if (hasStart && hasEnd) {
+      message = `Set Starts to ${formatTimestamp(payload.start_at)} and Expires to ${formatTimestamp(payload.end_at)} on ${n} link${n === 1 ? "" : "s"}? Any existing dates on those links are replaced.`;
+    } else if (hasEnd) {
+      message = `Set Expires to ${formatTimestamp(payload.end_at)} on ${n} link${n === 1 ? "" : "s"}? Their Starts dates are left as they are.`;
+    } else {
+      message = `Set Starts to ${formatTimestamp(payload.start_at)} on ${n} link${n === 1 ? "" : "s"}? Their Expires dates are left as they are.`;
+    }
+    confirmLabel = `Set schedule on ${n} link${n === 1 ? "" : "s"}`;
+    verb = "Rescheduled";
+  }
+
+  if (!(await confirmDialog(message, { confirmLabel }))) return;
+
+  const errorEl = document.getElementById("links-error");
+  const errorsEl = document.getElementById("bulk-action-errors");
+  const successEl = document.getElementById("links-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+
+  const { ok, data } = await api.post("/links/bulk-action", payload);
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      errorEl.textContent = `Nothing was changed — ${data.row_errors.length} of the selected links couldn't take this schedule. Refresh and try again.`;
+      errorsEl.innerHTML = renderRowErrorList(data.row_errors);
+      errorsEl.hidden = false;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not reschedule the selected links.");
+    }
+    return;
+  }
+
+  if (data.partial) {
+    errorEl.textContent =
+      `${verb} ${data.count} of ${n} links. The store was busy for the rest — ` +
+      `they're still selected below so you can try again.`;
+    await loadLinks();
+    narrowSelectionTo(data.not_applied || []);
+    return;
+  }
+
+  successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
+  loadLinks();
+}
+
+document.getElementById("bulk-schedule-set-btn").addEventListener("click", () => handleBulkSchedule("set"));
+document.getElementById("bulk-schedule-clear-btn").addEventListener("click", () => handleBulkSchedule("clear"));
+
+async function handleBulkRepoint() {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
+  const urlInput = document.getElementById("bulk-repoint-url");
+  const targetUrl = urlInput.value.trim();
+  if (!targetUrl) return;
+
+  const n = slugs.length;
+  // A 4096-byte destination would wreck the ~26rem confirm dialog, so the
+  // displayed URL is truncated — the request itself still sends the full
+  // value, and a too-long one is caught server-side same as everywhere else.
+  const displayUrl = targetUrl.length > 80 ? `${targetUrl.slice(0, 80)}…` : targetUrl;
+  if (!await confirmDialog(
+    `Point ${n} link${n === 1 ? "" : "s"} at "${displayUrl}"? Their current destinations can't be recovered.`,
+    { confirmLabel: `Repoint ${n} link${n === 1 ? "" : "s"}` }
+  )) return;
+
+  const errorEl = document.getElementById("links-error");
+  const errorsEl = document.getElementById("bulk-action-errors");
+  const successEl = document.getElementById("links-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+
+  const { ok, data } = await api.post("/links/bulk-action", { slugs, action: "repoint", target_url: targetUrl });
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      errorEl.textContent = `Nothing was changed — ${data.row_errors.length} of the selected links are no longer available. Refresh and try again.`;
+      errorsEl.innerHTML = renderRowErrorList(data.row_errors);
+      errorsEl.hidden = false;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not repoint the selected links.");
+    }
+    return;
+  }
+
+  if (data.partial) {
+    errorEl.textContent =
+      `Repointed ${data.count} of ${slugs.length} links. The store was busy for the rest — ` +
+      `they're still selected below so you can try again.`;
+    await loadLinks();
+    narrowSelectionTo(data.not_applied || []);
+    return;
+  }
+
+  successEl.textContent = `Repointed ${data.count} link${data.count === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
+  urlInput.value = "";
+  loadLinks();
+}
+
+document.getElementById("bulk-repoint-btn").addEventListener("click", handleBulkRepoint);
+
 // Dashboard-local overrides for api/bulk.py's per-row error codes — the
 // invalid_password override at handleEditFormSubmit is the precedent for
 // giving one call site's copy priority over the shared ERROR_MESSAGES map.
@@ -1522,6 +1665,7 @@ function openDeepLinkedEditRow() {
 
 wireWindowValidation(document.getElementById("start-at"), document.getElementById("end-at"));
 wireWindowValidation(document.getElementById("bulk-start-at"), document.getElementById("bulk-end-at"));
+wireWindowValidation(document.getElementById("bulk-schedule-start"), document.getElementById("bulk-schedule-end"));
 
 // loadMe() must resolve before loadLinks()'s first render — renderLinksTable()
 // reads currentPrincipal (set by loadMe()) to decide whether to show each
