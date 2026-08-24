@@ -80,7 +80,20 @@
    * answered one column to its left, while Clicks answers one that nothing
    * else on the row does. */
   #links-table th:nth-child(1),
-  #links-table td:nth-child(1),
+  /* :not([colspan]) is load-bearing, not defensive. A cell that spans every
+     column is not a column, so a column-hiding rule must never match it —
+     and the two full-width rows in this table are both td:nth-child(1) of
+     their own <tr>: the edit form (<td colspan="10">) and the empty state
+     (<td colspan="10" class="empty-state">). Without this guard, below 600px
+     the edit form was unreachable and an over-filtered table rendered at 0
+     height with its "no links match" explanation hidden — measured in a real
+     browser at 390px, not inferred. Deliberately NOT the neighbouring
+     `tbody > tr:not(.edit-row)` idiom used by the nth-child(2)/(6) width
+     rules below: that one misses the empty state, whose <tr> carries no
+     class, which is how this survived. Guarding only nth-child(1) is
+     sufficient because a single-cell full-width row can never be any other
+     child index. */
+  #links-table td:nth-child(1):not([colspan]),
   #links-table th:nth-child(3),
   #links-table td:nth-child(3),
   #links-table th:nth-child(4),
