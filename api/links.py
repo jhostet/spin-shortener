@@ -141,9 +141,11 @@ def is_valid_target_url(target_url: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def _target_url_error_body(error_code: str) -> dict:
+def target_url_error_body(error_code: str) -> dict:
     """Echoes the cap in the response so no client ever hardcodes it, the same
-    convention every sibling cap in this codebase follows."""
+    convention every sibling cap in this codebase follows. Public — shared
+    across modules the same way can_view/can_edit/target_url_error are:
+    bulk.py's repoint action builds this same body without restating the cap."""
     if error_code == "target_url_too_long":
         return {"error": error_code, "max_bytes": MAX_TARGET_URL_BYTES}
     return {"error": error_code}
@@ -220,7 +222,7 @@ async def handle_create(store, principal: Principal, request, write=kvretry.dire
     target_url = payload.get("target_url")
     url_error = target_url_error(target_url)
     if url_error:
-        return json_response(400, _target_url_error_body(url_error))
+        return json_response(400, target_url_error_body(url_error))
 
     policy = await urlpolicy.load_policy(store)
     verdict = urlpolicy.evaluate(target_url, policy)
@@ -384,7 +386,7 @@ async def handle_update(store, principal: Principal, slug: str, request, write=k
         target_url = payload["target_url"]
         url_error = target_url_error(target_url)
         if url_error:
-            return json_response(400, _target_url_error_body(url_error))
+            return json_response(400, target_url_error_body(url_error))
         policy = await urlpolicy.load_policy(store)
         verdict = urlpolicy.evaluate(target_url, policy)
         if not verdict["allowed"]:

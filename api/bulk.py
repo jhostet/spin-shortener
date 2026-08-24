@@ -443,7 +443,7 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
                 write_failure = (exc,)
                 break
             applied.append(slug)
-    else:  # delete
+    elif action == "delete":
         for slug in records:
             try:
                 await write(lambda s=slug: store.delete(f"slug:{s}"))
@@ -451,6 +451,12 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
                 write_failure = (exc,)
                 break
             applied.append(slug)
+    else:  # pragma: no cover - guarded by the BULK_ACTIONS check above
+        # A name added to BULK_ACTIONS with no matching write branch used to
+        # fall into "delete" as the implicit catch-all — the failure mode of
+        # a half-finished action was deleting every selected link. This is
+        # the guard: an unhandled action name is a clean 500, never a delete.
+        return json_response(500, {"error": "unhandled_action", "action": action})
 
     if write_failure is None:
         result = {"ok": True, "action": action, "count": len(slugs)}

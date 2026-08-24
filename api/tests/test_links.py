@@ -256,6 +256,17 @@ async def test_target_url_cap_is_measured_in_bytes_not_characters():
     assert json.loads(resp.body)["error"] == "target_url_too_long"
 
 
+def test_target_url_error_body_is_public():
+    """links.target_url_error_body (not _target_url_error_body) is shared the
+    same way can_view/can_edit/target_url_error are — bulk.py's repoint
+    action builds its 400 body from this directly."""
+    assert links.target_url_error_body("target_url_too_long") == {
+        "error": "target_url_too_long",
+        "max_bytes": links.MAX_TARGET_URL_BYTES,
+    }
+    assert links.target_url_error_body("invalid_target_url") == {"error": "invalid_target_url"}
+
+
 async def test_target_url_cap_is_enforced_on_update_too():
     """The second of the three authoring paths. A cap enforced at create only
     is trivially bypassed by creating short and then updating long."""
