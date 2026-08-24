@@ -552,6 +552,18 @@ async def test_bulk_action_missing_action():
     assert json.loads(resp.body)["error"] == "invalid_action"
 
 
+async def test_bulk_action_unhandled_action_name_returns_500_and_writes_nothing(monkeypatch):
+    store = FakeStore()
+    slug = await _make_link(store)
+    before = dict(store._data)
+    monkeypatch.setattr(bulk, "BULK_ACTIONS", bulk.BULK_ACTIONS | {"bogus_but_allowed"})
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "bogus_but_allowed"}), fake_get_many, kvretry.direct)
+    assert resp.status == 500
+    assert json.loads(resp.body) == {"error": "unhandled_action", "action": "bogus_but_allowed"}
+    assert store._data == before  # nothing deleted — the hazard this guard exists for
+
+
 async def test_bulk_action_no_slugs_empty_list():
     store = FakeStore()
     resp = await bulk.handle_bulk_action(store, FakeStore(), _principal(), _action_request({"slugs": [], "action": "delete"}), fake_get_many, kvretry.direct)

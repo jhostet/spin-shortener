@@ -3190,7 +3190,7 @@ destination-authoring path**, so it must call both `links.target_url_error` and
 Baselines before this work: api 679 passed, gui-pages 108 passed, `go test ./linkgate/...` ok.
 
 - [x] Make links._target_url_error_body public as links.target_url_error_body (must land before the repoint branch) — file(s): api/links.py, api/tests/test_links.py — done when: the function is public with a docstring saying it is shared like can_view/can_edit/target_url_error, handle_create and handle_update call it under the new name, `grep -rn "_target_url_error_body" api` returns nothing, a 400 for an over-4096-byte target_url still carries {"error": "target_url_too_long", "max_bytes": 4096} byte-identically from both handlers, and `cd api && uv run pytest` passes — **note:** straightforward rename, no behavior change; added one new direct-call test (`test_target_url_error_body_is_public`) since the existing tests only exercised it indirectly through the handlers. 680 passed (679 baseline + 1).
-- [ ] Guard handle_bulk_action's catch-all delete branch before adding any new action — file(s): api/bulk.py, api/tests/test_bulk.py — done when: the write loop's final `else:  # delete` is `elif action == "delete":` with a new final else returning 500 {"error": "unhandled_action", "action": action}, delete's own behaviour and response are unchanged, and a new test that monkeypatches BULK_ACTIONS to include an unhandled name asserts 500 unhandled_action with dict(store._data) byte-identical (i.e. nothing deleted)
+- [x] Guard handle_bulk_action's catch-all delete branch before adding any new action — file(s): api/bulk.py, api/tests/test_bulk.py — done when: the write loop's final `else:  # delete` is `elif action == "delete":` with a new final else returning 500 {"error": "unhandled_action", "action": action}, delete's own behaviour and response are unchanged, and a new test that monkeypatches BULK_ACTIONS to include an unhandled name asserts 500 unhandled_action with dict(store._data) byte-identical (i.e. nothing deleted) — **note:** the guard code itself was already written and committed as part of task 1's commit (5c83c60); only the pinning test was missing. Added `test_bulk_action_unhandled_action_name_returns_500_and_writes_nothing`, mutation-verified against the old catch-all-delete shape (reverting the guard makes it fail with a 200 that actually deletes the link). 681 passed (680 + 1).
 - [ ] Add the repoint bulk action with BOTH destination checks — file(s): api/bulk.py, api/tests/test_bulk.py — done when: BULK_ACTIONS contains "repoint"; POST /api/links/bulk-action {"action":"repoint","slugs":[...],"target_url":...} rewrites every selected record's target_url and bumps updated_at; a missing/non-string/schemeless URL returns 400 {"error":"invalid_target_url"}; a >4096-byte URL returns 400 {"error":"target_url_too_long","max_bytes":4096}; a policy-violating URL returns 400 {"error":"destination_not_allowed","host","reason","matched_rule"} with dict(store._data) byte-identical; per-row not_found/forbidden still report all-or-nothing via bulk_validation_failed; the per-row can_edit check is applied (reassign's skip is NOT copied); urlpolicy.load_policy is called only for this action; and `cd api && uv run pytest` passes
 - [ ] Extend test_url_policy_enforcement.py from three authoring paths to four (depends on the repoint task) — file(s): api/tests/test_url_policy_enforcement.py — done when: a new test parametrized over both existing POLICY_CONFIGS asserts bulk repoint returns 400 destination_not_allowed with the store byte-identical, test_admin_is_not_exempt_from_the_policy also covers repoint, the module docstring says FOUR paths and records a fresh mutation run (temporarily delete the urlpolicy.evaluate block from bulk.py's repoint branch, confirm exactly this module fails, restore), and `cd api && uv run pytest` passes
 - [ ] Add the schedule bulk action with a per-link window merge — file(s): api/bulk.py, api/tests/test_bulk.py — done when: BULK_ACTIONS contains "schedule"; key presence decides (posting only start_at leaves every selected record's end_at byte-identical, an explicit null clears that side, neither key present returns 400 {"error":"no_window_fields"}); an unparseable value returns 400 invalid_start_at / invalid_end_at; a merged window where start >= end appends a per-row {"slug","error":"invalid_window_range","start_at","end_at"} and NOTHING is written for any slug; the write loop writes exactly the merged values the validation loop computed (no recomputation); updated_at is bumped; success and partial responses echo only the sides that were provided; a schedule request deletes no record; and `cd api && uv run pytest` passes
@@ -3211,15 +3211,16 @@ appended after it — if you add a section, add it ABOVE this one.
 ## Where things stand
 
 - **Repo:** `main` clean, HEAD = `7ce879a`, everything pushed.
-- **RESUME HERE (2026-08-24, stopped for a machine restart):** `## Bulk schedule and repoint`,
-  **task 2 of 10**. Plan: `docs/plans/bulk-schedule-and-repoint.md`. Task 1 is done and green
-  (api 680). **Task 2 is a prerequisite, not a preference** — `handle_bulk_action`'s write dispatch
-  ends in a catch-all `else:  # delete` while `BULK_ACTIONS` is validated separately at
-  `api/bulk.py:330`, so adding `"schedule"` to that set before the guard exists routes a reschedule
-  of 50 links into the delete loop and destroys them. Guard it (`elif action == "delete":` plus an
-  explicit `500 unhandled_action`) and pin it with the monkeypatch test BEFORE tasks 3 and 5.
-  Nothing is broken today — all six current actions route correctly; the hazard is only on the path
-  this feature takes.
+- **RESUME HERE (2026-08-24):** `## Bulk schedule and repoint`, **task 3 of 10**. Plan:
+  `docs/plans/bulk-schedule-and-repoint.md`. Tasks 1 and 2 are done and green (api 681). **Task 2
+  turned out to already be code-complete** — the guard (`elif action == "delete":` plus a final
+  `else: return 500 unhandled_action`) was written as part of task 1's commit (`5c83c60`); only the
+  pinning test was missing, and it's added now (`test_bulk_action_unhandled_action_name_returns_500_and_writes_nothing`,
+  mutation-verified against the old catch-all shape). **Next up is task 3, the repoint action** —
+  add `"repoint"` to `BULK_ACTIONS` with a new write-dispatch branch that rewrites `target_url` and
+  bumps `updated_at`, validated through `links.target_url_error_body` (both the length cap and
+  `urlpolicy.evaluate`, loaded only for this action) before any write, all-or-nothing like every
+  other row-error path. See the task line in this file for the exact error-body shapes required.
 - **Deployed:** `4de62b1-mobilefix` (2026-08-24) — tag chip input + multi-tag AND/OR filtering, the
   chip's `currentColor` 3:1 border, and the mobile column-hide fix. **Nothing is undeployed** (HEAD
   is docs plus one refactor).
