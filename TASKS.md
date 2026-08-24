@@ -3211,10 +3211,18 @@ appended after it — if you add a section, add it ABOVE this one.
 ## Where things stand
 
 - **Repo:** `main` clean, HEAD = `7ce879a`, everything pushed.
-- **Deployed:** `7437434-docsync` (2026-08-24) — a label-only redeploy of the same code as
-  `d1cca7a-guipages404`, so `X-SS-Version` matches the tip commit. Functionally: styled error pages
-  on BOTH visitor-facing surfaces (`/r/{slug}`'s three statuses and `gui-pages`' catch-all 404/500),
-  plus the two-marker `classify_write_error` fix. **Nothing is undeployed.**
+- **RESUME HERE (2026-08-24, stopped for a machine restart):** `## Bulk schedule and repoint`,
+  **task 2 of 10**. Plan: `docs/plans/bulk-schedule-and-repoint.md`. Task 1 is done and green
+  (api 680). **Task 2 is a prerequisite, not a preference** — `handle_bulk_action`'s write dispatch
+  ends in a catch-all `else:  # delete` while `BULK_ACTIONS` is validated separately at
+  `api/bulk.py:330`, so adding `"schedule"` to that set before the guard exists routes a reschedule
+  of 50 links into the delete loop and destroys them. Guard it (`elif action == "delete":` plus an
+  explicit `500 unhandled_action`) and pin it with the monkeypatch test BEFORE tasks 3 and 5.
+  Nothing is broken today — all six current actions route correctly; the hazard is only on the path
+  this feature takes.
+- **Deployed:** `4de62b1-mobilefix` (2026-08-24) — tag chip input + multi-tag AND/OR filtering, the
+  chip's `currentColor` 3:1 border, and the mobile column-hide fix. **Nothing is undeployed** (HEAD
+  is docs plus one refactor).
 - **Store:** baseline — 14 links, ~100 analytics keys (**32 of them leftover `events:` keys** from
   before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless;
   the rest are real count shards on the slug used for load probes), 0 orphan slugs / 0 orphan keys,
