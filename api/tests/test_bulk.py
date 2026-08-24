@@ -981,6 +981,245 @@ async def test_bulk_action_reassign_two_old_owners_updates_both_records():
         assert record["owner"] == "carol"
 
 
+# --- handle_bulk_action: repoint ---
+
+
+async def test_bulk_action_repoint_success_updates_target_url_and_updated_at():
+    store = FakeStore()
+    slug1 = await _make_link(store, owner="alice")
+    slug2 = await _make_link(store, owner="alice")
+    before1 = json.loads(await store.get(f"slug:{slug1}"))
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(username="alice"),
+        _action_request({"slugs": [slug1, slug2], "action": "repoint", "target_url": "https://new.example/dest"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body == {"ok": True, "action": "repoint", "count": 2, "target_url": "https://new.example/dest"}
+
+    for slug in (slug1, slug2):
+        record = json.loads(await store.get(f"slug:{slug}"))
+        assert record["target_url"] == "https://new.example/dest"
+    after1 = json.loads(await store.get(f"slug:{slug1}"))
+    assert after1["updated_at"] >= before1["updated_at"]
+
+
+async def test_bulk_action_repoint_missing_target_url():
+    store = FakeStore()
+    slug = await _make_link(store)
+    before = dict(store._data)
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "repoint"}), fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_target_url"
+    assert store._data == before
+
+
+async def test_bulk_action_repoint_schemeless_target_url():
+    store = FakeStore()
+    slug = await _make_link(store)
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "repoint", "target_url": "not-a-url"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_target_url"
+
+
+async def test_bulk_action_repoint_too_long_target_url_echoes_max_bytes():
+    store = FakeStore()
+    slug = await _make_link(store)
+    before = dict(store._data)
+    long_url = "https://example.com/" + ("a" * links.MAX_TARGET_URL_BYTES)
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "repoint", "target_url": long_url}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body == {"error": "target_url_too_long", "max_bytes": links.MAX_TARGET_URL_BYTES}
+    assert store._data == before
+
+
+async def test_bulk_action_repoint_policy_violation_writes_nothing():
+    store = FakeStore()
+    slug1 = await _make_link(store)
+    slug2 = await _make_link(store)
+    await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
+    before = dict(store._data)
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(),
+        _action_request({"slugs": [slug1, slug2], "action": "repoint", "target_url": "https://evil.example/x"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "destination_not_allowed"
+    assert body["host"] == "evil.example"
+    assert "reason" in body and "matched_rule" in body
+    assert store._data == before  # neither link's destination changed
+
+
+async def test_bulk_action_repoint_not_found_row_error():
+    store = FakeStore()
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": ["missing"], "action": "repoint", "target_url": "https://ok.example/y"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{"slug": "missing", "error": "not_found"}]
+
+
+async def test_bulk_action_repoint_forbidden_row_error_applies_can_edit():
+    """Unlike reassign, repoint does NOT skip the per-row can_edit check."""
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(username="bob"),
+        _action_request({"slugs": [slug], "action": "repoint", "target_url": "https://ok.example/y"}), fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{"slug": slug, "error": "forbidden"}]
+
+
+async def test_bulk_action_repoint_only_loads_policy_for_repoint(monkeypatch):
+    store = FakeStore()
+    slug = await _make_link(store)
+    calls = []
+    real_load_policy = urlpolicy.load_policy
+
+    async def counting_load_policy(s):
+        calls.append(1)
+        return await real_load_policy(s)
+
+    monkeypatch.setattr(urlpolicy, "load_policy", counting_load_policy)
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "disable"}), fake_get_many, kvretry.direct)
+    assert resp.status == 200
+    assert calls == []
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "repoint", "target_url": "https://ok.example/y"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 200
+    assert calls == [1]
+
+
+# --- handle_bulk_action: schedule ---
+
+
+async def test_bulk_action_schedule_setting_only_end_at_leaves_start_at_untouched():
+    store = FakeStore()
+    slug = await _make_link(store, start_at="2027-01-01T00:00:00Z")
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(),
+        _action_request({"slugs": [slug], "action": "schedule", "end_at": "2028-01-01T00:00:00Z"}), fake_get_many, kvretry.direct)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body == {"ok": True, "action": "schedule", "count": 1, "end_at": "2028-01-01T00:00:00Z"}
+
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["start_at"] == "2027-01-01T00:00:00Z"
+    assert record["end_at"] == "2028-01-01T00:00:00Z"
+
+
+async def test_bulk_action_schedule_explicit_null_clears_both_sides():
+    store = FakeStore()
+    slug = await _make_link(store, start_at="2027-01-01T00:00:00Z", end_at="2027-06-01T00:00:00Z")
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(),
+        _action_request({"slugs": [slug], "action": "schedule", "start_at": None, "end_at": None}), fake_get_many, kvretry.direct)
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body == {"ok": True, "action": "schedule", "count": 1, "start_at": None, "end_at": None}
+
+    record = json.loads(await store.get(f"slug:{slug}"))
+    assert record["start_at"] is None
+    assert record["end_at"] is None
+
+
+async def test_bulk_action_schedule_neither_field_present_is_400():
+    store = FakeStore()
+    slug = await _make_link(store)
+    before = dict(store._data)
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "schedule"}), fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "no_window_fields"
+    assert store._data == before
+
+
+async def test_bulk_action_schedule_invalid_start_at():
+    store = FakeStore()
+    slug = await _make_link(store)
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "schedule", "start_at": "not-a-date"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_start_at"
+
+
+async def test_bulk_action_schedule_invalid_end_at():
+    store = FakeStore()
+    slug = await _make_link(store)
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": [slug], "action": "schedule", "end_at": "not-a-date"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_end_at"
+
+
+async def test_bulk_action_schedule_merged_window_conflict_writes_nothing_for_any_slug():
+    """The plan's central case: one bad link blocks the WHOLE batch, and the
+    row error carries the merged (not raw) dates."""
+    store = FakeStore()
+    conflicting_slug = await _make_link(store, start_at="2027-06-01T00:00:00Z")
+    fine_slug = await _make_link(store)
+    before = dict(store._data)
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(),
+        _action_request({"slugs": [conflicting_slug, fine_slug], "action": "schedule", "end_at": "2027-01-01T00:00:00Z"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{
+        "slug": conflicting_slug,
+        "error": "invalid_window_range",
+        "start_at": "2027-06-01T00:00:00Z",
+        "end_at": "2027-01-01T00:00:00Z",
+    }]
+    assert store._data == before  # NOTHING written, including the fine link
+
+
+async def test_bulk_action_schedule_not_found_row_error():
+    store = FakeStore()
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(), _action_request({"slugs": ["missing"], "action": "schedule", "end_at": "2028-01-01T00:00:00Z"}),
+        fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{"slug": "missing", "error": "not_found"}]
+
+
+async def test_bulk_action_schedule_forbidden_row_error_applies_can_edit():
+    store = FakeStore()
+    slug = await _make_link(store, owner="alice")
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(username="bob"),
+        _action_request({"slugs": [slug], "action": "schedule", "end_at": "2028-01-01T00:00:00Z"}), fake_get_many, kvretry.direct)
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "bulk_validation_failed"
+    assert body["row_errors"] == [{"slug": slug, "error": "forbidden"}]
+
+
 async def test_bulk_action_delete_leaves_analytics_untouched():
     """docs/plans/inline-analytics-purge-on-delete.md's Trade-offs #5: bulk
     delete's rejected inline-purge arithmetic (50 slugs x 95 keys ~= 95-123s
@@ -1202,3 +1441,70 @@ async def test_bulk_action_tag_untag_report_partial_with_no_index_field():
     assert body["applied"] == [slug1]
     assert body["not_applied"] == [slug2]
     assert body["tags"] == ["sale"]
+
+
+async def test_bulk_action_repoint_report_partial_with_write_error():
+    from tests.fakes import recording_sleep
+
+    store = ThrottlingStore()
+    slug1 = await _make_link(store, owner="alice")
+    slug2 = await _make_link(store, owner="alice")
+    slug3 = await _make_link(store, owner="alice")
+    store._fail_times[f"slug:{slug2}"] = 10  # second write fails; loop breaks there
+    before3 = json.loads(await store.get(f"slug:{slug3}"))
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(username="alice"),
+        _action_request({"slugs": [slug1, slug2, slug3], "action": "repoint", "target_url": "https://new.example/dest"}),
+        fake_get_many, write)
+
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["ok"] is False
+    assert body["partial"] is True
+    assert body["action"] == "repoint"
+    assert body["applied"] == [slug1]
+    assert body["not_applied"] == [slug2, slug3]
+    assert body["next_step"] == "resubmit"
+    assert body["write_error"] == "throttled"
+    assert "index_updated" not in body
+    assert body["target_url"] == "https://new.example/dest"
+
+    after3 = json.loads(await store.get(f"slug:{slug3}"))
+    assert after3 == before3  # the loop never reached slug3 — byte-identical
+
+
+async def test_bulk_action_schedule_report_partial_with_write_error():
+    from tests.fakes import recording_sleep
+
+    store = ThrottlingStore()
+    slug1 = await _make_link(store, owner="alice")
+    slug2 = await _make_link(store, owner="alice")
+    slug3 = await _make_link(store, owner="alice")
+    store._fail_times[f"slug:{slug2}"] = 10  # second write fails; loop breaks there
+    before3 = json.loads(await store.get(f"slug:{slug3}"))
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+
+    resp = await bulk.handle_bulk_action(
+        store, FakeStore(), _principal(username="alice"),
+        _action_request({"slugs": [slug1, slug2, slug3], "action": "schedule", "end_at": "2028-01-01T00:00:00Z"}),
+        fake_get_many, write)
+
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["ok"] is False
+    assert body["partial"] is True
+    assert body["action"] == "schedule"
+    assert body["applied"] == [slug1]
+    assert body["not_applied"] == [slug2, slug3]
+    assert body["next_step"] == "resubmit"
+    assert body["write_error"] == "throttled"
+    assert "index_updated" not in body
+    assert body["end_at"] == "2028-01-01T00:00:00Z"
+    assert "start_at" not in body
+
+    after3 = json.loads(await store.get(f"slug:{slug3}"))
+    assert after3 == before3  # the loop never reached slug3 — byte-identical

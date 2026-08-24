@@ -24,7 +24,7 @@ ACTION_STATUSES = {"enable": "active", "disable": "disabled"}  # values ⊆ link
 # "reassign" is a member so a request naming it gets a clean 400/403 rather
 # than falling into the delete branch below, but the actual owner-move logic
 # lands in a later task (see TASKS.md's "Add the reassign bulk action").
-BULK_ACTIONS = {"delete", "enable", "disable", "tag", "untag", "reassign"}
+BULK_ACTIONS = {"delete", "enable", "disable", "tag", "untag", "reassign", "repoint", "schedule"}
 
 # None of these strings can ever be a valid destination (a destination must
 # start with a scheme, per format rule 6), so dropping a first row whose
@@ -365,6 +365,43 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
         if not tag_list:
             return json_response(400, {"error": "no_tags"})
 
+    new_target_url: str | None = None
+    if action == "repoint":
+        new_target_url = payload.get("target_url")
+        # Same choke point as handle_create/handle_update/validate_bulk_rows.
+        # This is the FOURTH authoring path; skipping either check here is a
+        # policy bypass, not a shortcut. See docs/plans/bulk-schedule-and-repoint.md.
+        url_error = links.target_url_error(new_target_url)
+        if url_error:
+            return json_response(400, links.target_url_error_body(url_error))
+        policy = await urlpolicy.load_policy(store)
+        verdict = urlpolicy.evaluate(new_target_url, policy)
+        if not verdict["allowed"]:
+            return json_response(400, {
+                "error": "destination_not_allowed",
+                "host": verdict["host"],
+                "reason": verdict["reason"],
+                "matched_rule": verdict["matched_rule"],
+            })
+
+    has_start = has_end = False
+    new_start_at: str | None = None
+    new_end_at: str | None = None
+    planned_windows: dict[str, tuple[str | None, str | None]] = {}
+    if action == "schedule":
+        has_start = "start_at" in payload
+        has_end = "end_at" in payload
+        if not has_start and not has_end:
+            return json_response(400, {"error": "no_window_fields"})
+        if has_start:
+            new_start_at, invalid = links.parse_window_field(payload["start_at"])
+            if invalid:
+                return json_response(400, {"error": "invalid_start_at"})
+        if has_end:
+            new_end_at, invalid = links.parse_window_field(payload["end_at"])
+            if invalid:
+                return json_response(400, {"error": "invalid_end_at"})
+
     # One get_many host call over every slug's record (docs/plans/batch-kv-reads.md)
     # rather than a sequential links.get_link per slug — up to MAX_BULK_ROWS
     # (50) round trips collapsed into a handful of chunked calls.
@@ -393,13 +430,27 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
             if len(tags.apply_tags(record.get("tags", []), tag_list)) > tags.MAX_TAGS_PER_LINK:
                 row_errors.append({"slug": slug, "error": "too_many_tags", "max_tags": tags.MAX_TAGS_PER_LINK})
 
+    if action == "schedule":
+        for slug, record in records.items():
+            merged_start = new_start_at if has_start else record.get("start_at")
+            merged_end = new_end_at if has_end else record.get("end_at")
+            if merged_start is not None and merged_end is not None and merged_start >= merged_end:
+                row_errors.append({
+                    "slug": slug,
+                    "error": "invalid_window_range",
+                    "start_at": merged_start,
+                    "end_at": merged_end,
+                })
+                continue
+            planned_windows[slug] = (merged_start, merged_end)
+
     if row_errors:
         return json_response(400, {"error": "bulk_validation_failed", "row_errors": row_errors})
 
     applied: list[str] = []
     write_failure = None  # (exc,) of whichever write first failed
 
-    # docs/plans/derived-link-indexes.md, Stage 2: none of these six branches
+    # docs/plans/derived-link-indexes.md, Stage 2: none of these eight branches
     # has an index step any more — there is no index. A record's existence is
     # the only truth, so every interruption point below leaves exactly the
     # records that landed, all of them listed, none of them advertised-but-
@@ -443,6 +494,28 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
                 write_failure = (exc,)
                 break
             applied.append(slug)
+    elif action == "repoint":
+        now = iso_now()
+        for slug, record in records.items():
+            record["target_url"] = new_target_url
+            record["updated_at"] = now
+            try:
+                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+            except kvretry.WriteFailed as exc:
+                write_failure = (exc,)
+                break
+            applied.append(slug)
+    elif action == "schedule":
+        now = iso_now()
+        for slug, record in records.items():
+            record["start_at"], record["end_at"] = planned_windows[slug]
+            record["updated_at"] = now
+            try:
+                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+            except kvretry.WriteFailed as exc:
+                write_failure = (exc,)
+                break
+            applied.append(slug)
     elif action == "delete":
         for slug in records:
             try:
@@ -464,6 +537,13 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
             result["tags"] = tag_list
         elif action == "reassign":
             result["owner"] = new_owner
+        elif action == "repoint":
+            result["target_url"] = new_target_url
+        elif action == "schedule":
+            if has_start:
+                result["start_at"] = new_start_at
+            if has_end:
+                result["end_at"] = new_end_at
         return json_response(200, result)
 
     (exc,) = write_failure
@@ -482,4 +562,11 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
         result["tags"] = tag_list
     elif action == "reassign":
         result["owner"] = new_owner
+    elif action == "repoint":
+        result["target_url"] = new_target_url
+    elif action == "schedule":
+        if has_start:
+            result["start_at"] = new_start_at
+        if has_end:
+            result["end_at"] = new_end_at
     return json_response(200, result)
