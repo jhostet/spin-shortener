@@ -274,7 +274,15 @@
   margin-left: 0;
   padding: 0 0.5rem;
   background: none;
-  border: 1px solid var(--pico-muted-border-color);
+  /* currentColor, NOT --pico-muted-border-color (1.36:1 light / 1.62:1 dark
+     against the card) and NOT the rgba(255,255,255,0.4) remedy used on
+     #logout-btn/.domain-select — that one raises contrast against the NAVY
+     nav, so on this near-white card it would be less visible, not more.
+     currentColor is the chip's own already-measured ink (--ss-slate-500 in
+     theme.css, 6.36:1 light / 7.58:1 dark), so the boundary of an
+     interactive control clears WCAG 1.4.11's 3:1 in both themes, adds no new
+     token, and tracks any future change to the chip's ink automatically. */
+  border: 1px solid currentColor;
   border-radius: var(--pico-border-radius);
 }
 .tag-chip-editable:hover {
