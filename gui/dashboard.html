@@ -47,10 +47,11 @@
             <input id="link-password" name="password" type="password" minlength="4" placeholder="Leave blank for no password" />
           </label>
 
-          <label for="link-tags">
-            Tags (optional, comma-separated)
-            <input id="link-tags" name="tags" type="text" list="tag-suggestions" placeholder="sale, q4, email" />
-          </label>
+          <label for="link-tags">Tags (optional, up to 10)</label>
+          <div class="tag-input" data-max="10" data-note="link-tags-note">
+            <input id="link-tags" name="tags" type="text" class="tag-input-buffer" list="tag-suggestions" placeholder="Add a tag&hellip;" />
+          </div>
+          <p id="link-tags-note" class="form-note" role="status" hidden></p>
         </details>
         <datalist id="tag-suggestions"></datalist>
 
@@ -86,9 +87,11 @@
             <label for="bulk-password">Password protection (optional)
               <input type="password" id="bulk-password" minlength="4" placeholder="Leave blank for no password" />
             </label>
-            <label for="bulk-tags">Tags (optional, comma-separated)
-              <input type="text" id="bulk-tags" list="tag-suggestions" placeholder="sale, q4" />
-            </label>
+            <label for="bulk-tags">Tags (optional, up to 10)</label>
+            <div class="tag-input" data-max="10" data-note="bulk-tags-note">
+              <input type="text" id="bulk-tags" class="tag-input-buffer" list="tag-suggestions" placeholder="Add a tag&hellip;" />
+            </div>
+            <p id="bulk-tags-note" class="form-note" role="status" hidden></p>
           </fieldset>
 
           <button type="submit">Create links</button>
@@ -103,8 +106,23 @@
       <h2 id="links-heading">Your links</h2>
       <label for="links-filter" class="visually-hidden">Filter links</label>
       <input type="search" id="links-filter" placeholder="Filter by short link, destination, or tag..." />
-      <label for="tag-filter" class="visually-hidden">Filter by tag</label>
-      <select id="tag-filter"><option value="">All tags</option></select>
+      <!-- Multi-tag filter: an explicit all-of/any-of rule (default all-of —
+           see docs/plans/tag-ux-chips-and-filtering.md's "filtering decision")
+           plus a chip input. #tag-rule is hidden below two active chips,
+           since with one chip all-of and any-of are provably identical —
+           the same one-option-selector-is-clutter precedent #owner-filter-wrap
+           and the domain selector already use. -->
+      <span id="tag-rule-wrap" hidden>
+        <label for="tag-rule" class="visually-hidden">How to combine tag filters</label>
+        <select id="tag-rule">
+          <option value="all" selected>All of these tags</option>
+          <option value="any">Any of these tags</option>
+        </select>
+      </span>
+      <label for="tag-filter-input" class="visually-hidden">Filter by tag</label>
+      <div class="tag-input" id="tag-filter-chips">
+        <input type="text" id="tag-filter-input" class="tag-input-buffer" list="tag-suggestions" placeholder="Filter by tag&hellip;" />
+      </div>
       <span id="owner-filter-wrap" hidden>
         <label for="owner-filter" class="visually-hidden">Filter by owner</label>
         <select id="owner-filter"><option value="">All owners</option></select>
@@ -113,6 +131,10 @@
            filtering to a campaign and exporting gives you that campaign. Needs
            no selection: it is deliberately independent of the checkboxes. -->
       <button type="button" id="export-csv" class="outline">Export CSV</button>
+      <!-- Rebuilt on every keystroke of #links-filter — deliberately NOT a
+           live region: a keystroke-rate role="status" is noise, not help.
+           The #tag-rule <select> announces its own value change natively. -->
+      <p id="filter-summary" class="form-note" hidden></p>
       <p id="links-error" class="form-error" role="alert"></p>
       <p id="csv-success" class="form-success" aria-live="polite" hidden></p>
       <div id="bulk-action-errors" hidden></div>
@@ -132,11 +154,16 @@
           <button type="button" id="bulk-disable-btn" class="outline">Disable</button>
           <button type="button" id="bulk-delete-btn" class="secondary outline">Delete</button>
         </div>
-        <div id="bulk-tag-controls" role="group" hidden>
-          <input type="text" id="bulk-tag-input" list="tag-suggestions" aria-label="Tags to add or remove" placeholder="tag" />
-          <button type="button" id="bulk-tag-add-btn" class="outline">Add tag</button>
-          <button type="button" id="bulk-tag-remove-btn" class="outline">Remove tag</button>
-        </div>
+        <span id="bulk-tag-controls" hidden>
+          <div class="tag-input" data-max="10" data-note="bulk-tag-input-note">
+            <input type="text" id="bulk-tag-input" class="tag-input-buffer" list="tag-suggestions" aria-label="Tags to add or remove" placeholder="Add a tag&hellip;" />
+          </div>
+          <p id="bulk-tag-input-note" class="form-note" role="status" hidden></p>
+          <div role="group">
+            <button type="button" id="bulk-tag-add-btn" class="outline">Add tag</button>
+            <button type="button" id="bulk-tag-remove-btn" class="outline">Remove tag</button>
+          </div>
+        </span>
         <div id="bulk-owner-controls" role="group" hidden>
           <select id="bulk-owner-select" aria-label="Reassign selected links to"></select>
           <button type="button" id="bulk-reassign-btn" class="outline">Reassign</button>

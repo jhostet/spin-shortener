@@ -100,19 +100,6 @@ let sortDir = 1;
 // whatever the operator has since chosen instead of snapping back to the URL.
 let pendingOwnerFilter = new URLSearchParams(location.search).get("owner");
 
-// Splits a comma-separated tags input into a normalized array — trimmed,
-// lowercased, empties dropped, de-duplicated. Mirrors api/tags.py's
-// normalize_tag so the common case never round-trips to a 400; the server
-// stays authoritative for actual validation (character set, length, cap).
-function parseTagsInput(value) {
-  const seen = new Set();
-  for (const raw of (value || "").split(",")) {
-    const tag = raw.trim().toLowerCase();
-    if (tag) seen.add(tag);
-  }
-  return [...seen];
-}
-
 // The sorted distinct union of every tag across allLinks — the autocomplete
 // and filter-option source. Deliberately client-derived, not a server call:
 // allLinks is already ownership-scoped by handle_list, so this never
@@ -124,17 +111,6 @@ function allKnownTags() {
     for (const tag of link.tags ?? []) tags.add(tag);
   }
   return [...tags].sort();
-}
-
-// Repopulates #tag-filter from the current allKnownTags(), preserving the
-// active selection if it still exists (e.g. after a reload where that tag
-// is still in use).
-function rebuildTagFilterOptions() {
-  const select = document.getElementById("tag-filter");
-  const current = select.value;
-  const options = allKnownTags().map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
-  select.innerHTML = `<option value="">All tags</option>${options}`;
-  if (current && allKnownTags().includes(current)) select.value = current;
 }
 
 // The sorted distinct union of every `owner` across allLinks — record-derived
@@ -153,8 +129,7 @@ function isDeletedOwner(owner) {
 
 // Repopulates #owner-filter from the current allKnownOwners(), preserving the
 // active selection if it still exists; otherwise consumes pendingOwnerFilter
-// (the admin Users page's ?owner= deep link) exactly once. Modelled line-for-
-// line on rebuildTagFilterOptions().
+// (the admin Users page's ?owner= deep link) exactly once.
 function rebuildOwnerFilterOptions() {
   const wrap = document.getElementById("owner-filter-wrap");
   const select = document.getElementById("owner-filter");
@@ -182,25 +157,255 @@ function rebuildOwnerFilterOptions() {
   wrap.hidden = owners.length < 2 && !select.value;
 }
 
-// <datalist> matches against the input's whole value, so in a
-// comma-separated field it stops helping after the first tag. The fix is to
-// prefix each option with everything up to and including the last comma, so
-// the browser's prefix-match keeps working per-token. Degrades to a plain
-// text input if a browser ignores any of this — nothing about submission
-// depends on the datalist.
-function refreshTagDatalist(input) {
-  const prefix = input.value.slice(0, input.value.lastIndexOf(",") + 1);
-  const already = new Set(parseTagsInput(input.value));
+// --- Tag chip-input component ----------------------------------------------
+// See docs/plans/tag-ux-chips-and-filtering.md. One component, instantiated
+// per placement via the `.tag-input` container markup contract (a chip
+// button per committed tag, followed by a `.tag-input-buffer` text input).
+// All handlers are delegated on `document`, so a per-row edit form costs no
+// per-instance listeners. This replaced the old comma-field <datalist>
+// prefix trick, retired once every placement below held exactly one token
+// per buffer, which is what makes <datalist>'s native prefix-match honest
+// again — see the plan's "Key technical facts" section.
+
+// Mirrors api/tags.py's MAX_TAGS_PER_LINK / MAX_TAG_LENGTH / TAG_PATTERN so a
+// mistyped tag gets an answer without a round trip. The server stays
+// authoritative: a stricter client here is only annoying, and a looser one
+// just gets a 400 naming the real rule. No cross-language test pin, unlike
+// keys.go's prefixes/CountShards: those fail silently at runtime with data
+// loss, while these fail loudly and harmlessly (a visible refusal or a 400
+// naming the real limit) — the same reasoning BULK_MAX_SELECTION already
+// carries above.
+const TAG_MAX_PER_LINK = 10;
+const TAG_MAX_LENGTH = 32;
+const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+
+function isValidTagToken(token) {
+  return token.length >= 1 && token.length <= TAG_MAX_LENGTH && TAG_PATTERN.test(token);
+}
+
+// Splits on any run of whitespace or commas, trims, lowercases, drops
+// empties, de-duplicates. This is what the retired comma-only splitter
+// became once a buffer could hold more than a comma-separated list — the new
+// name stops it reading as "parse the whole field", which it no longer is
+// now that every authoring placement is a chip input. Whitespace is a safe
+// delimiter because TAG_PATTERN excludes it, so a pasted "sale, q4 email"
+// yields three tokens.
+function splitTagTokens(value) {
+  const seen = new Set();
+  for (const raw of (value || "").split(/[\s,]+/)) {
+    const tag = raw.trim().toLowerCase();
+    if (tag) seen.add(tag);
+  }
+  return [...seen];
+}
+
+// The DOM is the single source of truth for a placement's committed tags —
+// no parallel JS state to desync across a renderLinksTable() rebuild.
+function readTagChips(container) {
+  return [...container.querySelectorAll(".tag-chip-editable")].map((el) => el.dataset.tag);
+}
+
+function tagChipHtml(tag) {
+  return `<button type="button" class="tag-chip tag-chip-editable" data-tag="${escapeHtml(tag)}" aria-label="Remove tag ${escapeHtml(tag)}">#${escapeHtml(tag)} <span aria-hidden="true">&times;</span></button>`;
+}
+
+function tagNoteEl(container) {
+  const id = container.dataset.note;
+  return id ? document.getElementById(id) : null;
+}
+
+// Refusal feedback — reuses the exact ERROR_MESSAGES copy the server-side
+// 400 for the same code would show, so client and server never say two
+// different things for the same rule.
+function showTagNote(container, reason) {
+  const note = tagNoteEl(container);
+  if (!note) return;
+  if (reason === "cap") {
+    note.textContent = friendlyError({ error: "too_many_tags" }, "That's too many tags for one link.");
+  } else if (reason === "invalid") {
+    note.textContent = friendlyError({ error: "invalid_tag" }, "Tags can only use lowercase letters, numbers, hyphens and underscores (up to 32 characters).");
+  }
+  note.hidden = false;
+}
+
+// The proactive "you're at the cap" advisory — shown continuously once a
+// placement's tag count reaches its data-max, not only when an 11th tag is
+// actively refused. A placement with no data-max (the tag filter) never
+// shows this, since filtering by eleven tags is pointless but harmless.
+function updateCapAdvisory(container) {
+  const note = tagNoteEl(container);
+  if (!note) return;
+  const max = container.dataset.max ? parseInt(container.dataset.max, 10) : null;
+  if (max !== null && readTagChips(container).length >= max) {
+    note.textContent = `${max} of ${max} tags — remove one to add another.`;
+    note.hidden = false;
+  } else {
+    note.hidden = true;
+    note.textContent = "";
+  }
+}
+
+// Rebuilds #tag-suggestions from allKnownTags() minus the chips already
+// committed in this buffer's own container. No prefix arithmetic — the
+// retired comma-field datalist refresh needed that only because its field
+// held more than one token; a chip-input buffer's whole value is always
+// exactly one token, so <datalist>'s native prefix-match already works
+// correctly.
+function refreshTagSuggestions(buffer) {
+  const container = buffer.closest(".tag-input");
+  const already = new Set(container ? readTagChips(container) : []);
   document.getElementById("tag-suggestions").innerHTML = allKnownTags()
     .filter((t) => !already.has(t))
-    .map((t) => `<option value="${escapeHtml(prefix + (prefix ? " " : "") + t)}"></option>`)
+    .map((t) => `<option value="${escapeHtml(t)}"></option>`)
     .join("");
 }
 
-// Wired on every tags input (create, edit rows, bulk-create, bulk bar) so
-// the shared datalist always reflects what's being typed right now.
+// The one hook fired after every chip add/remove. Scoping the filter-specific
+// side effects to container.id === "tag-filter-chips" is load-bearing: an
+// unscoped re-render would rebuild the links table out from under an open
+// edit form the moment a tag was typed into it.
+function tagChipsChanged(container) {
+  const buffer = container.querySelector(".tag-input-buffer");
+  if (buffer) refreshTagSuggestions(buffer);
+  updateCapAdvisory(container);
+  if (container.id === "tag-filter-chips") {
+    const ruleWrap = document.getElementById("tag-rule-wrap");
+    if (ruleWrap) ruleWrap.hidden = readTagChips(container).length < 2;
+    // renderLinksTable() itself calls updateFilterSummary() on every render,
+    // so re-filtering here keeps the summary line in sync for free.
+    renderLinksTable();
+  }
+}
+
+// Normalise -> validate -> de-duplicate -> cap-check -> insert before the
+// buffer. Returns a reason string on refusal ("invalid"/"cap") or null on
+// success/no-op (an empty token or an already-present tag is a silent no-op,
+// not an error — retyping a tag that's already a chip is not a mistake).
+function addTagChip(container, token) {
+  const tag = (token || "").trim().toLowerCase();
+  if (!tag) return null;
+  if (!isValidTagToken(tag)) return "invalid";
+  if (readTagChips(container).includes(tag)) return null;
+  const max = container.dataset.max ? parseInt(container.dataset.max, 10) : null;
+  if (max !== null && readTagChips(container).length >= max) return "cap";
+  const buffer = container.querySelector(".tag-input-buffer");
+  buffer.insertAdjacentHTML("beforebegin", tagChipHtml(tag));
+  tagChipsChanged(container);
+  return null;
+}
+
+// Removes the chip, moves focus to the container's buffer input (otherwise
+// focus lands on <body> and a keyboard user is lost mid-form), and fires the
+// changed hook.
+function removeTagChip(button) {
+  const container = button.closest(".tag-input");
+  if (!container) return;
+  button.remove();
+  const buffer = container.querySelector(".tag-input-buffer");
+  tagChipsChanged(container);
+  if (buffer) buffer.focus();
+}
+
+// splitTagTokens() the buffer, addTagChip() each token in order; on the first
+// refusal, leave the offending token in the buffer and show the note rather
+// than silently dropping the rest of what was typed.
+function commitTagBuffer(container) {
+  const buffer = container.querySelector(".tag-input-buffer");
+  if (!buffer) return;
+  const tokens = splitTagTokens(buffer.value);
+  for (const token of tokens) {
+    const reason = addTagChip(container, token);
+    if (reason) {
+      buffer.value = token;
+      showTagNote(container, reason);
+      return;
+    }
+  }
+  buffer.value = "";
+}
+
+// Removes every chip and empties the buffer. Used by the create/bulk-create
+// resets and after a successful bulk tag action.
+function clearTagChips(container) {
+  container.querySelectorAll(".tag-chip-editable").forEach((el) => el.remove());
+  const buffer = container.querySelector(".tag-input-buffer");
+  if (buffer) buffer.value = "";
+  tagChipsChanged(container);
+}
+
+// `,` typed or pasted commits the token(s) before it — covers paste too, with
+// no separate paste listener. A comma-free keystroke is a no-op here; Enter
+// (below) and blur/change (below) are the other two commit paths.
+function handleTagBufferInput(buffer) {
+  if (!buffer.value.includes(",")) return;
+  const container = buffer.closest(".tag-input");
+  if (!container) return;
+  const idx = buffer.value.lastIndexOf(",");
+  const toCommit = buffer.value.slice(0, idx);
+  buffer.value = buffer.value.slice(idx + 1);
+  for (const token of splitTagTokens(toCommit)) {
+    const reason = addTagChip(container, token);
+    if (reason) {
+      showTagNote(container, reason);
+      return;
+    }
+  }
+}
+
+// Covers both choosing a <datalist> suggestion and blurring after typing. On
+// an invalid token this stays silent and leaves the text alone — the user is
+// leaving the field, and the submit-time commitTagBuffer() is the authority
+// that will surface the error.
+function handleTagBufferChange(buffer) {
+  const container = buffer.closest(".tag-input");
+  if (!container) return;
+  const tokens = splitTagTokens(buffer.value);
+  if (!tokens.length || !tokens.every(isValidTagToken)) return;
+  for (const token of tokens) {
+    if (addTagChip(container, token) === "cap") break;
+  }
+  buffer.value = "";
+}
+
 document.addEventListener("input", (e) => {
-  if (e.target.matches('input[list="tag-suggestions"]')) refreshTagDatalist(e.target);
+  if (e.target.matches(".tag-input-buffer")) handleTagBufferInput(e.target);
+});
+
+document.addEventListener("change", (e) => {
+  if (e.target.matches(".tag-input-buffer")) handleTagBufferChange(e.target);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (!e.target.matches(".tag-input-buffer")) return;
+  const container = e.target.closest(".tag-input");
+  if (!container) return;
+  if (e.key === "Enter") {
+    // #link-tags sits inside the create <form> and .edit-tags inside the
+    // edit <form>, so an uncaught Enter submits the form with a half-typed
+    // tag — this preventDefault is the single easiest thing here to get
+    // wrong, and its symptom is a spurious link create.
+    e.preventDefault();
+    commitTagBuffer(container);
+  } else if (e.key === "Backspace" && e.target.value === "") {
+    // The standard fast path — a keyboard user need not Tab through chips to
+    // delete one.
+    const chips = container.querySelectorAll(".tag-chip-editable");
+    if (chips.length) removeTagChip(chips[chips.length - 1]);
+  }
+});
+
+// Enter/Space activation of a chip button is native <button> behaviour and
+// needs no extra wiring here — this only handles the mouse/pointer path.
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest(".tag-chip-editable");
+  if (chip) removeTagChip(chip);
+});
+
+// Refreshes #tag-suggestions for whichever buffer just gained focus, since
+// the shared datalist's exclusion set (allKnownTags() minus this container's
+// own chips) differs per placement.
+document.addEventListener("focusin", (e) => {
+  if (e.target.matches(".tag-input-buffer")) refreshTagSuggestions(e.target);
 });
 
 // Slugs currently checked for a bulk action. Cleared at the top of every
@@ -304,6 +509,24 @@ function updateSortIndicators() {
   });
 }
 
+// The tags currently active in the #tag-filter-chips chip input. Reads the
+// DOM (readTagChips), not any parallel JS state — see the chip component's
+// own comment on why that's the single source of truth.
+function activeTagFilterChips() {
+  const container = document.getElementById("tag-filter-chips");
+  return container ? readTagChips(container) : [];
+}
+
+// "all" (the default) or "any" — see docs/plans/tag-ux-chips-and-filtering.md's
+// "The filtering decision" for why all-of is the default (monotone
+// narrowing, composition consistency with the other filters, and — the
+// decisive reason — the filtered set feeds bulk Delete/Reassign, so any-of's
+// over-matching is unsafe there).
+function activeTagRule() {
+  const select = document.getElementById("tag-rule");
+  return select && select.value === "any" ? "any" : "all";
+}
+
 function getVisibleLinks() {
   const term = document.getElementById("links-filter").value.trim().toLowerCase();
   let visible = !term
@@ -315,8 +538,16 @@ function getVisibleLinks() {
           (link.tags ?? []).some((t) => t.includes(term))
       );
 
-  const tag = document.getElementById("tag-filter").value;
-  if (tag) visible = visible.filter((link) => (link.tags ?? []).includes(tag));
+  // Tag chips AND with every other filter on this row; the chips combine
+  // among THEMSELVES per activeTagRule() — all-of (every chip must be
+  // present) by default, any-of (at least one) when switched.
+  const tags = activeTagFilterChips();
+  if (tags.length) {
+    visible =
+      activeTagRule() === "any"
+        ? visible.filter((link) => tags.some((t) => (link.tags ?? []).includes(t)))
+        : visible.filter((link) => tags.every((t) => (link.tags ?? []).includes(t)));
+  }
 
   // Exact equality, not a substring match — this selection feeds a bulk
   // reassign, and a fuzzy owner match would eventually move somebody else's
@@ -356,7 +587,13 @@ function editRowHtml(link) {
             </label>
             <label><input type="checkbox" class="edit-remove-password" /> Remove password protection</label>
           </div>
-          <label>Tags <input type="text" class="edit-tags" list="tag-suggestions" value="${escapeHtml((link.tags ?? []).join(", "))}" /></label>
+          <label for="edit-tags-${escapeHtml(link.slug)}">Tags (up to 10)</label>
+          <div class="tag-input edit-tags" data-max="10" data-note="edit-tags-note-${escapeHtml(link.slug)}"
+               data-original-tags="${escapeHtml((link.tags ?? []).join(" "))}">
+            ${(link.tags ?? []).map((t) => tagChipHtml(t)).join("")}
+            <input type="text" id="edit-tags-${escapeHtml(link.slug)}" class="tag-input-buffer" list="tag-suggestions" />
+          </div>
+          <p id="edit-tags-note-${escapeHtml(link.slug)}" class="form-note" role="status" hidden></p>
           ${canManageUsers() ? `<label>Owner <select class="edit-owner"></select></label>` : ""}
           <div role="group">
             <button type="submit" class="save-edit-btn">Save</button>
@@ -402,7 +639,10 @@ async function loadLinks({ refreshTotals = false } = {}) {
   const { ok, data } = await api.get("/links");
   if (!ok) return;
   allLinks = data.links;
-  rebuildTagFilterOptions();
+  // Chips are NOT rebuilt from the data the way #tag-filter's <option>s used
+  // to be — a chip for a tag no longer in use stays, and the table says
+  // nothing matches, which is more honest than a filter silently resetting
+  // itself (see the plan's "One deliberate behaviour change to call out").
   rebuildOwnerFilterOptions();
   renderLinksTable();
   if (refreshTotals) loadClickTotals();
@@ -432,6 +672,57 @@ function paintClickTotals() {
   }
 }
 
+// States the whole active filter in words plus the count — the second of the
+// two layers (with the select's own rendered value) that make the tag
+// combining rule visible rather than implicit. Deliberately not a live
+// region (see the HTML comment above #filter-summary): it is rebuilt on
+// every keystroke of #links-filter, and a keystroke-rate role="status" would
+// be noise, not help. Hidden entirely when no filter is active.
+function updateFilterSummary() {
+  const summaryEl = document.getElementById("filter-summary");
+  if (!summaryEl) return;
+  const term = document.getElementById("links-filter").value.trim();
+  const tags = activeTagFilterChips();
+  const owner = document.getElementById("owner-filter").value;
+  if (!term && !tags.length && !owner) {
+    summaryEl.hidden = true;
+    summaryEl.textContent = "";
+    return;
+  }
+  const clauses = [];
+  if (tags.length === 1) {
+    clauses.push(`tags: #${tags[0]}`);
+  } else if (tags.length >= 2) {
+    const verb = activeTagRule() === "any" ? "any of" : "all of";
+    clauses.push(`tags: ${verb} ${tags.map((t) => `#${t}`).join(", ")}`);
+  }
+  if (owner) clauses.push(`owner: ${owner}`);
+  if (term) clauses.push(`text: "${term}"`);
+  const count = getVisibleLinks().length;
+  summaryEl.textContent =
+    `Showing ${count} of ${allLinks.length} link${allLinks.length === 1 ? "" : "s"}` +
+    (clauses.length ? ` · ${clauses.join(" · ")}` : "");
+  summaryEl.hidden = false;
+}
+
+// With ≥2 chips active and no matching link, the empty state names the
+// combining rule rather than leaving the viewer to guess why an all-of
+// filter over two real tags returned nothing — the moment a user is most
+// confused by all-of is exactly the moment it returns zero rows.
+function emptyStateMessage() {
+  if (!allLinks.length) return "No links yet — create one above.";
+  const tags = activeTagFilterChips();
+  if (tags.length >= 2) {
+    const rule = activeTagRule();
+    const tagList = tags.map((t) => `#${t}`).join(", ");
+    const verb = rule === "any" ? "any of" : "all of";
+    let message = `No link carries ${verb} ${tagList}.`;
+    if (rule === "all") message += ` Try "Any of these tags".`;
+    return message;
+  }
+  return "No links match your filter.";
+}
+
 function renderLinksTable() {
   const body = document.getElementById("links-body");
   body.innerHTML = "";
@@ -442,11 +733,11 @@ function renderLinksTable() {
   // act on rows they are no longer looking at.
   selectedSlugs.clear();
   updateBulkBar();
+  updateFilterSummary();
 
   const visibleLinks = getVisibleLinks();
   if (!visibleLinks.length) {
-    const message = allLinks.length ? "No links match your filter." : "No links yet — create one above.";
-    body.innerHTML = `<tr><td colspan="10" class="empty-state">${escapeHtml(message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="empty-state">${escapeHtml(emptyStateMessage())}</td></tr>`;
     updateSelectAllState();
     return;
   }
@@ -623,9 +914,37 @@ async function handleEditFormSubmit(form) {
   const endAt = datetimeLocalToIso(form.querySelector(".edit-end-at").value);
   const newPassword = form.querySelector(".edit-password").value;
   const removePassword = form.querySelector(".edit-remove-password").checked;
-  const tagList = parseTagsInput(form.querySelector(".edit-tags").value);
   const errorEl = form.querySelector(".edit-error");
   errorEl.textContent = "";
+
+  // The tag-wipe guard (docs/plans/tag-ux-chips-and-filtering.md). PATCH
+  // {"tags": [...]} is a full replacement, so `tags` must be sent ONLY when
+  // it actually changed from what this row was rendered with — otherwise an
+  // edit-row save that never touched tags would read as "zero chips" and
+  // wipe every tag on save. Three layers, all required:
+  //   1. tags is omitted from the payload unless the committed chip set
+  //      differs from data-original-tags (compared as sets, so a save is
+  //      never falsely flagged "changed" by chip reordering alone).
+  //      Intentionally clearing every tag is a change to [], so it still
+  //      sends.
+  //   2. A missing .tag-input container (a markup/JS break) leaves
+  //      tagsChanged false, so the save degrades to "tags left alone",
+  //      never to data loss.
+  //   3. linkRecord.tags below is updated ONLY when the key was actually
+  //      sent, so the optimistic row update can't claim a change that was
+  //      never requested.
+  const tagContainer = form.querySelector(".tag-input");
+  let tagsChanged = false;
+  let tagList = null;
+  if (tagContainer) {
+    // Every form submit commits the buffer first, or a tag the user just
+    // typed and did not press Enter on would be silently dropped.
+    commitTagBuffer(tagContainer);
+    tagList = readTagChips(tagContainer);
+    const original = (tagContainer.dataset.originalTags || "").split(" ").filter(Boolean);
+    const sameSet = tagList.length === original.length && tagList.every((t) => original.includes(t));
+    tagsChanged = !sameSet;
+  }
 
   // `status` is deliberately NOT sent here. It used to be, from a checkbox in
   // this form, but the row's own Disable/Enable button now owns it — and the
@@ -634,7 +953,9 @@ async function handleEditFormSubmit(form) {
   // button toggle would still hold the old value and silently revert it on
   // Save. PATCH gates each field on `if "field" in payload`, so omitting it
   // leaves the stored status untouched.
-  const { ok, data } = await api.patch(`/links/${slug}`, { target_url: targetUrl, start_at: startAt, end_at: endAt, tags: tagList });
+  const patchPayload = { target_url: targetUrl, start_at: startAt, end_at: endAt };
+  if (tagsChanged) patchPayload.tags = tagList;
+  const { ok, data } = await api.patch(`/links/${slug}`, patchPayload);
   if (!ok) {
     const msg = friendlyError(data, "Could not update link.");
     errorEl.textContent = data && data.host ? `${msg} (${data.host})` : msg;
@@ -649,7 +970,7 @@ async function handleEditFormSubmit(form) {
     linkRecord.target_url = targetUrl;
     linkRecord.start_at = startAt;
     linkRecord.end_at = endAt;
-    linkRecord.tags = tagList;
+    if (tagsChanged) linkRecord.tags = tagList;
   }
   const displayRow = editRow.previousElementSibling;
   if (displayRow) {
@@ -836,7 +1157,9 @@ document.getElementById("bulk-delete-btn").addEventListener("click", () => handl
 async function handleBulkTag(action) {
   const slugs = [...selectedSlugs];
   if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
-  const tagList = parseTagsInput(document.getElementById("bulk-tag-input").value);
+  const tagContainer = document.getElementById("bulk-tag-input").closest(".tag-input");
+  if (tagContainer) commitTagBuffer(tagContainer);
+  const tagList = tagContainer ? readTagChips(tagContainer) : [];
   if (!tagList.length) return;
 
   const errorEl = document.getElementById("links-error");
@@ -872,7 +1195,7 @@ async function handleBulkTag(action) {
 
   successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
   successEl.hidden = false;
-  document.getElementById("bulk-tag-input").value = "";
+  if (tagContainer) clearTagChips(tagContainer);
   loadLinks();
 }
 
@@ -1020,7 +1343,9 @@ document.getElementById("bulk-form").addEventListener("submit", async (e) => {
   const startAt = datetimeLocalToIso(document.getElementById("bulk-start-at").value);
   const endAt = datetimeLocalToIso(document.getElementById("bulk-end-at").value);
   const password = document.getElementById("bulk-password").value || null;
-  const tagList = parseTagsInput(document.getElementById("bulk-tags").value);
+  const bulkTagContainer = document.getElementById("bulk-tags").closest(".tag-input");
+  if (bulkTagContainer) commitTagBuffer(bulkTagContainer);
+  const tagList = bulkTagContainer ? readTagChips(bulkTagContainer) : [];
 
   clearBulkResults();
   const errorEl = document.getElementById("bulk-error");
@@ -1077,7 +1402,7 @@ document.getElementById("bulk-form").addEventListener("submit", async (e) => {
   document.getElementById("bulk-start-at").value = "";
   document.getElementById("bulk-end-at").value = "";
   document.getElementById("bulk-password").value = "";
-  document.getElementById("bulk-tags").value = "";
+  if (bulkTagContainer) clearTagChips(bulkTagContainer);
   // The panel stays open — unlike #advanced-options, its success banner
   // lives inside the details it belongs to, so closing it would hide the
   // payoff the user just triggered.
@@ -1091,7 +1416,11 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   const startAt = datetimeLocalToIso(document.getElementById("start-at").value);
   const endAt = datetimeLocalToIso(document.getElementById("end-at").value);
   const password = document.getElementById("link-password").value || null;
-  const tagList = parseTagsInput(document.getElementById("link-tags").value);
+  // Every form submit commits the buffer first, or a tag the user just typed
+  // and did not press Enter on would be silently dropped.
+  const tagContainer = document.getElementById("link-tags").closest(".tag-input");
+  if (tagContainer) commitTagBuffer(tagContainer);
+  const tagList = tagContainer ? readTagChips(tagContainer) : [];
   const errorEl = document.getElementById("create-error");
   const successEl = document.getElementById("create-success");
   errorEl.textContent = "";
@@ -1119,7 +1448,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   document.getElementById("start-at").value = "";
   document.getElementById("end-at").value = "";
   document.getElementById("link-password").value = "";
-  document.getElementById("link-tags").value = "";
+  if (tagContainer) clearTagChips(tagContainer);
   document.getElementById("advanced-options").open = false;
 
   renderCreateSuccess(data.slug);
@@ -1160,7 +1489,7 @@ document.getElementById("links-filter").addEventListener("input", () => {
   filterDebounceTimer = setTimeout(renderLinksTable, 200);
 });
 
-document.getElementById("tag-filter").addEventListener("change", renderLinksTable);
+document.getElementById("tag-rule").addEventListener("change", renderLinksTable);
 document.getElementById("owner-filter").addEventListener("change", renderLinksTable);
 
 document.querySelectorAll("#links-table th.sortable").forEach((th) => {

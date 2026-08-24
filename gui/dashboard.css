@@ -239,6 +239,61 @@
    * so restoring full opacity cannot read as clickable. */
   opacity: 1;
 }
+/* --- Tag chip-input component --------------------------------------------
+ * See docs/plans/tag-ux-chips-and-filtering.md. One shared component across
+ * five placements (create form, bulk-create panel, bulk bar, edit rows, the
+ * tag filter); the delegated handlers live in dashboard.js. */
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: var(--pico-spacing);
+}
+/* Pico sets width:100% on every input; the same override .domain-select
+   already carries (DESIGN.md's Domain selector note). flex/min-width let the
+   buffer shrink to make room for chips but never disappear entirely. */
+.tag-input-buffer {
+  width: auto;
+  flex: 1 1 8rem;
+  min-width: 8rem;
+  margin-bottom: 0;
+}
+/* A <button> carrying the .tag-chip ink (see theme.css's .slug-kind-badge/
+   .lock-badge/.tag-chip rule — colour and type come from there, unchanged,
+   so an editable chip and an inert in-row chip cannot visually drift). Pico's
+   own button rule sets a primary fill, border and generous padding via
+   variables — neutralised by class (specificity 0,1,0 beats element 0,0,1,
+   so no specificity fight). The 44x44 floor is inherited from theme.css's
+   sitewide button rule and is NOT overridden: the target is the point (see
+   DESIGN.md's Chips section on the input-chip paragraph). */
+.tag-chip-editable {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  margin-left: 0;
+  padding: 0 0.5rem;
+  background: none;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+}
+.tag-chip-editable:hover {
+  color: var(--pico-primary);
+  border-color: var(--pico-primary);
+}
+/* #bulk-tag-controls is a plain <span> now (not role=group — Pico's group
+ * styling would otherwise apply to the whole thing including the tag input,
+ * see the confirmed facts in the plan), holding a .tag-input plus an inner
+ * role=group of just the two action buttons. This lays the span's own
+ * children out; #bulk-bar [role=group] above already handles the inner
+ * group's own width override. */
+#bulk-tag-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 #links-body [aria-busy="true"]::before {
   position: absolute;
   inset-inline-start: 50%;
