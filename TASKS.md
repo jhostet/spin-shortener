@@ -3221,9 +3221,15 @@ appended after it — if you add a section, add it ABOVE this one.
   not 0 — and was overflowing `#bulk-bar` by 82px at 390px wide; fixed to `flex:1 1 18rem;
   min-width:10rem`, the same two-property shape `.tag-input-buffer` already uses. **RESUME HERE:**
   nothing in-flight — pick up whatever the next requirement is, or work from TASKS.md's Future work.
-- **Deployed:** `4de62b1-mobilefix` (2026-08-24) — tag chip input + multi-tag AND/OR filtering, the
-  chip's `currentColor` 3:1 border, and the mobile column-hide fix. **Bulk schedule/repoint is NOT
-  yet deployed** — the plan scoped this as local-verification-only; deploying it is the user's call.
+- **Deployed:** `acf924a-bulkschedrepoint` (2026-08-25) — bulk schedule and repoint, on top of the
+  tag chip input + multi-tag AND/OR filtering, the chip's `currentColor` 3:1 border, and the mobile
+  column-hide fix from `4de62b1-mobilefix`. Verified live against the deployed app via Playwright:
+  repoint happy path (302 + `Cache-Control: no-store` to the new destination), repoint policy
+  refusal (temporary `evil.example` deny rule, both destinations unchanged, rule removed after),
+  schedule one-side-only merge (conflict names only the offending link, untouched side preserved),
+  schedule expiry-in-the-past → 404 → Clear schedule → 302 again, and bar layout at 390px in both
+  themes (only pre-existing overflow, no new issue). Test links and the temporary policy rule were
+  cleaned up afterward.
 - **Store:** baseline — 14 links, ~100 analytics keys (**32 of them leftover `events:` keys** from
   before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless;
   the rest are real count shards on the slug used for load probes), 0 orphan slugs / 0 orphan keys,
