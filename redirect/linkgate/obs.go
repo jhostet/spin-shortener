@@ -304,3 +304,98 @@ func RenderFailureLine(fields []Field) string {
 	}
 	return b.String()
 }
+
+// --- ev=record_unreadable (docs/plans/disposition-unreadable-logging.md) ---
+
+// dedupKeySep separates the parts of a failure-line dedup key. NUL, because no
+// op name, slug or sanitized message can contain one (SanitizeErrorMessage
+// replaces every control character with "_"), so the parts can never be
+// ambiguously re-split by a reader or collide by concatenation.
+const dedupKeySep = "\x00"
+
+// KVFailureDedupKey builds the per-instance dedup key for an ev=kv_fail line.
+// Byte-identical to the key redirect/main.go built inline before this function
+// existed, deliberately: this is a move, not a behaviour change.
+func KVFailureDedupKey(op, msg string) string {
+	return op + dedupKeySep + msg
+}
+
+// RecordUnreadableDedupKey builds the per-instance dedup key for an
+// ev=record_unreadable line.
+//
+// Keyed on the SLUG, not just the message — this is the whole point. A corrupt
+// record is a fact about one specific slug; two different corrupt records
+// commonly produce the identical decoder message ("unexpected end of JSON
+// input"), so a message-keyed dedup would log the first corrupt slug an
+// instance meets and hide every other one for that instance's life. The
+// message is included as well so that a slug whose record is rewritten into a
+// DIFFERENT kind of corruption reports again.
+//
+// The literal "record_unreadable" prefix keeps this key space disjoint from
+// KVFailureDedupKey's, which always begins with an op name ("open"/"get"), so
+// the two kinds share one map and one cap without any possibility of collision.
+func RecordUnreadableDedupKey(slug, msg string) string {
+	return "record_unreadable" + dedupKeySep + slug + dedupKeySep + msg
+}
+
+// RecordUnreadableLine renders the complete ev=record_unreadable failure line
+// for one link record that will not parse, and the key that line must be
+// deduplicated on. The caller does nothing but consult its dedup map and write
+// the string (see main.go's emitRecordUnreadableLine) — every decision lives
+// here, where it is host-testable.
+//
+// err is ParseLink's error, exactly as linkgate.Resolve returned it alongside
+// DispositionUnreadable. A nil err is tolerated rather than assumed impossible
+// — a future change to Resolve must degrade this line to "msg=-", never
+// panic — in which case the etype field is omitted entirely, the same way
+// RenderLogLine omits a zero-count op rather than emitting "=0/0".
+//
+// This is NOT an ev=kv_fail line and deliberately carries no op or ns field:
+// no KV operation failed. The read succeeded and returned bytes; the DECODER
+// failed. Anyone filtering ev=kv_fail must not see these, and anyone counting
+// KV failures must not count them.
+//
+// etype is fmt's %T of the unwrapped error (*json.SyntaxError,
+// *json.UnmarshalTypeError), which is a wording-independent classification for
+// free. classifyKVFailure needs a hand-maintained English-string table only
+// because spin-go-sdk flattens the WIT error variant into fixed strings; Go's
+// own type system needs no such table here. The etype VOCABULARY is per-ev,
+// never global — ev=kv_fail already spells it "other"/"access_denied" and
+// api/obs.py already spells it "Err/Error_Other".
+//
+// msg is always the final field and nothing may ever be appended after it
+// (CLAUDE.md, "Observable KV failures"), which is enforced structurally by
+// rendering through RenderFailureLine.
+func RecordUnreadableLine(slug string, err error) (line, dedupKey string) {
+	msg, redacted, truncated := "-", false, false
+	var etype string
+	if err != nil {
+		etype = fmt.Sprintf("%T", err)
+		sanitized, r, t := SanitizeErrorMessage(err.Error())
+		redacted, truncated = r, t
+		if sanitized != "" {
+			msg = sanitized
+		}
+	}
+
+	fields := []Field{
+		{Key: "comp", Value: "redirect"},
+		{Key: "ev", Value: "record_unreadable"},
+		{Key: "route", Value: "/r/{slug}"},
+	}
+	if slug != "" {
+		fields = append(fields, Field{Key: "slug", Value: slug})
+	}
+	if etype != "" {
+		fields = append(fields, Field{Key: "etype", Value: etype})
+	}
+	if redacted {
+		fields = append(fields, Field{Key: "msg_redacted", Value: "1"})
+	}
+	if truncated {
+		fields = append(fields, Field{Key: "msg_truncated", Value: "1"})
+	}
+	fields = append(fields, Field{Key: "msg", Value: msg})
+
+	return RenderFailureLine(fields), RecordUnreadableDedupKey(slug, msg)
+}

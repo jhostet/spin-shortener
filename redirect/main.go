@@ -328,6 +328,7 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 	case linkgate.DispositionNotFound:
 		notFound(w)
 	case linkgate.DispositionUnreadable:
+		emitRecordUnreadableLine(slug, resolveErr)
 		internalError(w)
 	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
 		if resolveErr != nil {
@@ -368,6 +369,7 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 	case linkgate.DispositionNotFound:
 		notFound(w)
 	case linkgate.DispositionUnreadable:
+		emitRecordUnreadableLine(slug, resolveErr)
 		internalError(w)
 	default: // DispositionUnavailable, and the zero value: fail towards the server's fault
 		if resolveErr != nil {
@@ -497,10 +499,13 @@ func clickEntropy(now time.Time) uint64 {
 // One sanitized failure line per distinct failure, to stderr, UNCONDITIONAL
 // — independent of log_level and of X-SS-Debug, exactly like emitLogLine's
 // summary line is NOT (which stays gated on tracing, untouched by this
-// section). Only the two KV-fault arms named below ever call this:
-// DispositionUnreadable, DispositionNotFound and recordClickCount's
-// swallowed Get/Set errors emit nothing (see recordClickCount's own doc
-// comment and CLAUDE.md's "Toggleable structured logging" for why).
+// section). Three arms emit today: the two KV-fault arms (a failed kv.Open,
+// and DispositionUnavailable's failed Get) via emitFailureLine, and
+// DispositionUnreadable (a record present that will not parse) via
+// emitRecordUnreadableLine (docs/plans/disposition-unreadable-logging.md).
+// DispositionNotFound and recordClickCount's swallowed Get/Set errors still
+// emit nothing (see recordClickCount's own doc comment and CLAUDE.md's
+// "Toggleable structured logging" for why).
 
 // maxFailureDedupPairs caps failureDedupSeen. Novelty is what a diagnostic
 // needs; frequency is already visible as the response status distribution
@@ -527,23 +532,27 @@ var (
 	failureDedupSeen = make(map[string]struct{})
 )
 
-// shouldEmitFailureLine reports whether (op, msg) has not yet been logged
-// by this Wasm instance, recording it if so. Once maxFailureDedupPairs
-// distinct pairs have been seen, every further pair (even a genuinely new
-// one) is also suppressed — a diagnostic is not owed unlimited stderr
-// volume, and this cap is what keeps a per-instance dedup honest under a
-// one-instance-per-request regime (see the plan's "Volume" section).
-func shouldEmitFailureLine(op, msg string) bool {
-	key := op + "\x00" + msg
+// shouldEmitFailureLine reports whether dedupKey has not yet been logged by
+// this Wasm instance, recording it if so. The key is built by the caller
+// (linkgate.KVFailureDedupKey / linkgate.RecordUnreadableDedupKey) because the
+// right notion of "novel" differs per line kind — a KV fault is novel per
+// (op, message), a corrupt record is novel per (slug, message) — while the
+// budget below is deliberately shared, since it bounds this instance's stderr
+// volume as a whole. Once maxFailureDedupPairs distinct keys have been seen,
+// every further key (even a genuinely new one) is also suppressed — a
+// diagnostic is not owed unlimited stderr volume, and this cap is what keeps
+// a per-instance dedup honest under a one-instance-per-request regime (see
+// the plan's "Volume" section).
+func shouldEmitFailureLine(dedupKey string) bool {
 	failureDedupMu.Lock()
 	defer failureDedupMu.Unlock()
-	if _, seen := failureDedupSeen[key]; seen {
+	if _, seen := failureDedupSeen[dedupKey]; seen {
 		return false
 	}
 	if len(failureDedupSeen) >= maxFailureDedupPairs {
 		return false
 	}
-	failureDedupSeen[key] = struct{}{}
+	failureDedupSeen[dedupKey] = struct{}{}
 	return true
 }
 
@@ -584,7 +593,7 @@ func emitFailureLine(op, ns, slug string, err error) {
 		msg = "-"
 	}
 
-	if !shouldEmitFailureLine(op, msg) {
+	if !shouldEmitFailureLine(linkgate.KVFailureDedupKey(op, msg)) {
 		return
 	}
 
@@ -610,6 +619,23 @@ func emitFailureLine(op, ns, slug string, err error) {
 	fields = append(fields, linkgate.Field{Key: "msg", Value: msg})
 
 	fmt.Fprintln(os.Stderr, linkgate.RenderFailureLine(fields))
+}
+
+// emitRecordUnreadableLine writes one ev=record_unreadable line for a link
+// record that exists and will not parse, deduplicated per Wasm instance on
+// (slug, sanitized msg). Every decision is in linkgate.RecordUnreadableLine;
+// this wrapper exists only because package main is not host-testable.
+//
+// Dedup matters MORE here than for a KV fault, not less: a throttled read is
+// transient, while a corrupt record is permanent until a human rewrites or
+// deletes it, so an undeduplicated line would re-emit on every single click of
+// a shared link for as long as the instance lives.
+func emitRecordUnreadableLine(slug string, err error) {
+	line, dedupKey := linkgate.RecordUnreadableLine(slug, err)
+	if !shouldEmitFailureLine(dedupKey) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, line)
 }
 
 // intVariable reads a Spin variable and parses it as an int, falling back to

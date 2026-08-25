@@ -87,13 +87,35 @@ func (d Disposition) String() string {
 // and keeps the signature uniform; callers must not read it, and no caller
 // does.
 //
-// The returned error is non-nil ONLY alongside DispositionUnavailable — it
-// is exactly the error store.Get produced, unmodified and unwrapped
-// (docs/plans/observable-kv-failures.md). Every other disposition returns a
-// nil error: there is no unknown host message to capture for a genuinely
-// absent key, an unparseable record or a business-rule mismatch, and a
-// non-nil error alongside any of those would invite a caller to log it as
-// if it meant something it doesn't.
+// The returned error is non-nil for exactly TWO dispositions, and its meaning
+// differs between them — so a caller must switch on the disposition FIRST and
+// read the error only inside an arm it has already identified. Both handlers
+// in main.go structurally do that; "err != nil" alone must never be read as
+// "the store failed".
+//
+//   - DispositionUnavailable — exactly the error store.Get produced,
+//     unmodified and unwrapped (docs/plans/observable-kv-failures.md), so a
+//     caller can log the host's own message.
+//   - DispositionUnreadable — exactly the error ParseLink produced, unmodified
+//     and unwrapped (docs/plans/disposition-unreadable-logging.md). Do NOT wrap
+//     it: unwrapped, fmt's %T yields the concrete decoder type, which
+//     distinguishes a truncated write (*json.SyntaxError) from a schema
+//     mismatch between what api writes and what Link expects
+//     (*json.UnmarshalTypeError) with no string matching at all.
+//
+// DispositionNotFound, DispositionRedirect and DispositionPrompt always return
+// a nil error: nothing failed, so there is no message to capture, and a
+// non-nil error alongside one of those would invite a caller to log it as if
+// it meant something it doesn't.
+//
+// This REPLACES the narrower rule this comment used to state ("non-nil ONLY
+// alongside DispositionUnavailable"), whose stated reason — that there is "no
+// unknown host message to capture for ... an unparseable record" — was simply
+// wrong about the record case. json.Unmarshal's error was always real and
+// always diagnostically useful; Resolve was throwing it away. It is also the
+// ONLY place in the application that says why a record will not parse:
+// api/consistency.py's unreadable_value finding carries {store, key} and no
+// reason at all.
 func Resolve(store KVStore, slug string, now time.Time) (Link, Disposition, error) {
 	raw, err := store.Get(LinkKey(slug))
 	if err != nil {
@@ -105,7 +127,7 @@ func Resolve(store KVStore, slug string, now time.Time) (Link, Disposition, erro
 
 	l, err := ParseLink(raw)
 	if err != nil {
-		return Link{}, DispositionUnreadable, nil
+		return Link{}, DispositionUnreadable, err
 	}
 
 	if l.Status != "active" {

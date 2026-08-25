@@ -1,7 +1,9 @@
 package linkgate
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -42,15 +44,18 @@ func TestResolve_GetErrorIsReturnedUnchanged(t *testing.T) {
 	}
 }
 
-// TestResolve_ErrorIsNilForEveryOtherDisposition pins the other half of the
-// contract: a non-nil error must never accompany any disposition but
-// DispositionUnavailable.
-func TestResolve_ErrorIsNilForEveryOtherDisposition(t *testing.T) {
+// TestResolve_ErrorIsNilForNotFoundRedirectAndPrompt pins the other half of
+// the contract: DispositionNotFound, DispositionRedirect and
+// DispositionPrompt mean nothing failed, so there is nothing to report and
+// the error must always be nil. (DispositionUnreadable is NOT in this set any
+// more — see TestResolve_UnreadableReturnsExactlyTheParseError and
+// TestResolve_UnreadableErrorIsUnwrapped, which pin its own non-nil
+// contract.)
+func TestResolve_ErrorIsNilForNotFoundRedirectAndPrompt(t *testing.T) {
 	now := time.Now()
 
 	cases := map[Disposition]KVStore{
-		DispositionNotFound:   fakeStore{getResult: []byte("")},
-		DispositionUnreadable: fakeStore{getResult: []byte("not json")},
+		DispositionNotFound: fakeStore{getResult: []byte("")},
 		DispositionRedirect: fakeStore{getResult: []byte(
 			`{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`,
 		)},
@@ -67,6 +72,50 @@ func TestResolve_ErrorIsNilForEveryOtherDisposition(t *testing.T) {
 		if err != nil {
 			t.Errorf("disposition %v: err = %v, want nil", disp, err)
 		}
+	}
+}
+
+// TestResolve_UnreadableReturnsExactlyTheParseError pins that Resolve's error
+// alongside DispositionUnreadable is exactly what ParseLink produced on the
+// same bytes — not merely "some error".
+func TestResolve_UnreadableReturnsExactlyTheParseError(t *testing.T) {
+	raw := []byte("not json")
+	store := fakeStore{getResult: raw}
+	_, disp, err := Resolve(store, "abc123", time.Now())
+	if disp != DispositionUnreadable {
+		t.Fatalf("disp = %v, want DispositionUnreadable", disp)
+	}
+	if err == nil {
+		t.Fatal("err = nil, want the ParseLink error")
+	}
+	_, wantErr := ParseLink(raw)
+	if wantErr == nil {
+		t.Fatal("test fixture invalid: ParseLink(raw) did not error")
+	}
+	if err.Error() != wantErr.Error() {
+		t.Errorf("err = %q, want exactly %q", err.Error(), wantErr.Error())
+	}
+}
+
+// TestResolve_UnreadableErrorIsUnwrapped pins that Resolve does not wrap
+// ParseLink's error: errors.As must find the concrete decoder type, AND %T
+// must report that concrete type rather than a wrapper's. The %T half is the
+// one that fails if someone later wraps the error, which would silently
+// degrade the ev=record_unreadable log line's etype field
+// (docs/plans/disposition-unreadable-logging.md).
+func TestResolve_UnreadableErrorIsUnwrapped(t *testing.T) {
+	store := fakeStore{getResult: []byte("not json")}
+	_, disp, err := Resolve(store, "abc123", time.Now())
+	if disp != DispositionUnreadable {
+		t.Fatalf("disp = %v, want DispositionUnreadable", disp)
+	}
+
+	var se *json.SyntaxError
+	if !errors.As(err, &se) {
+		t.Errorf("errors.As did not find a *json.SyntaxError in %v", err)
+	}
+	if gotType := fmt.Sprintf("%T", err); gotType != "*json.SyntaxError" {
+		t.Errorf("%%T = %q, want \"*json.SyntaxError\" (error must be unwrapped)", gotType)
 	}
 }
 

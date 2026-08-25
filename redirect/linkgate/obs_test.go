@@ -356,3 +356,142 @@ func TestRenderFailureLine_FieldOrderIsExactlyAsGiven(t *testing.T) {
 		t.Errorf("line = %q, want %q", line, want)
 	}
 }
+
+// --- ev=record_unreadable (docs/plans/disposition-unreadable-logging.md) ---
+
+func TestKVFailureDedupKey_IsOpNulMsg(t *testing.T) {
+	got := KVFailureDedupKey("get", "too many requests")
+	want := "get\x00too many requests"
+	if got != want {
+		t.Errorf("KVFailureDedupKey = %q, want %q", got, want)
+	}
+}
+
+// TestRecordUnreadableDedupKey_IsPrefixedWithRecordUnreadable only pins the
+// literal prefix and message suffix, deliberately NOT the slug's exact
+// position — TestRecordUnreadableLine_TwoDifferentSlugsWithIdenticalMessageProduceDifferentDedupKeys
+// below is the one test that must fail if the slug argument stops mattering,
+// per the plan's mutation-check spec ("no other test fail").
+func TestRecordUnreadableDedupKey_IsPrefixedWithRecordUnreadable(t *testing.T) {
+	got := RecordUnreadableDedupKey("abc123", "some message")
+	if !strings.HasPrefix(got, "record_unreadable\x00") {
+		t.Errorf("RecordUnreadableDedupKey = %q, want prefix %q", got, "record_unreadable\x00")
+	}
+	if !strings.HasSuffix(got, "\x00some message") {
+		t.Errorf("RecordUnreadableDedupKey = %q, want suffix %q", got, "\x00some message")
+	}
+}
+
+func TestRecordUnreadableLine_SyntaxErrorFromNotJSON(t *testing.T) {
+	_, parseErr := ParseLink([]byte("not json"))
+	if parseErr == nil {
+		t.Fatal("test fixture invalid: ParseLink did not error on \"not json\"")
+	}
+
+	line, dedupKey := RecordUnreadableLine("abc123", parseErr)
+
+	wantPrefix := "ss comp=redirect ev=record_unreadable route=/r/{slug} slug=abc123 etype=*json.SyntaxError msg="
+	if !strings.HasPrefix(line, wantPrefix) {
+		t.Errorf("line = %q, want prefix %q", line, wantPrefix)
+	}
+	if strings.Contains(line, " op=") || strings.Contains(line, " ns=") {
+		t.Errorf("line = %q, must not contain an op or ns field", line)
+	}
+	if !strings.HasSuffix(line, "msg="+dedupKey[strings.LastIndex(dedupKey, "\x00")+1:]) {
+		t.Errorf("line = %q, want it to end with the same sanitized msg the dedup key carries", line)
+	}
+	wantDedupKey := RecordUnreadableDedupKey("abc123", dedupKey[strings.LastIndex(dedupKey, "\x00")+1:])
+	if dedupKey != wantDedupKey {
+		t.Errorf("dedupKey = %q, want %q", dedupKey, wantDedupKey)
+	}
+}
+
+func TestRecordUnreadableLine_UnmarshalTypeErrorFromSchemaMismatch(t *testing.T) {
+	rec := `{"slug":"abc123","target_url":"https://example.com","status":7}`
+	_, parseErr := ParseLink([]byte(rec))
+	if parseErr == nil {
+		t.Fatal("test fixture invalid: ParseLink did not error on a numeric status")
+	}
+
+	line, _ := RecordUnreadableLine("abc123", parseErr)
+
+	if !strings.Contains(line, "etype=*json.UnmarshalTypeError") {
+		t.Errorf("line = %q, want etype=*json.UnmarshalTypeError", line)
+	}
+}
+
+func TestRecordUnreadableLine_UnmarshalTypeErrorMessageSurvivesSanitizationUnredacted(t *testing.T) {
+	rec := `{"slug":"abc123","target_url":"https://example.com","status":7}`
+	_, parseErr := ParseLink([]byte(rec))
+	if parseErr == nil {
+		t.Fatal("test fixture invalid")
+	}
+
+	line, _ := RecordUnreadableLine("abc123", parseErr)
+
+	if strings.Contains(line, "msg_redacted=1") {
+		t.Errorf("line = %q, a `json: cannot unmarshal ...` message must survive sanitization unredacted", line)
+	}
+	if !strings.Contains(line, "json: cannot unmarshal") {
+		t.Errorf("line = %q, want the decoder message intact", line)
+	}
+}
+
+func TestRecordUnreadableLine_TruncatesAt200AndSetsTruncated(t *testing.T) {
+	longErr := errors.New(strings.Repeat("x", 250))
+	line, _ := RecordUnreadableLine("abc123", longErr)
+
+	if !strings.Contains(line, "msg_truncated=1") {
+		t.Errorf("line = %q, want msg_truncated=1", line)
+	}
+	if strings.Contains(line, strings.Repeat("x", 250)) {
+		t.Errorf("line = %q, want the message truncated, not carried in full", line)
+	}
+}
+
+// TestRecordUnreadableLine_TwoDifferentSlugsWithIdenticalMessageProduceDifferentDedupKeys
+// is the load-bearing test for this whole feature: two corrupt records
+// commonly produce the identical decoder message, and a message-keyed dedup
+// would hide every corrupt slug after the first one an instance meets.
+func TestRecordUnreadableLine_TwoDifferentSlugsWithIdenticalMessageProduceDifferentDedupKeys(t *testing.T) {
+	sameErr := errors.New("unexpected end of JSON input")
+
+	_, dedupKeyA := RecordUnreadableLine("slug-a", sameErr)
+	_, dedupKeyB := RecordUnreadableLine("slug-b", sameErr)
+
+	if dedupKeyA == dedupKeyB {
+		t.Errorf("dedupKeyA = %q, dedupKeyB = %q, want them to differ (different slugs)", dedupKeyA, dedupKeyB)
+	}
+}
+
+// TestDedupKeys_KVFailureAndRecordUnreadableSpacesAreDisjoint pins that no
+// (op, msg) pair can ever produce a KVFailureDedupKey equal to any
+// RecordUnreadableDedupKey, since the two kinds share one map and one cap.
+func TestDedupKeys_KVFailureAndRecordUnreadableSpacesAreDisjoint(t *testing.T) {
+	// For every real KV op name, a KVFailureDedupKey can never collide with
+	// any RecordUnreadableDedupKey, because RecordUnreadableDedupKey's first
+	// NUL-separated segment is always the fixed literal "record_unreadable",
+	// which is not, and never will be, a real op name.
+	recordKey := RecordUnreadableDedupKey("abc123", "some message")
+	for _, op := range []string{"open", "exists", "get", "set", "delete", "list_keys"} {
+		got := KVFailureDedupKey(op, "abc123\x00some message")
+		if got == recordKey {
+			t.Errorf("collision: KVFailureDedupKey(%q, ...) == RecordUnreadableDedupKey(...) = %q", op, got)
+		}
+	}
+}
+
+func TestRecordUnreadableLine_NilErrOmitsEtypeAndUsesDashMessage(t *testing.T) {
+	line, dedupKey := RecordUnreadableLine("abc123", nil)
+
+	if strings.Contains(line, "etype=") {
+		t.Errorf("line = %q, want no etype field for a nil err", line)
+	}
+	if !strings.HasSuffix(line, "msg=-") {
+		t.Errorf("line = %q, want it to end with msg=-", line)
+	}
+	wantDedupKey := RecordUnreadableDedupKey("abc123", "-")
+	if dedupKey != wantDedupKey {
+		t.Errorf("dedupKey = %q, want %q", dedupKey, wantDedupKey)
+	}
+}
