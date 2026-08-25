@@ -7,7 +7,8 @@ rest of `api/` follows (see `CLAUDE.md`).
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Callable
 
 import auth
 import kvretry
@@ -20,11 +21,6 @@ MAX_BULK_ROWS = 50
 MAX_BULK_BODY_BYTES = 262_144
 
 ACTION_STATUSES = {"enable": "active", "disable": "disabled"}  # values ⊆ links.LINK_STATUSES
-
-# "reassign" is a member so a request naming it gets a clean 400/403 rather
-# than falling into the delete branch below, but the actual owner-move logic
-# lands in a later task (see TASKS.md's "Add the reassign bulk action").
-BULK_ACTIONS = {"delete", "enable", "disable", "tag", "untag", "reassign", "repoint", "schedule"}
 
 # None of these strings can ever be a valid destination (a destination must
 # start with a scheme, per format rule 6), so dropping a first row whose
@@ -320,6 +316,175 @@ async def handle_bulk_create(store, principal, request, get_many, write):
     })
 
 
+@dataclass(frozen=True)
+class PlannedMutation:
+    """One slug's write, decided BEFORE any write happens. `kind` is "set"
+    (write `record` back to slug:<slug>) or "delete" (remove the record).
+
+    Planning is pure and KV-free; `_apply_mutations` is the only thing that
+    writes, and it never sees the action name."""
+
+    slug: str
+    kind: str            # "set" | "delete"
+    record: dict | None  # the full record for "set"; None for "delete"
+
+
+@dataclass(frozen=True)
+class ActionContext:
+    """Everything the request-validation phase computed, handed to the
+    per-action planner. Frozen: a planner must not smuggle state back into
+    validation."""
+
+    action: str
+    now: str
+    tag_list: list[str] | None = None
+    new_owner: str | None = None
+    new_target_url: str | None = None
+    planned_windows: dict[str, tuple[str | None, str | None]] = field(default_factory=dict)
+    has_start: bool = False
+    has_end: bool = False
+    new_start_at: str | None = None
+    new_end_at: str | None = None
+
+
+def _plan_status(ctx, slug, record):
+    record["status"] = ACTION_STATUSES[ctx.action]
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
+def _plan_tag(ctx, slug, record):
+    record["tags"] = tags.apply_tags(record.get("tags", []), ctx.tag_list)
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
+def _plan_untag(ctx, slug, record):
+    record["tags"] = tags.remove_tags(record.get("tags", []), ctx.tag_list)
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
+def _plan_reassign(ctx, slug, record):
+    record["owner"] = ctx.new_owner
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
+def _plan_repoint(ctx, slug, record):
+    record["target_url"] = ctx.new_target_url
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
+def _plan_schedule(ctx, slug, record):
+    # The merged pair the validation loop already computed — NEVER recomputed
+    # here. One side may come from the stored record, so recomputing is how a
+    # slug gets validated against one pair and written with another.
+    record["start_at"], record["end_at"] = ctx.planned_windows[slug]
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
+def _plan_delete(ctx, slug, record):
+    # No analytics purge, deliberately — CLAUDE.md's "Orphaned analytics purge":
+    # 50 slugs x ~95 keys is ~95-123 s against a 30 s handler limit.
+    # handle_bulk_action takes no purge_analytics callable at all, so this
+    # cannot regress by accident.
+    return PlannedMutation(slug, "delete", None)
+
+
+def _no_extra_fields(ctx):
+    return {}
+
+
+def _tag_fields(ctx):
+    return {"tags": ctx.tag_list}
+
+
+def _owner_fields(ctx):
+    return {"owner": ctx.new_owner}
+
+
+def _target_url_fields(ctx):
+    return {"target_url": ctx.new_target_url}
+
+
+def _window_fields(ctx):
+    # Echo only the sides the caller actually sent, exactly as today.
+    fields = {}
+    if ctx.has_start:
+        fields["start_at"] = ctx.new_start_at
+    if ctx.has_end:
+        fields["end_at"] = ctx.new_end_at
+    return fields
+
+
+@dataclass(frozen=True)
+class ActionSpec:
+    """Everything `handle_bulk_action` needs to know about one action name.
+
+    `BULK_ACTIONS` is DERIVED from `ACTION_SPECS` below, so a name cannot be
+    accepted by the endpoint without also carrying a `plan`. The write dispatch
+    a half-finished action used to fall through into no longer exists — see
+    docs/plans/unify-bulk-write-loops.md."""
+
+    name: str
+    plan: Callable[[ActionContext, str, dict], PlannedMutation]
+    per_row_can_edit: bool = True
+    required_permission: str | None = None
+    result_fields: Callable[[ActionContext], dict] = _no_extra_fields
+
+
+ACTION_SPECS: dict[str, ActionSpec] = {
+    "delete":   ActionSpec("delete", _plan_delete),
+    "enable":   ActionSpec("enable", _plan_status),
+    "disable":  ActionSpec("disable", _plan_status),
+    "tag":      ActionSpec("tag", _plan_tag,
+                           required_permission="links.tag", result_fields=_tag_fields),
+    "untag":    ActionSpec("untag", _plan_untag,
+                           required_permission="links.tag", result_fields=_tag_fields),
+    # Reassignment deliberately skips the per-row can_edit check — it is gated
+    # on users.manage alone (see docs/plans/link-tags-and-ownership.md,
+    # "Trade-offs" #7). Requiring can_edit here would break the departed-
+    # employee case this feature exists for, and buys no real security since a
+    # users.manage holder can already self-promote to admin.
+    "reassign": ActionSpec("reassign", _plan_reassign, per_row_can_edit=False,
+                           required_permission="users.manage", result_fields=_owner_fields),
+    "repoint":  ActionSpec("repoint", _plan_repoint, result_fields=_target_url_fields),
+    "schedule": ActionSpec("schedule", _plan_schedule, result_fields=_window_fields),
+}
+
+# DERIVED, never a literal. This is the structural fix: a name cannot reach the
+# endpoint's write path without an ActionSpec, and an ActionSpec cannot exist
+# without a `plan`. The `unhandled_action` 500 below survives only as a guard
+# against the two ever being decoupled again.
+BULK_ACTIONS = frozenset(ACTION_SPECS)
+
+
+async def _apply_mutations(store, write, mutations):
+    """THE one write loop. Every bulk action's writes go through here, and it
+    has NO `action` parameter — a new action cannot acquire a write loop of its
+    own, correct or otherwise.
+
+    Best-effort and fully reported (docs/plans/write-throttle-resilience.md):
+    on the first write whose RECORD_WRITE budget is exhausted it abandons the
+    rest rather than hammering a throttled store, and returns exactly what
+    landed. Returns (applied_slugs_in_request_order, WriteFailed | None).
+    """
+    applied: list[str] = []
+    for plan in mutations:
+        try:
+            if plan.kind == "delete":
+                await write(lambda s=plan.slug: store.delete(f"slug:{s}"))
+            else:
+                await write(lambda s=plan.slug, r=plan.record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
+        except kvretry.WriteFailed as exc:
+            return applied, exc
+        applied.append(plan.slug)
+    return applied, None
+
+
 async def handle_bulk_action(store, users_store, principal, request, get_many, write):
     try:
         payload = json.loads(request.body or b"{}")
@@ -329,6 +494,13 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
     action = payload.get("action")
     if action not in BULK_ACTIONS:
         return json_response(400, {"error": "invalid_action"})
+
+    spec = ACTION_SPECS.get(action)
+    if spec is None:  # pragma: no cover - BULK_ACTIONS is derived from ACTION_SPECS
+        # Unreachable by construction. Kept as the last line of defence if the
+        # two are ever decoupled: a name with no spec must be a clean 500,
+        # never someone else's write loop.
+        return json_response(500, {"error": "unhandled_action", "action": action})
 
     slugs = payload.get("slugs")
     if not isinstance(slugs, list) or not slugs or any(not isinstance(s, str) for s in slugs):
@@ -340,15 +512,15 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
     if len(slugs) > MAX_BULK_ROWS:
         return json_response(400, {"error": "too_many_rows", "max_rows": MAX_BULK_ROWS, "row_count": len(slugs)})
 
+    # Permission BEFORE any payload-derived lookup, deliberately: the reverse
+    # order lets a caller without users.manage tell "no such user"
+    # (400 unknown_owner) from "user exists" (403 forbidden) and so enumerate
+    # the very username list GET /api/users gates on this same permission.
+    if spec.required_permission and not principal.has_permission(spec.required_permission):
+        return json_response(403, {"error": "forbidden", "required_permission": spec.required_permission})
+
     new_owner: str | None = None
     if action == "reassign":
-        # Permission BEFORE resolving the owner, deliberately: the reverse
-        # order lets a caller without users.manage tell "no such user"
-        # (400 unknown_owner) from "user exists" (403 forbidden) and so
-        # enumerate the very username list GET /api/users gates on this
-        # same permission.
-        if not principal.has_permission("users.manage"):
-            return json_response(403, {"error": "forbidden", "required_permission": "users.manage"})
         new_owner = payload.get("owner")
         if not isinstance(new_owner, str) or not new_owner:
             return json_response(400, {"error": "invalid_owner"})
@@ -357,8 +529,6 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
 
     tag_list: list[str] | None = None
     if action in ("tag", "untag"):
-        if not principal.has_permission("links.tag"):
-            return json_response(403, {"error": "forbidden", "required_permission": "links.tag"})
         tag_list, tag_error = tags.parse_tags(payload.get("tags"), allow_none=False)
         if tag_error:
             return json_response(400, tag_error)
@@ -415,12 +585,7 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
             row_errors.append({"slug": slug, "error": "not_found"})
             continue
         record = json.loads(raw)
-        # Reassignment deliberately skips the per-row can_edit check — it is
-        # gated on users.manage alone (see docs/plans/link-tags-and-ownership.md,
-        # "Trade-offs" #7). Requiring can_edit here would break the departed-
-        # employee case this feature exists for, and buys no real security
-        # since a users.manage holder can already self-promote to admin.
-        if action != "reassign" and not links.can_edit(principal, record):
+        if spec.per_row_can_edit and not links.can_edit(principal, record):
             row_errors.append({"slug": slug, "error": "forbidden"})
             continue
         records[slug] = record
@@ -447,126 +612,42 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
     if row_errors:
         return json_response(400, {"error": "bulk_validation_failed", "row_errors": row_errors})
 
-    applied: list[str] = []
-    write_failure = None  # (exc,) of whichever write first failed
+    ctx = ActionContext(
+        action=action,
+        now=iso_now(),
+        tag_list=tag_list,
+        new_owner=new_owner,
+        new_target_url=new_target_url,
+        planned_windows=planned_windows,
+        has_start=has_start,
+        has_end=has_end,
+        new_start_at=new_start_at,
+        new_end_at=new_end_at,
+    )
 
-    # docs/plans/derived-link-indexes.md, Stage 2: none of these eight branches
-    # has an index step any more — there is no index. A record's existence is
-    # the only truth, so every interruption point below leaves exactly the
-    # records that landed, all of them listed, none of them advertised-but-
-    # missing.
-    if action in ACTION_STATUSES:
-        new_status = ACTION_STATUSES[action]
-        now = iso_now()
-        for slug, record in records.items():
-            record["status"] = new_status
-            record["updated_at"] = now
-            try:
-                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
-            except kvretry.WriteFailed as exc:
-                write_failure = (exc,)
-                break
-            applied.append(slug)
-    elif action in ("tag", "untag"):
-        now = iso_now()
-        for slug, record in records.items():
-            if action == "tag":
-                record["tags"] = tags.apply_tags(record.get("tags", []), tag_list)
-            else:
-                record["tags"] = tags.remove_tags(record.get("tags", []), tag_list)
-            record["updated_at"] = now
-            try:
-                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
-            except kvretry.WriteFailed as exc:
-                write_failure = (exc,)
-                break
-            applied.append(slug)
-    elif action == "reassign":
-        # A pure record rewrite now — there is no owner index to move slugs
-        # between any more.
-        now = iso_now()
-        for slug, record in records.items():
-            record["owner"] = new_owner
-            record["updated_at"] = now
-            try:
-                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
-            except kvretry.WriteFailed as exc:
-                write_failure = (exc,)
-                break
-            applied.append(slug)
-    elif action == "repoint":
-        now = iso_now()
-        for slug, record in records.items():
-            record["target_url"] = new_target_url
-            record["updated_at"] = now
-            try:
-                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
-            except kvretry.WriteFailed as exc:
-                write_failure = (exc,)
-                break
-            applied.append(slug)
-    elif action == "schedule":
-        now = iso_now()
-        for slug, record in records.items():
-            record["start_at"], record["end_at"] = planned_windows[slug]
-            record["updated_at"] = now
-            try:
-                await write(lambda s=slug, r=record: store.set(f"slug:{s}", json.dumps(r).encode("utf-8")))
-            except kvretry.WriteFailed as exc:
-                write_failure = (exc,)
-                break
-            applied.append(slug)
-    elif action == "delete":
-        for slug in records:
-            try:
-                await write(lambda s=slug: store.delete(f"slug:{s}"))
-            except kvretry.WriteFailed as exc:
-                write_failure = (exc,)
-                break
-            applied.append(slug)
-    else:  # pragma: no cover - guarded by the BULK_ACTIONS check above
-        # A name added to BULK_ACTIONS with no matching write branch used to
-        # fall into "delete" as the implicit catch-all — the failure mode of
-        # a half-finished action was deleting every selected link. This is
-        # the guard: an unhandled action name is a clean 500, never a delete.
-        return json_response(500, {"error": "unhandled_action", "action": action})
+    # Planning is pure and write-free: every slug's mutation is decided before
+    # the first KV write happens. docs/plans/derived-link-indexes.md, Stage 2:
+    # there is no index step, so a record's existence is the only truth and any
+    # interruption inside _apply_mutations leaves exactly the records that
+    # landed, all of them listed, none advertised-but-missing.
+    mutations = [spec.plan(ctx, slug, record) for slug, record in records.items()]
+    applied, exc = await _apply_mutations(store, write, mutations)
 
-    if write_failure is None:
-        result = {"ok": True, "action": action, "count": len(slugs)}
-        if action in ("tag", "untag"):
-            result["tags"] = tag_list
-        elif action == "reassign":
-            result["owner"] = new_owner
-        elif action == "repoint":
-            result["target_url"] = new_target_url
-        elif action == "schedule":
-            if has_start:
-                result["start_at"] = new_start_at
-            if has_end:
-                result["end_at"] = new_end_at
-        return json_response(200, result)
+    # ONE source for the per-action echo fields, merged into BOTH bodies, so the
+    # success and partial responses can never drift apart.
+    extra = spec.result_fields(ctx)
 
-    (exc,) = write_failure
-    not_applied = [s for s in slugs if s not in applied]
-    result = {
+    if exc is None:
+        return json_response(200, {"ok": True, "action": action, "count": len(slugs), **extra})
+
+    return json_response(200, {
         "ok": False,
         "partial": True,
         "action": action,
         "count": len(applied),
         "applied": applied,
-        "not_applied": not_applied,
+        "not_applied": [s for s in slugs if s not in applied],
         "write_error": kvretry.classify_write_error(exc.cause),
         "next_step": "resubmit",
-    }
-    if action in ("tag", "untag"):
-        result["tags"] = tag_list
-    elif action == "reassign":
-        result["owner"] = new_owner
-    elif action == "repoint":
-        result["target_url"] = new_target_url
-    elif action == "schedule":
-        if has_start:
-            result["start_at"] = new_start_at
-        if has_end:
-            result["end_at"] = new_end_at
-    return json_response(200, result)
+        **extra,
+    })

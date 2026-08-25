@@ -1,4 +1,7 @@
+import inspect
 import json
+
+import pytest
 
 import auth
 import bulk
@@ -1508,3 +1511,149 @@ async def test_bulk_action_schedule_report_partial_with_write_error():
 
     after3 = json.loads(await store.get(f"slug:{slug3}"))
     assert after3 == before3  # the loop never reached slug3 — byte-identical
+
+
+# --- unify-bulk-write-loops: structural invariants ---
+
+
+def test_bulk_actions_is_exactly_the_action_spec_table():
+    assert bulk.BULK_ACTIONS == frozenset(bulk.ACTION_SPECS)
+    assert bulk.BULK_ACTIONS == {
+        "delete", "enable", "disable", "tag", "untag", "reassign", "repoint", "schedule",
+    }
+
+
+def test_every_action_spec_carries_a_callable_plan():
+    for name, spec in bulk.ACTION_SPECS.items():
+        assert callable(spec.plan)
+        assert callable(spec.result_fields)
+        assert spec.name == name
+
+
+def test_only_reassign_skips_the_per_row_can_edit_check():
+    assert {n for n, s in bulk.ACTION_SPECS.items() if not s.per_row_can_edit} == {"reassign"}
+    required = {n: s.required_permission for n, s in bulk.ACTION_SPECS.items()}
+    assert required["tag"] == "links.tag"
+    assert required["untag"] == "links.tag"
+    assert required["reassign"] == "users.manage"
+    for name in ("delete", "enable", "disable", "repoint", "schedule"):
+        assert required[name] is None
+
+
+def test_apply_mutations_takes_no_action_parameter():
+    assert set(inspect.signature(bulk._apply_mutations).parameters) == {"store", "write", "mutations"}
+
+
+async def _run_action_for_echo_test(action, store, users_store, write):
+    """Builds a two-slug bulk-action request for `action` with the minimum
+    setup each action needs, and returns the parsed response body."""
+    slug1 = await _make_link(store, owner="alice")
+    slug2 = await _make_link(store, owner="alice")
+    payload = {"slugs": [slug1, slug2], "action": action}
+    permissions = []
+
+    if action in ("tag", "untag"):
+        permissions = ["links.tag"]
+        payload["tags"] = ["sale"]
+        if action == "untag":
+            # Give both records the tag first so untag has something to remove.
+            for slug in (slug1, slug2):
+                record = json.loads(await store.get(f"slug:{slug}"))
+                record["tags"] = ["sale"]
+                await store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+    elif action == "reassign":
+        permissions = ["users.manage"]
+        await _seed_user(users_store, "bob")
+        payload["owner"] = "bob"
+    elif action == "repoint":
+        payload["target_url"] = "https://new.example/dest"
+    elif action == "schedule":
+        payload["end_at"] = "2028-01-01T00:00:00Z"
+
+    principal = _principal(username="alice", permissions=permissions)
+    resp = await bulk.handle_bulk_action(
+        store, users_store, principal, _action_request(payload), fake_get_many, write)
+    return json.loads(resp.body), (slug1, slug2)
+
+
+@pytest.mark.parametrize("action", ["tag", "untag", "reassign", "repoint", "schedule"])
+async def test_success_and_partial_responses_carry_the_same_echo_fields(action):
+    from tests.fakes import recording_sleep
+
+    success_store = FakeStore()
+    success_body, _ = await _run_action_for_echo_test(action, success_store, FakeStore(), kvretry.direct)
+    assert success_body["ok"] is True
+
+    partial_store = ThrottlingStore()
+    partial_users_store = FakeStore()
+    # Pre-create both slugs the same way _run_action_for_echo_test will need,
+    # then arrange for the second write to fail persistently. Easiest way to
+    # know the second slug's key ahead of time is to run the setup once for
+    # real and fail whichever slug is written second.
+    slug1 = await _make_link(partial_store, owner="alice")
+    slug2 = await _make_link(partial_store, owner="alice")
+    payload = {"slugs": [slug1, slug2], "action": action}
+    permissions = []
+    if action in ("tag", "untag"):
+        permissions = ["links.tag"]
+        payload["tags"] = ["sale"]
+        if action == "untag":
+            for slug in (slug1, slug2):
+                record = json.loads(await partial_store.get(f"slug:{slug}"))
+                record["tags"] = ["sale"]
+                await partial_store.set(f"slug:{slug}", json.dumps(record).encode("utf-8"))
+    elif action == "reassign":
+        permissions = ["users.manage"]
+        await _seed_user(partial_users_store, "bob")
+        payload["owner"] = "bob"
+    elif action == "repoint":
+        payload["target_url"] = "https://new.example/dest"
+    elif action == "schedule":
+        payload["end_at"] = "2028-01-01T00:00:00Z"
+
+    # Fail the second write, deliberately arranged AFTER any prep writes
+    # above (e.g. untag's pre-tagging) so only the action's own write fails.
+    partial_store._fail_times[f"slug:{slug2}"] = 10
+
+    sleep, _ = recording_sleep()
+    write = kvretry.make_writer(sleep)
+    principal = _principal(username="alice", permissions=permissions)
+    resp = await bulk.handle_bulk_action(
+        partial_store, partial_users_store, principal, _action_request(payload), fake_get_many, write)
+    partial_body = json.loads(resp.body)
+    assert partial_body["ok"] is False
+    assert partial_body["partial"] is True
+
+    success_extra = set(success_body) - {"ok", "action", "count"}
+    partial_extra = set(partial_body) - {
+        "ok", "partial", "action", "count", "applied", "not_applied", "write_error", "next_step",
+    }
+    assert success_extra == partial_extra
+
+
+def test_plan_schedule_reads_planned_windows_verbatim_never_recomputes():
+    ctx = bulk.ActionContext(
+        action="schedule",
+        now="2026-01-01T00:00:00Z",
+        planned_windows={"s1": ("2026-06-01T00:00:00Z", "2026-07-01T00:00:00Z")},
+        has_start=True,
+        has_end=True,
+        # Deliberately different from planned_windows["s1"], to prove the
+        # planner ignores these and reads planned_windows instead.
+        new_start_at="1999-01-01T00:00:00Z",
+        new_end_at="1999-02-01T00:00:00Z",
+    )
+    record = {"start_at": None, "end_at": None}
+    mutation = bulk._plan_schedule(ctx, "s1", record)
+    assert mutation.record["start_at"] == "2026-06-01T00:00:00Z"
+    assert mutation.record["end_at"] == "2026-07-01T00:00:00Z"
+
+
+def test_plan_delete_returns_delete_kind_with_no_record_and_mutates_nothing():
+    ctx = bulk.ActionContext(action="delete", now="2026-01-01T00:00:00Z")
+    record = {"target_url": "https://example.com", "status": "active"}
+    before = dict(record)
+    mutation = bulk._plan_delete(ctx, "s1", record)
+    assert mutation.kind == "delete"
+    assert mutation.record is None
+    assert record == before
