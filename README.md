@@ -10,6 +10,13 @@ A self-hosted URL shortener built as a polyglot [Spin](https://spinframework.dev
 - QR codes (SVG/PNG, web/print sizes) for every link
 - Click analytics: totals and per-day counts
 - Local username/password login with sessions, CSRF protection, and admin user management (roles + fine-grained permissions)
+- Bulk link creation and bulk delete/enable/disable/tag/reassign/repoint/schedule actions
+- Free-form link tags, with ownership reassignment (e.g. when an employee leaves)
+- Admin-managed destination URL policy (allow/deny rules on what a link may point at)
+- Light/dark theme, auto-following the OS with a manual override
+- Multiple public base domains, selectable per viewer, applied to every short URL/QR code
+- KV backup and restore, a consistency check with automated repair, and an orphaned-analytics purge tool
+- Styled 404/500/503 error pages and password-prompt page (no raw error strings)
 
 ## Quick start
 
