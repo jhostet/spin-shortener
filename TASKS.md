@@ -3415,10 +3415,13 @@ repo-wide `grep` — exclude them, or remove the worktrees.
 - ~~Fix `classify_write_error` to match BOTH throttle messages.~~ **DONE and DEPLOYED 2026-08-23** —
   confirmed live on `7ce879a-errpages`: six concurrent over-cap bulk creates all reported
   `write_error=throttled`, where the identical run reported `other` two days earlier.
-- **`gui-pages`' catch-all still answers a mistyped URL with a plain-text `Not found`** — the same
-  defect the error pages just removed from `/r/`, one route over, and a visitor who drops the `/r/`
-  from a shared URL lands on it. Its own trigger ("the next time a visitor-facing surface is
-  reviewed") has effectively fired. See the Future-work entry for the three real design questions.
+- ~~`gui-pages`' catch-all still answers a mistyped URL with a plain-text `Not found`.~~ **STALE
+  ENTRY — this was already DONE before this note was written**, per `## Styled error pages for the
+  gui-pages catch-all` above and `docs/plans/gui-pages-error-pages.md` (all 5 tasks `[x]`,
+  `gui-pages/errorpages.py` exists, `routing.py`'s 404/500 branches serve `ERROR_PAGES[404]`/`[500]`).
+  Re-confirmed 2026-08-26: `gui-pages/errorpages.py` present, wired into `routing.py`, `cd gui-pages
+  && uv run pytest` → 108 passed. This bullet was carried forward without checking against the
+  section directly above it — verify a "what's left" item against the code before repeating it.
 - **The absorption cliff is unmeasured and probably not measurable from one laptop** — see
   `## The edge's absorption cliff was NOT found` above. The edge absorbed a measured **50.9%**
   origin failure rate with zero client impact, and the two available knobs oppose each other
