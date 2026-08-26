@@ -3291,30 +3291,37 @@ appended after it — if you add a section, add it ABOVE this one.
 
 ## Where things stand
 
-- **Repo:** `main` clean, all 10 tasks of `## Bulk schedule and repoint` done and pushed
-  (`docs/plans/bulk-schedule-and-repoint.md`). api 701 passed, gui-pages 108 passed,
-  `go test ./linkgate/...` ok. Verified end to end via Playwright against a real
-  `spin up --build`: repoint (happy path, policy refusal), schedule (one-side-only merge, an
-  inverted-window conflict blocking the whole batch, expiry-in-the-past → 404 → Clear → 302 again),
-  and the bar's layout at 1400/768/480/390px in both themes. **One real bug was caught and fixed
-  during that verification**: `#bulk-repoint-url`'s initial CSS (`width:18rem`, no `min-width`)
-  couldn't actually shrink on a narrow screen — a flex item's default min-width is its content size,
-  not 0 — and was overflowing `#bulk-bar` by 82px at 390px wide; fixed to `flex:1 1 18rem;
-  min-width:10rem`, the same two-property shape `.tag-input-buffer` already uses. **RESUME HERE:**
-  nothing in-flight — pick up whatever the next requirement is, or work from TASKS.md's Future work.
-- **Deployed:** `acf924a-bulkschedrepoint` (2026-08-25) — bulk schedule and repoint, on top of the
-  tag chip input + multi-tag AND/OR filtering, the chip's `currentColor` 3:1 border, and the mobile
-  column-hide fix from `4de62b1-mobilefix`. Verified live against the deployed app via Playwright:
-  repoint happy path (302 + `Cache-Control: no-store` to the new destination), repoint policy
-  refusal (temporary `evil.example` deny rule, both destinations unchanged, rule removed after),
-  schedule one-side-only merge (conflict names only the offending link, untouched side preserved),
-  schedule expiry-in-the-past → 404 → Clear schedule → 302 again, and bar layout at 390px in both
-  themes (only pre-existing overflow, no new issue). Test links and the temporary policy rule were
-  cleaned up afterward.
+- **Repo:** `main` clean at `d9ffe46`, three features landed and deployed in sequence this session:
+  `## Bulk schedule and repoint` (all 10 tasks, `docs/plans/bulk-schedule-and-repoint.md`),
+  `## Unify bulk write loops` (all 6 tasks, `docs/plans/unify-bulk-write-loops.md` — the eight
+  `handle_bulk_action` write loops are now one action-agnostic `_apply_mutations` loop over
+  `PlannedMutation`s, `BULK_ACTIONS` derived from `ACTION_SPECS`), and
+  `## Redirect record-unreadable logging` (all 6 tasks, `docs/plans/disposition-unreadable-logging.md`
+  — `/r/{slug}` now emits `ev=record_unreadable` with the decoder's own message when a stored record
+  won't parse; built ahead of its own Future-work trigger on direct request). `TASKS.md`'s Future-work
+  section was also audited and 11 entries annotated as closed/superseded that had shipped without
+  ever being marked. Current baselines: api **712 passed**, gui-pages **108 passed**,
+  `go test ./linkgate/...` ok. **RESUME HERE:** nothing in-flight — pick up whatever the next
+  requirement is, or work from `TASKS.md`'s Future work (recently cleaned up, so it's a truer list
+  now than it was this morning).
+- **Deployed:** `d9ffe46-recordunreadable` (2026-08-25) — includes all three features above, on top
+  of `4de62b1-mobilefix`'s tag chip input + multi-tag filtering. Bulk schedule/repoint and the
+  write-loop unification were both verified live against the deployed app via Playwright (repoint
+  happy path + policy refusal, schedule merge/conflict/clear, bar layout, and a live bulk
+  disable→delete smoke test through the confirm dialog). **The record-unreadable logging was NOT
+  verified against this deployment** — its live verification needs a deliberately corrupted KV
+  record, which needs the KV explorer, which is dev-only by design and absent from the deployed
+  manifest; it was verified live locally instead (`./dev/kv-explorer-up.sh`), confirming both
+  `etype=*json.SyntaxError` and `etype=*json.UnmarshalTypeError` lines render correctly and an
+  untouched link stays silent. A basic smoke check against the deployment (`/api/links` 401s
+  unauthenticated, an existing link still 302s with `Cache-Control: no-store`) confirmed the build
+  itself is healthy.
 - **Store:** baseline — 14 links, ~100 analytics keys (**32 of them leftover `events:` keys** from
   before the events write was dropped, correctly reported as `obsolete_event_keys` and harmless;
   the rest are real count shards on the slug used for load probes), 0 orphan slugs / 0 orphan keys,
-  `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable.
+  `GET /api/admin/consistency` → `ok: true` over 6 checks / 3 repairable. Unchanged by this session's
+  work — every test link created during live verification (bulk-schedule/repoint's Playwright pass,
+  the write-loop-unification smoke test) was disabled/deleted and confirmed 404 afterward.
 
 ## What shipped this session, in order
 
