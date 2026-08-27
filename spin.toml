@@ -128,7 +128,7 @@ route = "/admin/users.css"
 component = "gui"
 
 [[trigger.http]]
-route = "/admin/backup.js"
+route = "/admin/store-maintenance.js"
 component = "gui"
 
 [[trigger.http]]

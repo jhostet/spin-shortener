@@ -626,7 +626,7 @@ details summary:focus-visible:not([role]) {
 }
 
 /* Pico leaves a disabled control at cursor: pointer, so it reads as
- * clickable while being inert — measured on backup.html's Restore button,
+ * clickable while being inert — measured on store-maintenance.html's Restore button,
  * the only disabled control in the app. Opacity says "unavailable" and the
  * cursor contradicted it. */
 button:disabled,
@@ -642,7 +642,7 @@ textarea:disabled {
  *
  * Red is reserved for "something just failed". Reusing it for a standing
  * advisory makes a real failure visually identical to permanent furniture,
- * which is exactly what happened on backup.html. Same weight and spacing as
+ * which is exactly what happened on store-maintenance.html. Same weight and spacing as
  * .form-error so the two read as one family, in the neutral slate that
  * .not-yet-live already uses for informational state. */
 .form-note {

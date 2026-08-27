@@ -1,5 +1,5 @@
 // Maps api/urlpolicy.py's parse_policy_document error codes to friendly
-// copy, following backup.js's BACKUP_ERROR_MESSAGES precedent — kept local
+// copy, following store-maintenance.js's BACKUP_ERROR_MESSAGES precedent — kept local
 // because these codes matter only on this page.
 const POLICY_ERROR_MESSAGES = {
   invalid_policy: "That policy document isn't valid.",
@@ -13,7 +13,7 @@ const POLICY_ERROR_MESSAGES = {
 
 // urlpolicy.evaluate()'s `reason` values, mapped to copy a non-technical
 // operator can read. Falls back to the raw value for a reason this map
-// doesn't know, following backup.js's consistencyCheckLabel precedent.
+// doesn't know, following store-maintenance.js's consistencyCheckLabel precedent.
 const VIOLATION_REASONS = {
   denied_by_rule: "Blocked by a deny rule",
   not_allowed_by_default: "Blocked by the default action (no matching allow rule)",
@@ -276,7 +276,7 @@ initHeader({
   dashboardHref: "../dashboard.html",
   // Deliberately shorter than the page's own <h1>. "Destination URL policy"
   // overflowed #app-header nav at 390px (scrollWidth 374 vs clientWidth 351,
-  // both themes; backup.html measured 351/351 at the same width, so the label
+  // both themes; store-maintenance.html measured 351/351 at the same width, so the label
   // length was the whole difference). Safe to shorten here because this page
   // has a real <h1> carrying the full name — DESIGN.md's rule about keeping
   // the breadcrumb at narrow widths exists for links/detail.html, which has
@@ -286,7 +286,7 @@ initHeader({
 }).then(async (result) => {
   // Both /api/admin/url-policy and /api/admin/url-policy/violations gate on
   // users.manage (auth.py's Principal.has_permission — true for role ==
-  // "admin" too), mirroring backup.js's own canManage check rather than
+  // "admin" too), mirroring store-maintenance.js's own canManage check rather than
   // round-tripping to the server just to discover the same answer.
   const canManage = result.ok && (result.data.role === "admin" || result.data.permissions.includes("users.manage"));
   if (!canManage) {

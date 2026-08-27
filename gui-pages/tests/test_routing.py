@@ -12,7 +12,7 @@ from routing import SECURITY_HEADERS, build_response, resolve_file
         ("/login.html", "login.html"),
         ("/dashboard.html", "dashboard.html"),
         ("/admin/users.html", "admin/users.html"),
-        ("/admin/backup.html", "admin/backup.html"),
+        ("/admin/store-maintenance.html", "admin/store-maintenance.html"),
         ("/admin/url-policy.html", "admin/url-policy.html"),
         ("/links/detail.html", "links/detail.html"),
         ("/nonexistent.html", None),

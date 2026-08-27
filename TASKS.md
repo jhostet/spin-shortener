@@ -3436,3 +3436,39 @@ repo-wide `grep` — exclude them, or remove the worktrees.
 - **A single-link DELETE returned 200 without deleting**, seen once on 2026-08-18, not reproduced
   in 10 further attempts. Filed with the trace needed to diagnose a repeat.
 - Everything else in Future work is trigger-gated; check the trigger before starting.
+
+## Renamed gui/admin/backup.html to store-maintenance.html on disk (2026-08-27)
+
+The deferred half of the entry at line ~469 above ("Renaming `gui/admin/backup.html` on disk").
+That entry's own trigger was "a URL that is actively confusing to a new operator, or a fifth
+tool" — neither had actually fired (the page still had exactly 4 articles, no reported
+confusion) — but the user explicitly asked to do it anyway, overriding the gate. Recorded here
+so the override is visible, not silently absorbed into an "trigger fired" claim.
+
+- [x] Rename the files and every live reference — file(s): gui/admin/backup.html →
+  gui/admin/store-maintenance.html, gui/admin/backup.js → gui/admin/store-maintenance.js,
+  spin.toml, gui-pages/routing.py, gui-pages/tests/test_routing.py, gui/admin/users.html,
+  gui/theme.css, gui/admin/url-policy.js, CLAUDE.md, DESIGN.md — done when: `git mv` used for
+  both files to preserve history, spin.toml's `/admin/backup.js` route renamed to
+  `/admin/store-maintenance.js` (no per-file `files` mapping to touch — `gui` still maps the
+  whole `gui/` directory), `gui-pages/routing.py`'s `ROUTES` entry and
+  `test_routing.py`'s matching tuple updated (test_no_inline_code.py needs no change — its
+  `PAGES` list derives from `ROUTES`), the in-body link on `admin/users.html` and the
+  `<script src=...>` tag inside the renamed HTML file updated, the four comment-only references
+  in `theme.css`/`url-policy.js` updated (the `BACKUP_ERROR_MESSAGES` constant name inside
+  store-maintenance.js left alone — it names backup-specific errors, not a file path), and the
+  five stale `gui/admin/backup.html`/`backup.js` mentions in CLAUDE.md plus the three in
+  DESIGN.md's nav-budget note updated — historical records (TASKS.md's own older entries,
+  `docs/plans/*.md`, the dated `.impeccable/critique/` file) deliberately left untouched — note:
+  all as planned; `api/backup.py`'s `/api/admin/backup` API route and `GET /api/admin/backup`
+  mentions in CLAUDE.md are the API endpoint, unrelated to this GUI-page rename, and were left
+  alone.
+- [x] Verify — file(s): (none — verification step) — done when: `cd api && uv run pytest` and
+  `cd gui-pages && uv run pytest` both pass at their existing baselines, and a live
+  `spin up --build` shows `/admin/store-maintenance.js` in "Available Routes" — note: api 712
+  passed, gui-pages 108 passed. Live via Playwright: logged in, clicked the "Store maintenance"
+  link from `admin/users.html`, landed on `/admin/store-maintenance.html` with zero console
+  errors, ran the consistency check successfully (confirming `store-maintenance.js` reaches the
+  API), and confirmed in dark theme the breadcrumb renders "Store maintenance" with no nav
+  overflow. `curl` confirmed the old `/admin/backup.html` and `/admin/backup.js` now 404 and the
+  new paths 200.
