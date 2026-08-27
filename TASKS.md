@@ -3535,8 +3535,15 @@ free defense-in-depth once the same predicate exists).
 - [x] Confirm the vulnerability live, then confirm the fix live, against the same reproduction — file(s): (none — verification step) — done when: a local `spin up --build` with `key_value_stores` temporarily removed from `[component.redirect]` in `spin.toml` (reverted after) reproduces the pre-fix line-split and line-forgery on the un-fixed build, and the identical requests against the fixed build each produce exactly one clean, unbroken log line with `slug=[invalid_slug]` — **note:** both confirmed exactly as described. Pre-fix: `/r/a%20b` → `slug=a b op=open ...` (split field); the `%0A`-payload → a second forged `ss comp=redirect ev=kv_fail ... slug=FORGED op=set ns=users ...` line. Post-fix (fresh instance per test, since `shouldEmitFailureLine` dedups on `(op, msg)` per Wasm instance and both payloads shared `plainslug`'s `(open, "access denied")` key): both payloads produced a single line reading `slug=[invalid_slug]`; a normal slug (`My_Real-Link99`) still logged verbatim, confirming no false positives.
 - [x] Confirm zero effect on the real redirect path — file(s): (none — verification step) — done when: `api` (712) and `gui-pages` (116) suites still pass unaffected (fix is `redirect`-only), and a real create → redirect → delete cycle through the browser against a normal `spin up --build` still works end to end — **note:** both suites unaffected. Created a link via the dashboard UI, confirmed `curl` on its `/r/{slug}` returned `302` to the correct destination with `Cache-Control: no-store` unchanged, then deleted it via the UI; `spin.toml` confirmed restored to its committed state (`git diff` clean) before this task closed.
 
-**Not deployed by this fix.** The deployed build (`5f828bf-adminhub`) predates this change; it will
-ship with whatever is deployed next. This is a hot-path change (redirect, on every request) but
-touches only log-line rendering — no redirect status, header, or KV operation changed, so the
-`302`-not-`301`/`308` rule, the KV op counts per request, and every other redirect contract in
-CLAUDE.md are untouched.
+**Deployed 2026-08-27, `57ae2c8-logfmtfix`.** This is a hot-path change (redirect, on every
+request) but touches only log-line rendering — no redirect status, header, or KV operation
+changed, so the `302`-not-`301`/`308` rule, the KV op counts per request, and every other
+redirect contract in CLAUDE.md are untouched. Deploy verified: `X-SS-Version` confirmed live
+(~130s propagation, the usual false-negative CLI exit); an existing production link
+(`/r/cYrI0dR`, 1081 pre-existing clicks) still redirects `302` with `Cache-Control: no-store`
+intact; `curl` against a nonexistent slug and a crafted (space-containing) slug both return a
+plain `404` with no behavioural difference between them, preserving the app's existing
+indistinguishability property; zero console errors in the browser. The induced-failure
+reproduction itself (temporarily removing `key_value_stores`) was deliberately NOT repeated
+against the deployed app — it was already exhaustively confirmed locally, and doing it here
+would mean briefly serving real visitors a broken redirect path for no additional evidence.
