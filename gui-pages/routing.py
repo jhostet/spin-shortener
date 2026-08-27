@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from errorpages import ERROR_PAGES
+from nonpages import non_page_response
 
 # Path -> file relative to the gui/ directory mounted at /gui in this
 # component's virtual filesystem (see spin.toml's [component.gui-pages]
@@ -90,6 +91,17 @@ def build_response(uri: str, read_file: Callable[[str], bytes]) -> Response:
     so this function stays testable with a fake in unit tests — the real
     WASI entrypoint (`app.py`) passes in an actual file read."""
     path = urlparse(uri).path
+
+    # robots.txt, favicon.ico and /.well-known/* are requested by software, not
+    # by a person, so they get a cheap typed answer instead of the styled HTML
+    # page the catch-all serves a human who mistyped a URL. These paths are
+    # disjoint from ROUTES (pinned by tests/test_nonpages.py), so this block's
+    # position relative to the ROUTES lookup below is not load-bearing.
+    machine = non_page_response(path)
+    if machine is not None:
+        status, content_type, body = machine
+        return Response(status, {**SECURITY_HEADERS, "content-type": content_type}, body)
+
     filename = resolve_file(path)
     if filename is None:
         return Response(404, {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}, ERROR_PAGES[404])

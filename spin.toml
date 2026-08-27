@@ -145,11 +145,16 @@ component = "gui"
 
 # SVG only, and no /favicon.ico route: there is no .ico file to serve, and a
 # browser only makes the unprompted /favicon.ico request for a page that
-# declares no <link rel="icon"> — which, after this change, is just the
-# redirect component's password prompt. That page is deliberately left
-# without one: its CSP is the strictest in the app (`default-src 'none'`),
-# a favicon is fetched under img-src, and widening the one policy that
-# guards the page where a visitor types a credential is not worth a tab icon.
+# declares no <link rel="icon"> — which is all four of the redirect
+# component's served templates (prompt.html and the three error pages), not
+# just the password prompt. All four are deliberately left without one: the
+# prompt page's CSP is the strictest in the app (`default-src 'none'`), a
+# favicon is fetched under img-src, and widening the one policy that guards
+# the page where a visitor types a credential is not worth a tab icon. The
+# SVG already covers ~95% of browsers (Safari 15.4+); the residual /favicon.ico
+# probe (from this app's own pages, and from any of the four redirect
+# templates) is answered with a cheap plain 404 by gui-pages/nonpages.py,
+# not by a route here — see docs/plans/robots-favicon-and-well-known.md.
 [[trigger.http]]
 route = "/favicon.svg"
 component = "gui"

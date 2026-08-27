@@ -26,6 +26,11 @@ from routing import SECURITY_HEADERS, build_response, resolve_file
         ("/dashboard.js", None),
         ("/admin/users.css", None),
         ("/../../etc/passwd", None),
+        # These are deliberately NOT pages — they're answered by
+        # nonpages.non_page_response instead. See test_nonpages.py.
+        ("/robots.txt", None),
+        ("/favicon.ico", None),
+        ("/.well-known/security.txt", None),
     ],
 )
 def test_resolve_file(path, expected_file):
