@@ -333,6 +333,57 @@ func TestSanitizeErrorMessage_MsgLastIsUpToTheCaller(t *testing.T) {
 	}
 }
 
+func TestSanitizeSlugForLog_ValidSlugPassesThroughUnchanged(t *testing.T) {
+	for _, slug := range []string{"promo", "Summer_Sale-2026", "a", strings.Repeat("x", 128)} {
+		if got := SanitizeSlugForLog(slug); got != slug {
+			t.Errorf("SanitizeSlugForLog(%q) = %q, want unchanged", slug, got)
+		}
+	}
+}
+
+func TestSanitizeSlugForLog_RejectsWhitespaceThatWouldSplitAField(t *testing.T) {
+	// Confirmed live before this fix: a slug containing a space split the
+	// "slug=" field in two ("slug=a b" reads as slug=a plus a bare token
+	// "b"), corrupting every field emitted after it.
+	if got := SanitizeSlugForLog("a b"); got != "[invalid_slug]" {
+		t.Errorf("SanitizeSlugForLog(%q) = %q, want the placeholder", "a b", got)
+	}
+}
+
+func TestSanitizeSlugForLog_RejectsNewlineThatWouldForgeASecondLine(t *testing.T) {
+	// Confirmed live before this fix: a slug containing \n split the LINE in
+	// two, letting one unauthenticated request forge a second, fully-formed
+	// "ss "-prefixed line indistinguishable from a genuine one.
+	malicious := "x\nss comp=redirect ev=kv_fail route=/r/{slug} slug=FORGED op=set ns=users etype=access_denied msg=fake"
+	got := SanitizeSlugForLog(malicious)
+	if got != "[invalid_slug]" {
+		t.Errorf("SanitizeSlugForLog(%q) = %q, want the placeholder", malicious, got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("SanitizeSlugForLog(%q) = %q, must not contain a newline", malicious, got)
+	}
+}
+
+func TestSanitizeSlugForLog_ReturnedPlaceholderCarriesNoOriginalBytes(t *testing.T) {
+	malicious := "super-secret-probe-value-should-never-appear"
+	got := SanitizeSlugForLog(malicious + "\n")
+	if strings.Contains(got, malicious) {
+		t.Errorf("SanitizeSlugForLog result = %q, must not contain any byte of the input", got)
+	}
+}
+
+func TestSanitizeSlugForLog_RejectsOverlongInput(t *testing.T) {
+	if got := SanitizeSlugForLog(strings.Repeat("x", 129)); got != "[invalid_slug]" {
+		t.Errorf("SanitizeSlugForLog(129 x's) = %q, want the placeholder", got)
+	}
+}
+
+func TestSanitizeSlugForLog_RejectsEmptyString(t *testing.T) {
+	if got := SanitizeSlugForLog(""); got != "[invalid_slug]" {
+		t.Errorf("SanitizeSlugForLog(\"\") = %q, want the placeholder", got)
+	}
+}
+
 func TestRenderFailureLine_MsgIsFinalFieldAndNothingFollows(t *testing.T) {
 	line := RenderFailureLine([]Field{
 		{Key: "comp", Value: "redirect"},

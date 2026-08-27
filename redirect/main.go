@@ -177,17 +177,18 @@ func collectorFrom(ctx context.Context) *linkgate.Collector {
 // request, after the response has already been sent — so the ~µs cost of
 // the stderr write lands in neither the measured handler duration nor the
 // visitor's latency. route is hardcoded to this component's one route
-// shape; slug is logged raw (not redacted) because correlating a slow
-// resolution to a specific link is the entire point of instrumenting this
-// path, and slugs are already treated as non-secret (CLAUDE.md, "Security
-// tradeoffs").
+// shape; slug is logged (not redacted — a valid slug is already treated as
+// non-secret, CLAUDE.md's "Security tradeoffs") but always through
+// linkgate.SanitizeSlugForLog, since it is attacker-controlled and unlike
+// msg is never the last field in the line — see that function's doc
+// comment for the confirmed line-splitting/forgery this closes.
 func emitLogLine(r *http.Request, status int, dur time.Duration, collector *linkgate.Collector) {
 	fields := []linkgate.Field{
 		{Key: "comp", Value: "redirect"},
 		{Key: "route", Value: "/r/{slug}"},
 	}
 	if slug := r.PathValue("slug"); slug != "" {
-		fields = append(fields, linkgate.Field{Key: "slug", Value: slug})
+		fields = append(fields, linkgate.Field{Key: "slug", Value: linkgate.SanitizeSlugForLog(slug)})
 	}
 	fields = append(fields, linkgate.Field{Key: "status", Value: strconv.Itoa(status)})
 	fmt.Fprintln(os.Stderr, linkgate.RenderLogLine(fields, dur, collector))
@@ -584,7 +585,10 @@ func classifyKVFailure(err error) string {
 // operation failure, deduplicated per Wasm instance on (op, sanitized msg).
 // slug may be empty (it never is for this component's one route, but the
 // helper accepts it either way for clarity at call sites). route is always
-// hardcoded to this component's one route shape — never a raw path.
+// hardcoded to this component's one route shape — never a raw path. slug is
+// passed through linkgate.SanitizeSlugForLog before it reaches a field, for
+// the same reason emitLogLine does: it is attacker-controlled and, unlike
+// msg, is never the last field in the line.
 func emitFailureLine(op, ns, slug string, err error) {
 	etype := classifyKVFailure(err)
 	sanitized, redacted, truncated := linkgate.SanitizeErrorMessage(err.Error())
@@ -603,7 +607,7 @@ func emitFailureLine(op, ns, slug string, err error) {
 		{Key: "route", Value: "/r/{slug}"},
 	}
 	if slug != "" {
-		fields = append(fields, linkgate.Field{Key: "slug", Value: slug})
+		fields = append(fields, linkgate.Field{Key: "slug", Value: linkgate.SanitizeSlugForLog(slug)})
 	}
 	fields = append(fields,
 		linkgate.Field{Key: "op", Value: op},

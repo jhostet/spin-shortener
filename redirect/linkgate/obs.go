@@ -292,6 +292,44 @@ func SanitizeErrorMessage(msg string) (sanitized string, redacted bool, truncate
 	return sanitized, redacted, truncated
 }
 
+// slugLogSafePattern mirrors api/links.py's CUSTOM_SLUG_PATTERN character
+// class, deliberately without its 3-32 length bound (this function only
+// needs to reject unsafe bytes, not enforce the shape a slug is created
+// with) up to a generous cap: every slug the API ever writes is drawn from
+// [A-Za-z0-9_-]+, so anything outside that class reaching this function is
+// a probe or an attack against a path that was never a real link, never a
+// real one.
+var slugLogSafePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// SanitizeSlugForLog returns slug unchanged if it is safe to place inside a
+// logfmt line's "slug=" field, and a fixed placeholder otherwise.
+//
+// Unlike SanitizeErrorMessage's msg field, slug is never the last field
+// RenderLogLine/RenderFailureLine emit — op, ns, etype and (for the summary
+// line) status/dur_us all follow it. A raw request-supplied slug is
+// attacker-controlled (redirect's PathValue("slug") is never validated
+// before a KV lookup, since an invalid slug is meant to look identical to a
+// nonexistent one) and net/http.ServeMux's wildcard hands back the
+// unescaped path segment — confirmed live: a slug containing "%20" splits
+// the "slug=" field in two, and one containing "%0A" splits the LINE in
+// two, letting a single unauthenticated request to /r/{slug} forge a
+// second, fully-formed "ss "-prefixed line that a naive log parser cannot
+// distinguish from a genuine one.
+//
+// The replacement carries none of the original bytes rather than escaping
+// them: a real link's slug can never take any shape but the one
+// slugLogSafePattern already matches, so a slug that fails it has already
+// told an operator everything logging it further would — that this
+// request's slug is not one links.py could have written — and echoing the
+// bytes back (even escaped) would only invite the next bypass to be found
+// in whatever escaping scheme replaced this one.
+func SanitizeSlugForLog(slug string) string {
+	if slugLogSafePattern.MatchString(slug) {
+		return slug
+	}
+	return "[invalid_slug]"
+}
+
 // RenderFailureLine renders one "ss "-prefixed logfmt line from fields, in
 // order, with NOTHING appended after them — deliberately separate from
 // RenderLogLine so nothing can ever land after "msg", which every caller
@@ -384,7 +422,13 @@ func RecordUnreadableLine(slug string, err error) (line, dedupKey string) {
 		{Key: "route", Value: "/r/{slug}"},
 	}
 	if slug != "" {
-		fields = append(fields, Field{Key: "slug", Value: slug})
+		// This arm only ever runs for a slug with an existing links:slug:<slug>
+		// record, which only api writes and only under a validated slug — so
+		// slug is trusted here in a way emitLogLine/emitFailureLine's are not.
+		// Sanitized anyway: it costs nothing for a slug that already matches
+		// (every slug taking this path does), and it means this field's safety
+		// never depends on that invariant continuing to hold.
+		fields = append(fields, Field{Key: "slug", Value: SanitizeSlugForLog(slug)})
 	}
 	if etype != "" {
 		fields = append(fields, Field{Key: "etype", Value: etype})
