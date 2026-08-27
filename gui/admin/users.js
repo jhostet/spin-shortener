@@ -342,7 +342,8 @@ newRoleSelect.addEventListener("change", () => {
 // viewer's own row, since the server always rejects that with
 // cannot_delete_self and showing the full "are you sure, permanent"
 // ritual for a guaranteed-doomed action is exactly backwards.
-initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Manage users", manageUsersHref: "users.html", onManageUsersPage: true }).then((result) => {
+initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Manage users", adminHref: "index.html" }).then((result) => {
+  renderAdminNav(document.getElementById("admin-nav"), "users");
   if (result.ok) currentPrincipal = result.data;
   loadUsers();
 });

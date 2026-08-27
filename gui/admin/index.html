@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spin-shortener — Admin</title>
+  <script src="../theme-init.js"></script>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="../vendor/pico.min.css" />
+  <link rel="stylesheet" href="../theme.css" />
+</head>
+<body>
+  <header id="app-header" class="container"></header>
+
+  <main class="container">
+    <h1>Admin</h1>
+    <p id="forbidden-notice" class="form-error" role="alert" hidden>
+      You don't have permission to use the admin tools.
+    </p>
+
+    <div id="admin-content">
+      <p>Tools for administering this shortener. Each one needs the Manage users permission.</p>
+      <div id="admin-cards"></div>
+    </div>
+  </main>
+
+  <script src="../app.js"></script>
+  <script src="index.js"></script>
+</body>
+</html>

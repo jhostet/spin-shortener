@@ -343,6 +343,47 @@ function renderThemeToggle(container) {
 // docs/plans/multi-domain-display.md): a viewer preference, persisted in
 // localStorage, degrading safely rather than throwing if its dependency
 // (here, a populated domain list from /auth/me) is missing.
+// The admin area's page list, in nav order. Every consumer of this lives in
+// gui/admin/, so the hrefs are deliberately sibling-relative with no depth
+// prefix — renderAdminNav() and the hub page are the only callers, and both
+// are served from /admin/. A fourth admin tool is added here and nowhere else.
+const ADMIN_PAGES = [
+  {
+    id: "users",
+    label: "Manage users",
+    href: "users.html",
+    blurb: "Create accounts, set roles, permissions and short-link domains, reset a password, or remove someone who has left.",
+  },
+  {
+    id: "store-maintenance",
+    label: "Store maintenance",
+    href: "store-maintenance.html",
+    blurb: "Download or restore a backup, check the store for inconsistencies and repair the safe ones, and clean up analytics left behind by deleted links.",
+  },
+  {
+    id: "url-policy",
+    label: "Destination URL policy",
+    href: "url-policy.html",
+    blurb: "Choose which hosts a short link may point at, and review existing links a new rule would refuse.",
+  },
+];
+
+// Renders the sibling-tool strip on an admin page: every ADMIN_PAGES entry
+// EXCEPT the one being viewed, so it is always exactly two links today and can
+// never re-create the "link to the page you are already on" confusion the nav's
+// own Manage-users link was fixed for. The way back to the hub is the nav's
+// "Admin" item, which is why "Admin home" is deliberately not repeated here.
+// Anchors carry .operator-link for the sitewide 44px tap-target floor (see
+// theme.css) — a plain body anchor is not covered by it.
+function renderAdminNav(container, currentId) {
+  if (!container) return;
+  const links = ADMIN_PAGES
+    .filter((page) => page.id !== currentId)
+    .map((page) => `<a class="operator-link" href="${escapeHtml(page.href)}">${escapeHtml(page.label)}</a>`)
+    .join(" · ");
+  container.innerHTML = `More admin tools: ${links}`;
+}
+
 const SS_DOMAIN_KEY = "ss-domain";
 // Set by initHeader() from the /auth/me response's `domains` field before any
 // page can call shortUrlFor() — every authenticated page already sequences
@@ -451,16 +492,18 @@ function renderDomainSelector(container, domainList) {
 // via `pageLabel`, shown as a breadcrumb suffix next to the permanent brand,
 // rather than by displacing it — this also gives `links/detail.html` a page
 // label it previously had none at all (no `<h1>`, no brand, nothing).
-// `dashboardHref`/`manageUsersHref` let each page supply paths relative to
-// its own depth. `onManageUsersPage` hides the "Manage users" link when it
-// would otherwise point at the page already being viewed. Returns the
-// `/auth/me` result so callers can layer page-specific logic (e.g.
+// `dashboardHref`/`adminHref` let each page supply paths relative to its own
+// depth. `adminHref` points at the admin hub (gui/admin/index.html), not at
+// any one tool page — the nav's admin item names the admin *area*, not a
+// page in it. `onAdminHome` hides the "Admin" link when it would otherwise
+// point at the page already being viewed (i.e. on the hub itself). Returns
+// the `/auth/me` result so callers can layer page-specific logic (e.g.
 // showing/hiding other fields) on top of the same principal data.
 async function initHeader({
   dashboardHref = "dashboard.html",
   pageLabel = null,
-  manageUsersHref = "admin/users.html",
-  onManageUsersPage = false,
+  adminHref = "admin/index.html",
+  onAdminHome = false,
 } = {}) {
   const header = document.getElementById("app-header");
   header.innerHTML = `
@@ -481,7 +524,7 @@ async function initHeader({
       </ul>
       <ul>
         <li id="whoami"></li>
-        <li id="manage-users-link" hidden><a href="${manageUsersHref}">Manage users</a></li>
+        <li id="admin-link" hidden><a href="${adminHref}">Admin</a></li>
         <li id="domain-control"></li>
         <li id="theme-control"></li>
         <li><button id="logout-btn" class="secondary outline">Log out</button></li>
@@ -510,8 +553,8 @@ async function initHeader({
       </span>
     `;
     const canManageUsers = result.data.role === "admin" || result.data.permissions.includes("users.manage");
-    if (canManageUsers && !onManageUsersPage) {
-      document.getElementById("manage-users-link").hidden = false;
+    if (canManageUsers && !onAdminHome) {
+      document.getElementById("admin-link").hidden = false;
     }
     // Called here, after the /auth/me await, rather than eagerly like
     // renderThemeToggle — the domain list comes from this response.

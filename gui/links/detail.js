@@ -104,7 +104,7 @@ async function loadAnalytics() {
 
 // initHeader() must resolve before loadLinkInfo() runs — loadLinkInfo()
 // reads currentPrincipal (set below) to decide whether to show Edit.
-initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Link details", manageUsersHref: "../admin/users.html" }).then((result) => {
+initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Link details", adminHref: "../admin/index.html" }).then((result) => {
   if (result.ok) currentPrincipal = result.data;
 
   if (!slug) {

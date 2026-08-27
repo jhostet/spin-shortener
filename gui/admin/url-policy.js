@@ -282,8 +282,9 @@ initHeader({
   // the breadcrumb at narrow widths exists for links/detail.html, which has
   // no <h1> at all and would lose its only page identity.
   pageLabel: "URL policy",
-  manageUsersHref: "users.html",
+  adminHref: "index.html",
 }).then(async (result) => {
+  renderAdminNav(document.getElementById("admin-nav"), "url-policy");
   // Both /api/admin/url-policy and /api/admin/url-policy/violations gate on
   // users.manage (auth.py's Principal.has_permission — true for role ==
   // "admin" too), mirroring store-maintenance.js's own canManage check rather than

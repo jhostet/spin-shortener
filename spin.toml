@@ -120,6 +120,10 @@ route = "/links/detail.css"
 component = "gui"
 
 [[trigger.http]]
+route = "/admin/index.js"
+component = "gui"
+
+[[trigger.http]]
 route = "/admin/users.js"
 component = "gui"
 

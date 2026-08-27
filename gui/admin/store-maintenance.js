@@ -640,8 +640,9 @@ document.getElementById("orphans-btn").addEventListener("click", async () => {
 initHeader({
   dashboardHref: "../dashboard.html",
   pageLabel: "Store maintenance",
-  manageUsersHref: "users.html",
+  adminHref: "index.html",
 }).then((result) => {
+  renderAdminNav(document.getElementById("admin-nav"), "store-maintenance");
   // Both /api/admin/backup and /api/admin/restore gate on users.manage
   // (auth.py's Principal.has_permission — true for role == "admin" too),
   // mirroring app.js's own canManageUsers check rather than round-tripping
