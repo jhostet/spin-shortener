@@ -679,6 +679,14 @@ input[type="search"] {
   margin-right: 0.75rem;
   white-space: nowrap;
 }
+/* "reason" alone: a sentence, not an identifier — measured overflowing at
+ * 390px under the nowrap rule above (docs/plans/api-record-unreadable-diagnostics.md).
+ * Scoped to this one field so every KEY value pair (most of what this list
+ * renders) keeps its unbroken label-then-value nowrap behavior. */
+.finding-field-wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .finding-key {
   color: var(--pico-muted-color);
   font-size: 0.75rem;

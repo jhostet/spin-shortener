@@ -294,6 +294,37 @@ def test_exc_location_with_no_traceback_is_a_dash():
     assert obs.exc_location(ValueError("never raised")) == "-"
 
 
+def test_sanitize_slug_for_log_passes_through_a_normal_slug():
+    assert obs.sanitize_slug_for_log("promo") == "promo"
+
+
+def test_sanitize_slug_for_log_passes_through_a_128_char_slug():
+    slug = "a" * 128
+    assert obs.sanitize_slug_for_log(slug) == slug
+
+
+def test_sanitize_slug_for_log_replaces_a_space_payload():
+    sanitized = obs.sanitize_slug_for_log("a b")
+    assert sanitized == "[invalid_slug]"
+    assert "a b" not in sanitized
+
+
+def test_sanitize_slug_for_log_replaces_a_newline_payload():
+    payload = "x\nss comp=redirect ev=kv_fail route=/r/{slug} slug=FORGED"
+    sanitized = obs.sanitize_slug_for_log(payload)
+    assert sanitized == "[invalid_slug]"
+    assert "\n" not in sanitized
+    assert "FORGED" not in sanitized
+
+
+def test_sanitize_slug_for_log_replaces_an_empty_slug():
+    assert obs.sanitize_slug_for_log("") == "[invalid_slug]"
+
+
+def test_sanitize_slug_for_log_replaces_a_129_char_slug():
+    assert obs.sanitize_slug_for_log("a" * 129) == "[invalid_slug]"
+
+
 def test_render_failure_line_msg_is_final_field_and_nothing_follows():
     line = obs.render_failure_line([
         ("comp", "api"), ("ev", "kv_fail"), ("etype", "Err/Error_Other"), ("msg", "too many requests"),
@@ -358,6 +389,38 @@ def test_make_failure_reporter_exc_has_no_op_fields_and_carries_at():
     assert "op_us=" not in lines[0]
     assert " at=test_obs.py:" in lines[0]
     assert lines[0].endswith("msg=Error_AccessDenied()")
+
+
+def test_make_failure_reporter_two_reports_differing_only_in_extra_emit_two_lines():
+    lines: list[str] = []
+    report = obs.make_failure_reporter(lines.append, comp="api", route="/api/links/{slug}", method="DELETE")
+
+    def make_exc():
+        try:
+            raise make_fake_wit_access_denied()
+        except FakeWitErr as exc:
+            return exc
+
+    report("exc", None, None, None, make_exc(), extra=[("at", "app.py:10")])
+    report("exc", None, None, None, make_exc(), extra=[("at", "app.py:20")])
+
+    assert len(lines) == 2
+
+
+def test_make_failure_reporter_two_identical_reports_with_identical_extra_dedup_to_one():
+    lines: list[str] = []
+    report = obs.make_failure_reporter(lines.append, comp="api", route="/api/links/{slug}", method="DELETE")
+
+    def make_exc():
+        try:
+            raise make_fake_wit_access_denied()
+        except FakeWitErr as exc:
+            return exc
+
+    report("exc", None, None, None, make_exc(), extra=[("at", "app.py:10")])
+    report("exc", None, None, None, make_exc(), extra=[("at", "app.py:10")])
+
+    assert len(lines) == 1
 
 
 def test_make_failure_reporter_redacted_and_truncated_flags_precede_msg():

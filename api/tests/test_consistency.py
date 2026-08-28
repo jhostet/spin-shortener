@@ -183,7 +183,9 @@ async def test_unreadable_value_slug_record_not_json():
     checks, _ = await _analyze(links_data={"slug:bad": b"not-json"})
     by_id = _by_id(checks)
     assert by_id["unreadable_value"]["count"] == 1
-    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": "slug:bad"}]
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "links", "key": "slug:bad", "reason": "Expecting value: line 1 column 1 (char 0)"}
+    ]
     # The unreadable slug is excluded from every other check, not just noted.
     assert by_id["unknown_link_owner"]["count"] == 0
 
@@ -192,7 +194,54 @@ async def test_unreadable_value_slug_record_missing_owner_field():
     checks, _ = await _analyze(links_data={"slug:bad": _j({"target_url": "https://example.com"})})
     by_id = _by_id(checks)
     assert by_id["unreadable_value"]["count"] == 1
-    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": "slug:bad"}]
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "links", "key": "slug:bad", "reason": "owner field missing or not a string"}
+    ]
+
+
+async def test_unreadable_value_non_object_link_record_reports_shape_reason():
+    checks, _ = await _analyze(links_data={"slug:bad": _j(["not", "an", "object"])})
+    by_id = _by_id(checks)
+    assert by_id["unreadable_value"]["count"] == 1
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "links", "key": "slug:bad", "reason": "not a JSON object"}
+    ]
+
+
+async def test_reason_sanitizer_is_actually_on_the_path_not_merely_importable(monkeypatch):
+    """A natural json.JSONDecodeError message never echoes document bytes
+    (measured, see the plan), so a natural input can't prove the sanitizer is
+    on the path — it would pass whether or not the call were there. A spy on
+    consistency.obs.sanitize_error_message is what proves it: it fails the
+    moment anyone inlines str(exc) instead."""
+    calls = []
+
+    def spy(text):
+        calls.append(text)
+        return "REDACTED-BY-SPY", True, False
+
+    monkeypatch.setattr(consistency.obs, "sanitize_error_message", spy)
+
+    checks, _ = await _analyze(links_data={"slug:bad": b"not-json"})
+    by_id = _by_id(checks)
+
+    assert calls == ["Expecting value: line 1 column 1 (char 0)"]
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "links", "key": "slug:bad", "reason": "REDACTED-BY-SPY"}
+    ]
+
+
+def test_decode_json_reason_is_sanitized_and_redacts_key_and_hash():
+    exc = json.JSONDecodeError("boom users:session:tok pbkdf2_sha256$h", "d", 0)
+    # The real decode path can't be driven to raise this exact message (a
+    # real json.JSONDecodeError never echoes document bytes) — this pins the
+    # sanitizer's redaction rules directly against a hand-built one, the way
+    # the plan requires.
+    sanitized, _redacted, _truncated = consistency.obs.sanitize_error_message(str(exc))
+    assert "[key:users]" in sanitized
+    assert "[hash]" in sanitized
+    assert "session:tok" not in sanitized
+    assert "pbkdf2_sha256" not in sanitized
 
 
 async def test_unrecognized_key():
@@ -275,7 +324,10 @@ async def test_url_policy_key_corrupted_reports_unreadable_value():
     by_id = _by_id(checks)
     assert by_id["unrecognized_key"]["count"] == 0
     assert by_id["unreadable_value"]["count"] == 1
-    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": consistency.URL_POLICY_KEY}]
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "links", "key": consistency.URL_POLICY_KEY,
+         "reason": "Expecting value: line 1 column 1 (char 0)"}
+    ]
 
 
 # --- Skip rule ---
@@ -286,7 +338,9 @@ async def test_meta_usernames_unreadable_skips_unindexed_user_and_missing_user_r
     by_id = _by_id(checks)
     assert by_id["unindexed_user"]["skipped"] is True
     assert by_id["missing_user_record"]["skipped"] is True
-    assert by_id["unreadable_value"]["findings"] == [{"store": "users", "key": "_meta:usernames"}]
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "users", "key": "_meta:usernames", "reason": "Expecting value: line 1 column 1 (char 0)"}
+    ]
     assert totals["checks_skipped"] == 2
 
 
@@ -361,6 +415,16 @@ async def test_handle_consistency_ok_true_on_fresh_stores():
 
 
 async def test_handle_consistency_never_leaks_password_hash():
+    # A links:slug record legitimately carries the LINK's own password hash
+    # (CLAUDE.md, "KV backup and restore" — it's deliberately not stripped
+    # from a backup), and it's the one key type a corrupt reason field could
+    # plausibly echo since consistency.collect DOES fetch and parse it. The
+    # record below is deliberately truncated (fails to parse) while still
+    # carrying the hash, so its unreadable_value reason is exercised through
+    # the real sanitizer, not a hand-built one.
+    links_store = FakeStore({
+        "slug:bad": b'{"slug":"bad","password_hash":"pbkdf2_sha256$100$c2FsdA==$aGFzaA==",',
+    })
     users_store = FakeStore({
         "user:alice": _j({
             "username": "alice",
@@ -371,10 +435,13 @@ async def test_handle_consistency_never_leaks_password_hash():
         "_meta:usernames": _j(["alice"]),
     })
     resp = await consistency.handle_consistency(
-        {"links": FakeStore(), "users": users_store}, _principal(), fake_list_keys, fake_get_many)
+        {"links": links_store, "users": users_store}, _principal(), fake_list_keys, fake_get_many)
     assert resp.status == 200
     assert b"password_hash" not in resp.body
     assert b"pbkdf2_sha256" not in resp.body
+    body = json.loads(resp.body)
+    by_id = _by_id(body["checks"])
+    assert by_id["unreadable_value"]["count"] == 1
 
 
 async def test_handle_consistency_performs_zero_writes_over_a_store_with_real_drift():

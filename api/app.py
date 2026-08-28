@@ -214,11 +214,23 @@ class HttpHandler(Handler):
             # — and rather than 404, which would claim the link does not
             # exist when a record is sitting right there needing attention.
             # `error` names the one tool that can explain it; the operator is
-            # otherwise told nothing actionable. Deliberately NOT reported
-            # through failure_reporter: this is a data-quality fault (a
-            # record that will not parse), not a KV operation failure or an
-            # unhandled exception, and it already has its own diagnosis path
-            # (the consistency check's unreadable_value finding).
+            # otherwise told nothing actionable.
+            #
+            # This IS reported through failure_reporter, unlike `ev=kv_fail`
+            # and `ev=exc` above and below it: this is a permanent fault
+            # nobody can reproduce on demand, and the record is invisible to
+            # `GET /api/links`, which skips it silently — the consistency
+            # check's unreadable_value finding is a second diagnosis path
+            # (see docs/plans/api-record-unreadable-diagnostics.md), not a
+            # substitute for logging it here. `op`/`namespace`/`duration_ns`
+            # are all None deliberately: no KV operation failed — the get
+            # succeeded and returned bytes, the decoder failed — so this
+            # must never be counted alongside `ev=kv_fail`.
+            failure_reporter(
+                "record_unreadable", None, None, None,
+                exc.cause if exc.cause is not None else exc,
+                extra=[("slug", obs.sanitize_slug_for_log(exc.slug))],
+            )
             response = json_response(422, {
                 "error": "link_record_unreadable",
                 "slug": exc.slug,

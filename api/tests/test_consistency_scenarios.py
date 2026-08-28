@@ -138,7 +138,9 @@ async def test_seed_unreadable_value():
     users_store = FakeStore()
     report = await _report(links_store, users_store)
     by_id = _assert_only_this_check_fired(report, "unreadable_value")
-    assert by_id["unreadable_value"]["findings"] == [{"store": "links", "key": "slug:bad"}]
+    assert by_id["unreadable_value"]["findings"] == [
+        {"store": "links", "key": "slug:bad", "reason": "Expecting value: line 1 column 1 (char 0)"}
+    ]
 
 
 async def test_seed_unrecognized_key():

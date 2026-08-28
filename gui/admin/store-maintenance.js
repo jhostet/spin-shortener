@@ -223,11 +223,15 @@ function renderConsistencyFindings(findings) {
   // every other field stays a labelled pair, since the shapes vary by check.
   const items = findings
     .map((f) => {
-      const parts = Object.entries(f).map(([k, v]) =>
-        k === "slug"
-          ? slugChip(String(v), { linked: true })
-          : `<span class="finding-field"><span class="finding-key">${escapeHtml(k)}</span> ${escapeHtml(String(v))}</span>`
-      );
+      const parts = Object.entries(f).map(([k, v]) => {
+        if (k === "slug") return slugChip(String(v), { linked: true });
+        // "reason" is the one field whose value is a sentence rather than an
+        // identifier (docs/plans/api-record-unreadable-diagnostics.md) — measured
+        // live at 390px, the longest realistic reason overflows the viewport
+        // under .finding-field's nowrap, so it alone gets a wrapping modifier.
+        const cls = k === "reason" ? "finding-field finding-field-wrap" : "finding-field";
+        return `<span class="${cls}"><span class="finding-key">${escapeHtml(k)}</span> ${escapeHtml(String(v))}</span>`;
+      });
       return `<li>${parts.join(" ")}</li>`;
     })
     .join("");

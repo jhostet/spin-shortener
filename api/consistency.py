@@ -27,6 +27,7 @@ names (`unindexed_user`, `missing_user_record`) or the `username` field of a
 
 import json
 
+import obs
 from responses import Response, iso_now, json_response
 
 MAX_FINDINGS_PER_CHECK = 100
@@ -80,67 +81,95 @@ REPAIRABLE_CHECKS: tuple[str, ...] = (
 )
 
 
-def parse_str_list(raw: bytes | None) -> list[str] | None:
-    """None for both an absent key and a malformed value — callers
-    distinguish the two by checking `raw is None` themselves."""
-    if raw is None:
-        return None
+def _decode_json(raw: bytes) -> tuple[object | None, str | None]:
+    """Shared decoder for all four parse helpers below. Returns (value, None)
+    on success, or (None, reason) on failure, where `reason` is a sanitized
+    decoder message — never the raw exception text.
+
+    A finding's reason is ALWAYS one of exactly two things, and never anything
+    else: a fixed, data-free literal from a shape check below, or a decoder
+    message routed through obs.sanitize_error_message. **No reason ever
+    interpolates a value read from the store.** That is the property that
+    keeps this report free of credential material (a links:slug:<slug>
+    record legitimately carries the link's own pbkdf2_sha256 password hash),
+    and it is structural rather than incidental: a shape check has nothing
+    but a literal to report, and the decoder path is sanitized by
+    construction.
+
+    The reason is prose for a human, NOT a machine-readable code — no client
+    may switch on it, and the GUI renders it verbatim.
+    """
     try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+        return json.loads(raw), None
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        sanitized, _redacted, _truncated = obs.sanitize_error_message(str(exc))
+        return None, sanitized or "value did not decode as JSON"
+
+
+def parse_str_list_with_reason(raw: bytes | None) -> tuple[list[str] | None, str | None]:
+    """(None, None) for an absent key; (value, None) on success; (None,
+    reason) for a malformed value — callers distinguish "absent" from
+    "malformed" by checking `raw is None` themselves.
+
+    Renamed from `parse_str_list` (docs/plans/api-record-unreadable-diagnostics.md):
+    a caller that unpacks only one value from the old function's tuple-shaped
+    return would get an always-truthy tuple, so a missed call site would
+    silently disable a guard rather than fail loudly. The rename makes a
+    missed call site an immediate AttributeError instead."""
+    if raw is None:
+        return None, None
+    value, reason = _decode_json(raw)
+    if reason is not None:
+        return None, reason
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        return None
-    return value
+        return None, "not a JSON array of strings"
+    return value, None
 
 
-def _parse_link_record(raw: bytes | None) -> dict | None:
+def _parse_link_record(raw: bytes | None) -> tuple[dict | None, str | None]:
     """Only ever extracts `owner`. Never used on a `user:` record."""
     if raw is None:
-        return None
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+        return None, None
+    value, reason = _decode_json(raw)
+    if reason is not None:
+        return None, reason
     if not isinstance(value, dict):
-        return None
+        return None, "not a JSON object"
     owner = value.get("owner")
     if not isinstance(owner, str):
-        return None
-    return {"owner": owner}
+        return None, "owner field missing or not a string"
+    return {"owner": owner}, None
 
 
-def _parse_policy(raw: bytes) -> dict | None:
+def _parse_policy(raw: bytes) -> tuple[dict | None, str | None]:
     """`None` if `raw` doesn't parse as a minimally-shaped policy document.
     Mirrors `urlpolicy._parse_policy` exactly (duplicated rather than
     imported, since this module reads only far enough to classify the value
     as readable/unreadable — no field of it feeds any of the twelve checks)."""
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+    value, reason = _decode_json(raw)
+    if reason is not None:
+        return None, reason
     if not isinstance(value, dict):
-        return None
+        return None, "not a JSON object"
     if value.get("default_action") not in ("allow", "deny"):
-        return None
+        return None, "default_action must be allow or deny"
     if not isinstance(value.get("rules"), list):
-        return None
-    return value
+        return None, "rules must be a list"
+    return value, None
 
 
-def _parse_session_username(raw: bytes | None) -> str | None:
+def _parse_session_username(raw: bytes | None) -> tuple[str | None, str | None]:
     if raw is None:
-        return None
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+        return None, None
+    value, reason = _decode_json(raw)
+    if reason is not None:
+        return None, reason
     if not isinstance(value, dict):
-        return None
+        return None, "not a JSON object"
     username = value.get("username")
     if not isinstance(username, str):
-        return None
-    return username
+        return None, "username field missing or not a string"
+    return username, None
 
 
 async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dict:
@@ -152,7 +181,7 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
           "user_records": set[str],                 # from user: KEY NAMES only
           "session_usernames": list[str],           # from session: values
           "sessions_by_username": {username: [session KEY names]},
-          "unreadable": [{"store": str, "key": str}],
+          "unreadable": [{"store": str, "key": str, "reason": str}],
           "unrecognized": [{"store": str, "key": str}],
           "scanned": {...},
         }
@@ -198,9 +227,9 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
             slug_count += 1
             slug = key[len(SLUG_PREFIX):]
             raw = links_values[key]
-            record = _parse_link_record(raw)
-            if raw is not None and record is None:
-                unreadable.append({"store": "links", "key": key})
+            record, reason = _parse_link_record(raw)
+            if reason is not None:
+                unreadable.append({"store": "links", "key": key, "reason": reason})
             elif record is not None:
                 link_records[slug] = record
         elif key == URL_POLICY_KEY:
@@ -208,8 +237,10 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
             # policy as unreadable_value — no new check id, and no field of
             # it is needed by any of the remaining checks.
             raw = links_values[key]
-            if raw is not None and _parse_policy(raw) is None:
-                unreadable.append({"store": "links", "key": key})
+            if raw is not None:
+                _value, reason = _parse_policy(raw)
+                if reason is not None:
+                    unreadable.append({"store": "links", "key": key, "reason": reason})
         else:
             unrecognized.append({"store": "links", "key": key})
 
@@ -235,9 +266,9 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
     for key in users_keys:
         if key == USERNAMES_INDEX_KEY:
             raw = users_values[key]
-            parsed = parse_str_list(raw)
-            if raw is not None and parsed is None:
-                unreadable.append({"store": "users", "key": key})
+            parsed, reason = parse_str_list_with_reason(raw)
+            if reason is not None:
+                unreadable.append({"store": "users", "key": key, "reason": reason})
                 usernames = None
             elif parsed is not None:
                 usernames = parsed
@@ -249,9 +280,9 @@ async def collect(stores_by_name: dict[str, object], list_keys, get_many) -> dic
         elif key.startswith(SESSION_PREFIX):
             session_count += 1
             raw = users_values[key]
-            username = _parse_session_username(raw)
-            if raw is not None and username is None:
-                unreadable.append({"store": "users", "key": key})
+            username, reason = _parse_session_username(raw)
+            if reason is not None:
+                unreadable.append({"store": "users", "key": key, "reason": reason})
             elif username is not None:
                 session_usernames.append(username)
                 sessions_by_username.setdefault(username, []).append(key)

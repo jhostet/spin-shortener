@@ -279,6 +279,41 @@ def sanitize_error_message(text: str) -> tuple[str, bool, bool]:
     return sanitized, redacted, truncated
 
 
+# Pattern for sanitize_slug_for_log, mirroring redirect/linkgate/obs.go's
+# slugLogSafePattern (^[A-Za-z0-9_-]{1,128}$) — the same character class
+# api/links.py's CUSTOM_SLUG_PATTERN restricts every real slug to, minus its
+# 3-32 length bound (this field only ever sees an already-existing slug, so
+# the wider bound just gives the pattern room without weakening it).
+_SLUG_LOG_SAFE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def sanitize_slug_for_log(slug: str) -> str:
+    """Returns slug unchanged if it matches ^[A-Za-z0-9_-]{1,128}$, otherwise
+    the fixed placeholder "[invalid_slug]", carrying none of the original
+    bytes.
+
+    An `api` slug reaching this field is already CUSTOM_SLUG_PATTERN-validated
+    before it is ever stored — only `api` writes link records, and
+    UnreadableLinkError can only be raised for a slug whose links:slug:<slug>
+    record already exists — so an attacker-crafted slug cannot reach this
+    field today. It is sanitized anyway, for the same reason
+    redirect/linkgate/obs.go's SanitizeSlugForLog sanitizes its identical
+    field: it costs nothing for a slug that already matches, and it means the
+    field's safety stops depending on that invariant continuing to hold. This
+    is not hypothetical one component over — a %0A-bearing slug forged a
+    complete second log line there, confirmed live (TASKS.md, 2026-08-27).
+
+    Deliberately NOT cross-language pinned against linkgate.SanitizeSlugForLog
+    the way keys.go's prefixes/CountShards are (see the plan's Trade-offs #12):
+    a divergence here produces two slightly-differently-shaped log lines and
+    nothing else, unlike the keys.go pin, whose divergence fails silently at
+    runtime.
+    """
+    if _SLUG_LOG_SAFE_PATTERN.match(slug):
+        return slug
+    return "[invalid_slug]"
+
+
 def error_type_name(exc: BaseException) -> str:
     """Returns a wording-independent signal of the WIT error variant.
 
@@ -336,18 +371,25 @@ def make_failure_reporter(emit, *, comp: str, route: str, method: Optional[str] 
     interleave concurrent requests' dedup state (and their distinct-tuple
     budgets) into one another.
 
-    Dedup key is (op, namespace, etype, msg) — the exact tuple named in the
-    plan — so a throttle storm producing the same failure 150 times in one
-    request still emits it once, and a request is capped at `max_distinct`
-    DISTINCT tuples total (further distinct tuples beyond the cap are
-    silently dropped, not queued).
+    Dedup key is (op, namespace, etype, msg, extra) — the general rule it
+    encodes is that the key is everything that distinguishes one rendered
+    line from another, so two lines that differ only in an `extra` field are
+    two events, not one. A throttle storm producing the same failure 150
+    times in one request (including the same `extra`) still emits it once,
+    and a request is capped at `max_distinct` DISTINCT tuples total (further
+    distinct tuples beyond the cap are silently dropped, not queued).
+
+    The one live behavioural consequence is to `ev="exc"`, the only current
+    `extra` user: two exceptions with the same `etype` and message raised at
+    DIFFERENT `at=<file>:<line>` frames now produce two lines instead of one
+    — strictly better diagnostics, still bounded by `max_distinct`.
 
     Field order in the rendered line, all load-bearing: comp, ev, route,
     [method], [op, ns, op_us] (only when op is not None — an `ev="exc"`
     call has no KV operation to report), etype, [extra fields, e.g. "at"],
     [msg_redacted=1], [msg_truncated=1], msg (always last).
     """
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, tuple]] = set()
 
     def report(ev: str, op: Optional[str], namespace: Optional[str], duration_ns: Optional[int],
                 exc: BaseException, extra: Optional[list[tuple[str, str]]] = None) -> None:
@@ -355,7 +397,7 @@ def make_failure_reporter(emit, *, comp: str, route: str, method: Optional[str] 
         sanitized, redacted, truncated = sanitize_error_message(str(exc))
         msg = sanitized if sanitized else "-"
 
-        key = (op or "-", namespace or "-", etype, msg)
+        key = (op or "-", namespace or "-", etype, msg, tuple(extra or ()))
         if key in seen:
             return
         if len(seen) >= max_distinct:

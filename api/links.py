@@ -104,11 +104,30 @@ class UnreadableLinkError(Exception):
     `/r/{slug}` has no way to consume that detail — 500 is the right answer
     there precisely because 503 (this codebase's new "transient, retry"
     status) now exists to take the other meaning by contrast.
+
+    `api`'s own notion of "unreadable" is narrower than `linkgate.ParseLink`'s:
+    `json.loads` type-checks nothing, so a record like `{"status": 7}` parses
+    happily here and is served as a link record, while the same bytes 500 at
+    `/r/{slug}` (a Go struct-tagged type mismatch). `get_link` rejects only
+    non-JSON and invalid-UTF-8 — the two things `json.loads` itself can raise
+    on. `api/consistency.py`'s `_parse_link_record` rejects a third,
+    overlapping-but-different set again (non-object, or `owner` missing/not a
+    string). The three code paths genuinely disagree about what "unreadable"
+    means; see docs/plans/api-record-unreadable-diagnostics.md.
     """
 
-    def __init__(self, slug: str):
+    def __init__(self, slug: str, cause: BaseException | None = None):
         super().__init__(slug)
         self.slug = slug
+        # The decoder error json.loads raised, kept EXPLICITLY rather than
+        # relying on __cause__ from `raise ... from exc`: it is the only thing
+        # in this component that says WHY a record will not parse (line and
+        # column, and JSONDecodeError vs UnicodeDecodeError), and a future
+        # `raise UnreadableLinkError(slug)` with no `from` would silently drop
+        # it with nothing failing. Defaulted to None so this stays
+        # constructible from a test with no exception in hand; a None cause
+        # degrades the log line, never breaks it (see api/app.py).
+        self.cause = cause
 
 
 async def get_link(store, slug: str) -> dict | None:
@@ -118,7 +137,7 @@ async def get_link(store, slug: str) -> dict | None:
     try:
         return json.loads(raw)
     except (ValueError, TypeError) as exc:
-        raise UnreadableLinkError(slug) from exc
+        raise UnreadableLinkError(slug, exc) from exc
 
 
 # A link record has no size bound of its own below Akamai's 1 MB max value

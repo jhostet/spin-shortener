@@ -255,7 +255,7 @@ async def apply_repairs(stores_by_name: dict[str, object], plan: dict, write) ->
 
     for key, delta in store_plan["deltas"].items():
         raw = await store.get(key)
-        parsed = consistency.parse_str_list(raw)
+        parsed, _reason = consistency.parse_str_list_with_reason(raw)
         if raw is not None and parsed is None:
             write_skipped.append({"store": "users", "key": key, "reason": "index_unreadable_at_write"})
             continue

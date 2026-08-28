@@ -1125,6 +1125,47 @@ async def test_get_link_raises_a_named_error_for_an_unreadable_record():
     assert await links.get_link(store, "absent") is None
 
 
+async def test_get_link_unreadable_error_carries_the_json_decode_error_as_cause():
+    store = FakeStore()
+    await store.set("slug:broken", b"{not json")
+    try:
+        await links.get_link(store, "broken")
+    except links.UnreadableLinkError as exc:
+        assert isinstance(exc.cause, json.JSONDecodeError)
+        assert "line" in str(exc.cause) and "column" in str(exc.cause)
+        assert exc.__cause__ is exc.cause  # `from exc` still sets __cause__
+    else:
+        raise AssertionError("expected UnreadableLinkError")
+
+
+async def test_get_link_unreadable_error_carries_a_unicode_decode_error_as_cause():
+    store = FakeStore()
+    await store.set("slug:bad-utf8", bytes([0x80]))
+    try:
+        await links.get_link(store, "bad-utf8")
+    except links.UnreadableLinkError as exc:
+        assert isinstance(exc.cause, UnicodeDecodeError)
+        assert exc.slug == "bad-utf8"
+    else:
+        raise AssertionError("expected UnreadableLinkError")
+
+
+async def test_get_link_does_not_raise_on_a_type_mismatched_field():
+    """api's notion of unreadable is narrower than linkgate.ParseLink's:
+    json.loads type-checks nothing, so a record like {"status": 7} parses
+    fine here even though the same bytes 500 at /r/{slug}."""
+    store = FakeStore()
+    await store.set("slug:weird", json.dumps({"slug": "weird", "status": 7}).encode())
+    record = await links.get_link(store, "weird")
+    assert record["status"] == 7
+
+
+def test_unreadable_link_error_is_still_constructible_with_no_cause():
+    exc = links.UnreadableLinkError("x")
+    assert exc.slug == "x"
+    assert exc.cause is None
+
+
 async def test_delete_still_works_on_an_unreadable_record():
     """Deletion is the ONE path that must survive a corrupt record, because
     it is the repair. Everything else already treats such a link as dead
