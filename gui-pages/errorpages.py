@@ -76,10 +76,11 @@ NOT_FOUND_HTML: bytes = _render(
     ),
 )
 
-# No "we've been notified": gui-pages has no logging at all (CLAUDE.md,
-# "Toggleable structured logging"), so a ROUTES-vs-filesystem drift produces
-# no signal anywhere. Naming the operator is the honest ask. No "try
-# again" either — this drift is permanent until a redeploy, not transient.
+# No "we've been notified": a ROUTES-vs-filesystem drift now emits one
+# ev=page_read_failed line to stderr (docs/plans/gui-pages-failure-logging.md),
+# but nothing monitors that stream, so "we've been notified" would still be a
+# claim this app cannot honour. Naming the operator remains the honest ask. No
+# "try again" either — this drift is permanent until a redeploy, not transient.
 INTERNAL_ERROR_HTML: bytes = _render(
     title="Something went wrong",
     heading="Something went wrong",

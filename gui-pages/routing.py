@@ -86,10 +86,21 @@ def resolve_file(path: str) -> Optional[str]:
     return ROUTES.get(path)
 
 
-def build_response(uri: str, read_file: Callable[[str], bytes]) -> Response:
+def build_response(
+    uri: str,
+    read_file: Callable[[str], bytes],
+    on_read_error: Optional[Callable[[str, str, BaseException], None]] = None,
+) -> Response:
     """`read_file` is injected (rather than reading the filesystem directly)
     so this function stays testable with a fake in unit tests — the real
-    WASI entrypoint (`app.py`) passes in an actual file read."""
+    WASI entrypoint (`app.py`) passes in an actual file read.
+
+    `on_read_error` is an optional callable invoked with `(path, filename,
+    exc)` when `read_file` raises `OSError` — a ROUTES-vs-filesystem drift.
+    Defaults to `None` so every existing caller and test call site is
+    unaffected. `routing.py` gains no import of `obs` or `sys`: the "where
+    does the line go" decision belongs to `app.py`, which is the only
+    untestable code in docs/plans/gui-pages-failure-logging.md."""
     path = urlparse(uri).path
 
     # robots.txt, favicon.ico and /.well-known/* are requested by software, not
@@ -114,7 +125,17 @@ def build_response(uri: str, read_file: Callable[[str], bytes]) -> Response:
     # insurance against that drift.
     try:
         body = read_file(filename)
-    except OSError:
+    except OSError as exc:
+        # A diagnostic must never be able to break the response it is
+        # diagnosing. This component's entire job is attaching SECURITY_HEADERS;
+        # a reporter that raised (a closed stderr, a bug in obs.py) would turn a
+        # styled, header-bearing 500 into an unhandled exception with no headers
+        # at all — the exact failure this try/except was added to prevent.
+        if on_read_error is not None:
+            try:
+                on_read_error(path, filename, exc)
+            except Exception:
+                pass
         return Response(500, {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}, ERROR_PAGES[500])
 
     headers = {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}

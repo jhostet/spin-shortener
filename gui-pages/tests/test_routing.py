@@ -100,6 +100,74 @@ def test_error_page_bodies_are_nonempty_and_distinct():
     assert not_found != internal_error
 
 
+def test_build_response_calls_on_read_error_once_with_path_filename_and_exc():
+    calls = []
+
+    def failing_read_file(_):
+        raise FileNotFoundError("simulated ROUTES/filesystem drift")
+
+    def spy(path, filename, exc):
+        calls.append((path, filename, exc))
+
+    response = build_response("/login.html", failing_read_file, spy)
+
+    assert len(calls) == 1
+    path, filename, exc = calls[0]
+    assert path == "/login.html"
+    assert filename == "login.html"
+    assert isinstance(exc, FileNotFoundError)
+
+    assert response.status == 500
+    assert response.body == errorpages.ERROR_PAGES[500]
+    for key, value in SECURITY_HEADERS.items():
+        assert response.headers[key] == value
+
+
+def test_build_response_with_no_on_read_error_is_back_compat():
+    def failing_read_file(_):
+        raise FileNotFoundError("simulated ROUTES/filesystem drift")
+
+    response = build_response("/login.html", failing_read_file)
+
+    assert response.status == 500
+    assert response.body == errorpages.ERROR_PAGES[500]
+    for key, value in SECURITY_HEADERS.items():
+        assert response.headers[key] == value
+
+
+def test_build_response_on_read_error_raising_does_not_break_the_response():
+    """Pins 'a diagnostic must never be able to break the response it is
+    diagnosing' — a raising reporter must not turn the styled 500 into an
+    unhandled exception with no headers."""
+
+    def failing_read_file(_):
+        raise FileNotFoundError("simulated ROUTES/filesystem drift")
+
+    def raising_spy(path, filename, exc):
+        raise RuntimeError("obs.py bug or closed stderr")
+
+    response = build_response("/login.html", failing_read_file, raising_spy)
+
+    assert response.status == 500
+    assert response.body == errorpages.ERROR_PAGES[500]
+    for key, value in SECURITY_HEADERS.items():
+        assert response.headers[key] == value
+
+
+def test_build_response_404_and_nonpages_paths_never_call_on_read_error():
+    def spy(path, filename, exc):
+        raise AssertionError("on_read_error must not be called for a 404 or nonpages path")
+
+    def fail_read_file(_):
+        raise AssertionError("should not read a file for an unknown/nonpages path")
+
+    response_404 = build_response("/does-not-exist.html", fail_read_file, spy)
+    assert response_404.status == 404
+
+    response_robots = build_response("/robots.txt", fail_read_file, spy)
+    assert response_robots.status == 200
+
+
 def test_security_headers_lock_down_framing_and_plugins():
     csp = SECURITY_HEADERS["content-security-policy"]
     assert "frame-ancestors 'none'" in csp
