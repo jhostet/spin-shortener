@@ -344,6 +344,17 @@ newRoleSelect.addEventListener("change", () => {
 // ritual for a guaranteed-doomed action is exactly backwards.
 initHeader({ dashboardHref: "../dashboard.html", pageLabel: "Manage users", adminHref: "index.html" }).then((result) => {
   renderAdminNav(document.getElementById("admin-nav"), "users");
-  if (result.ok) currentPrincipal = result.data;
+  // Harmonised with store-maintenance.js/url-policy.js/index.js: gate from
+  // initHeader()'s /auth/me result instead of waiting on a doomed GET
+  // /api/users to 403. loadUsers()'s own !ok fallback below stays as
+  // defense-in-depth — the server is authoritative either way, e.g. if a
+  // session is revoked between this check and the request it triggers.
+  const canManage = result.ok && (result.data.role === "admin" || result.data.permissions.includes("users.manage"));
+  if (!canManage) {
+    document.getElementById("forbidden-notice").hidden = false;
+    document.getElementById("admin-content").style.display = "none";
+    return;
+  }
+  currentPrincipal = result.data;
   loadUsers();
 });
