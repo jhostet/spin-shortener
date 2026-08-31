@@ -151,6 +151,82 @@ def page_read_failed_line(path: str, filename: str, exc: BaseException) -> tuple
     return line, dedup_key
 
 
+def error_type_name(exc: BaseException) -> str:
+    """Returns a wording-independent signal of the WIT error variant.
+
+    A near-verbatim copy of api/obs.py's function of the same name, and
+    deliberately NOT pinned against it (same standing rule as the two
+    sanitize_error_message implementations: divergence produces differently
+    shaped log lines and nothing else). It exists here because
+    spin_sdk.variables.get raises componentize_py_types.Err wrapping an
+    Error_* dataclass, and `type(exc).__name__` on that renders a useless
+    bare "Err". Duck-typed via getattr, never an isinstance check —
+    componentize_py_types does not exist in the host venv at all.
+    """
+    inner = getattr(exc, "value", None)
+    inner_name = type(inner).__name__ if inner is not None else None
+    if inner_name is not None and inner_name.startswith("Error_"):
+        return f"{type(exc).__name__}/{inner_name}"
+    return type(exc).__name__
+
+
+def exc_location(exc: BaseException) -> str:
+    """Returns "<basename>:<lineno>" of the INNERMOST traceback frame — never
+    source text, never a value, so a 500 is diagnosable from one field that
+    provably contains no data. Returns "-" when the exception carries no
+    traceback (one constructed but never raised, as in a test).
+
+    A verbatim copy of api/obs.py's. The innermost frame is often a stdlib or
+    SDK file rather than one of ours (measured: a urlparse ValueError yields
+    parse.py:525) — that is the intended behaviour, not a defect; see the
+    plan's Trade-offs #4.
+    """
+    tb = exc.__traceback__
+    if tb is None:
+        return "-"
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    filename = tb.tb_frame.f_code.co_filename
+    basename = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return f"{basename}:{tb.tb_lineno}"
+
+
+def unhandled_exception_line(exc: BaseException) -> tuple[str, str]:
+    """Returns (line, dedup_key) for one ev=exc failure line.
+
+    Every decision lives here, where it is host-testable; the caller
+    (app.py's _report_unhandled_exception) does nothing but consult a dedup
+    set and write the string — the same split page_read_failed_line
+    established, and linkgate.RecordUnreadableLine before it.
+
+    Field order, all load-bearing: comp, ev, etype, at, [msg_truncated], msg
+    (always last, nothing after it). No op/ns (no KV operation failed — this
+    component performs none) and no route/method (the only available value is
+    the request-controlled URI, which in the urlparse case is what raised).
+    """
+    etype = error_type_name(exc)
+    at = exc_location(exc)
+
+    raw_msg = str(exc)
+    sanitized, truncated = sanitize_error_message(raw_msg)
+    msg = sanitized if sanitized else "-"
+
+    fields: list[tuple[str, str]] = [
+        ("comp", "gui-pages"),
+        ("ev", "exc"),
+        ("etype", etype),
+        ("at", at),
+    ]
+    if truncated:
+        fields.append(("msg_truncated", "1"))
+    fields.append(("msg", msg))
+
+    line = render_failure_line(fields)
+
+    dedup_key = _SEP.join(["exc", etype, at, msg])
+    return line, dedup_key
+
+
 def make_dedup(max_keys: int = MAX_FAILURE_DEDUP_KEYS):
     """Returns should_emit(key) -> bool, closing over ONE set.
 

@@ -142,3 +142,174 @@ def test_page_read_failed_line_dedup_key_prefix():
     exc.errno = 2
     _, dedup_key = obs.page_read_failed_line("/login.html", "login.html", exc)
     assert dedup_key.startswith("page_read_failed\x00")
+
+
+# --- error_type_name / exc_location / unhandled_exception_line -------------
+
+
+def _raise_inner():
+    raise ValueError("inner boom")
+
+
+def _raise_outer():
+    _raise_inner()
+
+
+def test_exc_location_names_the_innermost_frame():
+    try:
+        _raise_outer()
+    except ValueError as exc:
+        location = obs.exc_location(exc)
+    # The innermost frame is the one inside _raise_inner, not _raise_outer.
+    assert location.startswith("test_obs.py:")
+    inner_lineno = _raise_inner.__code__.co_firstlineno + 1
+    assert location == f"test_obs.py:{inner_lineno}"
+
+
+def test_exc_location_returns_dash_for_no_traceback():
+    assert obs.exc_location(ValueError("never raised")) == "-"
+
+
+def test_exc_location_returns_a_basename_not_a_path():
+    try:
+        _raise_outer()
+    except ValueError as exc:
+        location = obs.exc_location(exc)
+    assert "/" not in location
+    parts = location.split(":")
+    assert len(parts) == 2
+
+
+class _StandInErrorVariant:
+    pass
+
+
+_StandInErrorVariant.__name__ = "Error_Undefined"
+
+
+class _StandInErr(Exception):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+
+def test_error_type_name_renders_wit_style_variant():
+    exc = _StandInErr(_StandInErrorVariant())
+    assert obs.error_type_name(exc) == "_StandInErr/Error_Undefined"
+
+    plain = ValueError("boom")
+    assert obs.error_type_name(plain) == "ValueError"
+
+
+class _NotAnErrorVariant:
+    pass
+
+
+def test_error_type_name_falls_back_when_value_class_name_lacks_error_prefix():
+    exc = _StandInErr(_NotAnErrorVariant())
+    assert obs.error_type_name(exc) == "_StandInErr"
+
+
+def test_unhandled_exception_line_renders_expected_field_sequence():
+    try:
+        _raise_outer()
+    except ValueError as exc:
+        line, _ = obs.unhandled_exception_line(exc)
+
+    assert line.startswith("ss ")
+    order = ["comp=", "ev=", "etype=", "at=", " msg="]
+    positions = [line.index(tok) for tok in order]
+    assert positions == sorted(positions)
+    assert "comp=gui-pages" in line
+    assert "ev=exc" in line
+    assert "etype=ValueError" in line
+
+
+def test_unhandled_exception_line_msg_is_last_field():
+    try:
+        _raise_outer()
+    except ValueError as exc:
+        line, _ = obs.unhandled_exception_line(exc)
+
+    msg_index = line.rindex(" msg=")
+    for field in ("comp=", "ev=", "etype=", "at="):
+        assert line.index(field) < msg_index
+
+
+def test_unhandled_exception_line_newline_in_message_cannot_forge_a_second_line():
+    try:
+        raise ValueError("boom\nss comp=gui-pages ev=exc forged=1")
+    except ValueError as exc:
+        line, _ = obs.unhandled_exception_line(exc)
+    assert len(line.splitlines()) == 1
+
+
+def test_unhandled_exception_line_truncates_long_message():
+    try:
+        raise ValueError("x" * 250)
+    except ValueError as exc:
+        line, _ = obs.unhandled_exception_line(exc)
+    assert " msg_truncated=1 " in line
+    truncated_index = line.index(" msg_truncated=1 ")
+    msg_index = line.rindex(" msg=")
+    assert truncated_index < msg_index
+
+    try:
+        raise ValueError("short")
+    except ValueError as exc:
+        short_line, _ = obs.unhandled_exception_line(exc)
+    assert " msg_truncated=" not in short_line
+
+
+def test_unhandled_exception_line_empty_message_renders_msg_dash():
+    try:
+        raise ValueError()
+    except ValueError as exc:
+        line, _ = obs.unhandled_exception_line(exc)
+    assert line.endswith("msg=-")
+
+
+def test_unhandled_exception_line_dedup_key_disjoint_from_page_read_failed():
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        _, exc_dedup_key = obs.unhandled_exception_line(exc)
+
+    file_exc = FileNotFoundError(2, "No such file or directory")
+    file_exc.errno = 2
+    _, page_dedup_key = obs.page_read_failed_line("/login.html", "login.html", file_exc)
+
+    assert exc_dedup_key.startswith("exc\x00")
+    assert page_dedup_key.startswith("page_read_failed\x00")
+    assert exc_dedup_key != page_dedup_key
+    assert not exc_dedup_key.startswith(page_dedup_key)
+    assert not page_dedup_key.startswith(exc_dedup_key)
+
+
+def test_unhandled_exception_line_dedup_key_differs_by_raise_line():
+    def raise_at_a():
+        raise ValueError("same message")
+
+    def raise_at_b():
+        raise ValueError("same message")
+
+    try:
+        raise_at_a()
+    except ValueError as exc:
+        _, key_a = obs.unhandled_exception_line(exc)
+
+    try:
+        raise_at_b()
+    except ValueError as exc:
+        _, key_b = obs.unhandled_exception_line(exc)
+
+    assert key_a != key_b
+
+
+def test_unhandled_exception_line_never_emits_route_method_op_ns():
+    try:
+        _raise_outer()
+    except ValueError as exc:
+        line, _ = obs.unhandled_exception_line(exc)
+    for forbidden in ("route=", "method=", "op=", "ns="):
+        assert forbidden not in line

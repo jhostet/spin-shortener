@@ -1,7 +1,7 @@
 import pytest
 
 import errorpages
-from routing import SECURITY_HEADERS, build_response, resolve_file
+from routing import SECURITY_HEADERS, build_response, internal_error_response, resolve_file
 
 
 @pytest.mark.parametrize(
@@ -174,3 +174,29 @@ def test_security_headers_lock_down_framing_and_plugins():
     assert "object-src 'none'" in csp
     assert SECURITY_HEADERS["x-frame-options"] == "DENY"
     assert SECURITY_HEADERS["x-content-type-options"] == "nosniff"
+
+
+def test_internal_error_response_is_500_with_error_page_and_security_headers():
+    response = internal_error_response()
+    assert response.status == 500
+    assert response.body == errorpages.ERROR_PAGES[500]
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    for key, value in SECURITY_HEADERS.items():
+        assert response.headers[key] == value
+
+
+def test_build_response_read_failure_500_equals_internal_error_response():
+    """The pin that stops the catch-all's 500 (docs/plans/gui-pages-unhandled-
+    exception-guard.md) and the read-failure's 500 from drifting apart —
+    build_response's except OSError branch must return the exact same object
+    internal_error_response() constructs."""
+
+    def failing_read_file(_):
+        raise FileNotFoundError("simulated ROUTES/filesystem drift")
+
+    response = build_response("/login.html", failing_read_file)
+    expected = internal_error_response()
+
+    assert response.status == expected.status
+    assert response.headers == expected.headers
+    assert response.body == expected.body

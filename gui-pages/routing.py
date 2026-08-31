@@ -86,6 +86,21 @@ def resolve_file(path: str) -> Optional[str]:
     return ROUTES.get(path)
 
 
+def internal_error_response() -> Response:
+    """The single 500 this component ever serves: the styled error page plus
+    every SECURITY_HEADERS entry.
+
+    Shared by build_response's `except OSError` branch and by app.py's
+    unhandled-exception catch-all (docs/plans/gui-pages-unhandled-exception-guard.md),
+    so a visitor cannot tell the two apart and the two cannot drift. Kept in
+    routing.py rather than app.py because it is pure and therefore testable,
+    and because app.py would otherwise have to import ERROR_PAGES and
+    SECURITY_HEADERS just to rebuild a response routing.py already knows how
+    to build.
+    """
+    return Response(500, {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}, ERROR_PAGES[500])
+
+
 def build_response(
     uri: str,
     read_file: Callable[[str], bytes],
@@ -136,7 +151,7 @@ def build_response(
                 on_read_error(path, filename, exc)
             except Exception:
                 pass
-        return Response(500, {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}, ERROR_PAGES[500])
+        return internal_error_response()
 
     headers = {**SECURITY_HEADERS, "content-type": "text/html; charset=utf-8"}
     return Response(200, headers, body)

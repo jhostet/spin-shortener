@@ -76,11 +76,16 @@ NOT_FOUND_HTML: bytes = _render(
     ),
 )
 
-# No "we've been notified": a ROUTES-vs-filesystem drift now emits one
-# ev=page_read_failed line to stderr (docs/plans/gui-pages-failure-logging.md),
-# but nothing monitors that stream, so "we've been notified" would still be a
-# claim this app cannot honour. Naming the operator remains the honest ask. No
-# "try again" either — this drift is permanent until a redeploy, not transient.
+# Two conditions now reach this page, both answered identically on purpose
+# (routing.internal_error_response is the single constructor): a
+# ROUTES-vs-filesystem drift, which is permanent until a redeploy, and any
+# unhandled exception in app.py's handle_request
+# (docs/plans/gui-pages-unhandled-exception-guard.md), which may be either.
+# Still no "we've been notified" — both emit a line to stderr
+# (ev=page_read_failed / ev=exc) but nothing monitors that stream, so it would
+# be a claim this app cannot honour. "Reloading is unlikely to help" holds for
+# both: the drift is permanent, and a request whose own URI is what raised
+# will raise again identically.
 INTERNAL_ERROR_HTML: bytes = _render(
     title="Something went wrong",
     heading="Something went wrong",
