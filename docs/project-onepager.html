@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>spin-shortener — Project One-Pager</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --navy-950: #101c33;
+    --navy-800: #1b2e52;
+    --navy-600: #2f4a7a;
+    --blue: #3b7dd8;
+    --ink: #25303f;
+    --muted: #5c6a7c;
+    --line: #d7dee8;
+    --bg-soft: #f4f7fb;
+    --white: #ffffff;
+  }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    font-size: 8.6pt;
+    line-height: 1.38;
+    width: 210mm;
+    height: 297mm;
+    overflow: hidden;
+    background: var(--white);
+  }
+
+  /* ---------- Header ---------- */
+  .masthead {
+    background: linear-gradient(120deg, var(--navy-950) 0%, var(--navy-800) 62%, var(--navy-600) 100%);
+    color: #fff;
+    padding: 10mm 16mm 8mm 16mm;
+  }
+  .masthead .kicker {
+    font-size: 8pt;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #9db9e8;
+    font-weight: 600;
+    margin-bottom: 1.6mm;
+  }
+  .masthead h1 {
+    font-size: 25pt;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 2.2mm;
+  }
+  .masthead .tagline {
+    font-size: 10.5pt;
+    color: #dbe6f7;
+    max-width: 165mm;
+  }
+  .badges { margin-top: 5mm; display: flex; gap: 2.6mm; flex-wrap: wrap; }
+  .badge {
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 100px;
+    padding: 1.4mm 4mm;
+    font-size: 7.6pt;
+    color: #eef4fd;
+    background: rgba(255,255,255,0.06);
+  }
+
+  /* ---------- Body ---------- */
+  .body { padding: 4.5mm 16mm 0 16mm; }
+
+  .section-title {
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: var(--navy-800);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 2.6mm 0;
+    display: flex;
+    align-items: center;
+    gap: 3mm;
+  }
+  .section-title::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  .lede { font-size: 9pt; color: var(--muted); margin-bottom: 4mm; }
+
+  /* ---------- Architecture strip ---------- */
+  .arch { display: flex; align-items: stretch; gap: 2mm; margin: 2.4mm 0 3mm 0; }
+  .arch-box {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-top: 2.5px solid var(--blue);
+    border-radius: 2mm;
+    background: var(--bg-soft);
+    padding: 2.2mm 2.6mm;
+  }
+  .arch-box b { display: block; font-size: 8.8pt; color: var(--navy-800); margin-bottom: 0.8mm; }
+  .arch-box .lang { font-size: 6.8pt; color: var(--blue); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+  .arch-box p { font-size: 7.7pt; color: var(--muted); margin-top: 0.9mm; }
+  .arch-arrow {
+    align-self: center; color: var(--navy-600); font-size: 11pt; font-weight: 700; padding: 0 0.6mm;
+  }
+
+  /* ---------- Two-column feature grid ---------- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 7mm; row-gap: 0; margin-bottom: 4mm; }
+  .col h3 {
+    font-size: 8.4pt; font-weight: 700; color: var(--navy-800);
+    margin-bottom: 1.2mm; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .col ul { list-style: none; }
+  .col li { padding: 0.55mm 0 0.55mm 4.5mm; position: relative; color: var(--ink); }
+  .col li::before { content: "▪"; position: absolute; left: 0; color: var(--blue); font-size: 7.5pt; }
+
+  /* ---------- Highlights ---------- */
+  .highlights { display: grid; grid-template-columns: 1fr 1fr; column-gap: 7mm; row-gap: 1.1mm; margin-bottom: 2.6mm; }
+  .hl { display: flex; gap: 2.6mm; }
+  .hl .tick { color: var(--blue); font-weight: 700; flex: 0 0 auto; }
+  .hl b { color: var(--navy-800); }
+  .hl span { color: var(--muted); }
+
+  /* ---------- Numbers strip ---------- */
+  .numbers {
+    display: flex; justify-content: space-between; text-align: center;
+    border: 1px solid var(--line); border-radius: 2mm;
+    background: var(--bg-soft); padding: 2.6mm 5mm;
+    margin-bottom: 2.6mm;
+  }
+  .num b { display: block; font-size: 13.5pt; color: var(--navy-800); font-weight: 700; }
+  .num span { font-size: 6.9pt; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  /* ---------- Footer ---------- */
+  .foot {
+    margin-top: 0.5mm;
+    padding-top: 2.2mm;
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--muted); font-size: 7.4pt;
+  }
+  .foot .hl-note { color: var(--navy-800); font-weight: 600; }
+</style>
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="kicker">Product &amp; Engineering Summary</div>
+    <h1>spin-shortener</h1>
+    <p class="tagline">A polyglot WebAssembly URL shortener built on Fermyon Spin — production target Akamai Functions. Short links, per-link passwords and schedules, QR codes, click analytics, full admin tooling, and a security posture held by tests.</p>
+    <div class="badges">
+      <span class="badge">WebAssembly · Spin 4.x</span>
+      <span class="badge">Go + Python</span>
+      <span class="badge">Akamai Functions</span>
+      <span class="badge">Single KV store, 3 namespaces</span>
+      <span class="badge">882 tests, 3 suites</span>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <div class="section-title">Architecture</div>
+    <p class="lede">Four components, six HTTP trigger routes, wired in one <code>spin.toml</code>. Go owns the redirect hot path; Python owns authoring, auth and admin — performance where it matters, velocity everywhere else.</p>
+
+    <div class="arch">
+      <div class="arch-box">
+        <b>gui</b>
+        <span class="lang">Prebuilt static server</span>
+        <p>Vendored JS/CSS assets — exact-route only, no inline code allowed.</p>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-box">
+        <b>gui-pages</b>
+        <span class="lang">Python · WASI</span>
+        <p>HTML pages via a fixed path allowlist; security headers &amp; strict CSP on every document.</p>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-box">
+        <b>api</b>
+        <span class="lang">Python · WASI</span>
+        <p>JSON surface: link CRUD, custom slugs, passwords, windows, QR, analytics, users, bulk ops, backup/restore.</p>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-box">
+        <b>redirect</b>
+        <span class="lang">Go · WASI</span>
+        <p>Hot path: <code>/r/{slug}</code> resolves once, 302s, gates passwords, records the click. 5 KV ops per hit.</p>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="col">
+        <h3>Capabilities</h3>
+        <ul>
+          <li>Auto-generated &amp; permission-gated custom short links</li>
+          <li>Per-link passwords (PBKDF2, 100k iterations)</li>
+          <li>Optional start/end time windows — re-checked on every request</li>
+          <li>Per-link QR codes (SVG/PNG), domain-allowlisted</li>
+          <li>Click analytics: totals + per-day, 64-way sharded counters</li>
+          <li>Bulk create / edit / delete / tag / reassign / repoint / schedule</li>
+          <li>Admin-managed destination URL policy (deny-wins rules)</li>
+          <li>Multi-domain display; CSV export; link tags &amp; ownership</li>
+        </ul>
+      </div>
+      <div class="col">
+        <h3>Admin &amp; Reliability</h3>
+        <ul>
+          <li>Local auth, HttpOnly session cookies + CSRF, role/permission model</li>
+          <li>User management: create, edit, disable, delete (ownership-gated)</li>
+          <li>KV backup / restore — redacted, validated, all-or-nothing</li>
+          <li>Consistency check + repair; orphaned-analytics purge</li>
+          <li>Write-throttle resilience: bounded retry budgets, best-effort &amp; fully reported bulk writes</li>
+          <li>Toggleable structured logging + sanitized failure lines</li>
+          <li>X-SS-Version build ID on every response; token-gated Server-Timing tracing</li>
+          <li>KV explorer for local development (never deployed)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section-title">Engineering Highlights</div>
+    <div class="highlights">
+      <div class="hl"><span class="tick">✓</span><span><b>Polyglot by design</b> — Go owns the redirect hot path; Python owns authoring/auth/admin.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Sharded click counting</b> — 64 keys/link, cross-language pinned, RAISE-only.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Single KV store</b> — one <code>default</code> store, prefixed namespaces, controlled enumeration.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Derived link indexes</b> — racy RM-W indexes removed; the record is the only truth.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Parallel KV reads</b> — <code>get_many</code> batching, measured against live Akamai quotas.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Honest status contract</b> — 404 product states only; 503/500 faults; 302 never 301/308.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Security by construction</b> — no inline code; logging can't carry a KV key; injection closed.</span></div>
+      <div class="hl"><span class="tick">✓</span><span><b>Measurement over assumption</b> — constants backed by live-deployment measurements.</span></div>
+    </div>
+
+    <div class="section-title">Numbers</div>
+    <div class="numbers">
+      <div class="num"><b>4</b><span>Components</span></div>
+      <div class="num"><b>6</b><span>HTTP trigger routes</span></div>
+      <div class="num"><b>5</b><span>KV ops per redirect</span></div>
+      <div class="num"><b>64</b><span>Click shards</span></div>
+      <div class="num"><b>100k</b><span>PBKDF2 iterations</span></div>
+      <div class="num"><b>882</b><span>Tests passing</span></div>
+      <div class="num"><b>50</b><span>Write RPS ceiling</span></div>
+    </div>
+
+    <div class="foot">
+      <span><span class="hl-note">Deployment:</span> <code>spin aka app deploy</code> → Akamai Functions; runtime-config only for local dev. Backup → deploy → restore is the documented upgrade path.</span>
+      <span>Ongoing engineering by <b>Joshuahostetler</b> · project docs: <code>CLAUDE.md</code>, <code>TASKS.md</code>, <code>docs/plans/</code></span>
+    </div>
+
+  </div>
+
+</body>
+</html>
