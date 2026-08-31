@@ -58,8 +58,11 @@ func (d Disposition) String() string {
 //     explicit rather than left to ParseLink's json.Unmarshal failing, so
 //     absence is a stated condition, not a side effect of a decoder.
 //  3. A ParseLink failure on a non-empty result means the record is present
-//     but corrupt — DispositionUnreadable. This is a fault (a human needs
-//     to look at the record), not a product state.
+//     but unusable — either it will not parse (corrupt JSON / type mismatch)
+//     or it parses but cannot be safely served (a target_url carrying ASCII
+//     control characters would be emitted verbatim into an unvalidated
+//     Location header, see ParseLink) — DispositionUnreadable. This is a
+//     fault (a human needs to look at the record), not a product state.
 //  4. status != "active" or outside [start_at, end_at) — DispositionNotFound.
 //     Deliberately indistinguishable from "absent": this is a
 //     probing-resistance property (CLAUDE.md, "Security tradeoffs"), not an

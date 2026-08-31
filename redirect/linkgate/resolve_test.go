@@ -135,6 +135,38 @@ func TestResolve_UnparseableRecordIsUnreadable(t *testing.T) {
 	}
 }
 
+// TestResolve_ControlCharTargetIsUnreadable pins the redirect's refusal to
+// emit a control-character Location header: such a record is present but
+// cannot be safely served, so it resolves to DispositionUnreadable -> 500
+// with ErrUnsafeTargetURL, exactly like an unparseable record — the
+// wire-safety half of "a fault must never be dressed up as a product state".
+// This matters even though api/links.py's target_url_error rejects control
+// chars at all four authoring paths: restore writes records WITHOUT the
+// authoring choke point by design, and a hand-edited store can contain
+// anything.
+func TestResolve_ControlCharTargetIsUnreadable(t *testing.T) {
+	store := fakeStore{getResult: []byte(
+		`{"slug":"abc","target_url":"https://example.com/\r\nX-Evil: yes","status":"active"}`)}
+	_, disp, err := Resolve(store, "abc", time.Now())
+	if disp != DispositionUnreadable {
+		t.Errorf("disp = %v, want DispositionUnreadable", disp)
+	}
+	if !errors.Is(err, ErrUnsafeTargetURL) {
+		t.Errorf("err = %v, want ErrUnsafeTargetURL", err)
+	}
+}
+
+func TestResolve_ControlFreeTargetStillRedirects(t *testing.T) {
+	// Guard against the guard: a percent-encoded control sequence is inert
+	// literal text in the header and must keep resolving.
+	rec := `{"slug":"abc123","target_url":"https://example.com/x%0d%0a","status":"active","password_hash":"","start_at":"","end_at":""}`
+	store := fakeStore{getResult: []byte(rec)}
+	_, disp, _ := Resolve(store, "abc123", time.Now())
+	if disp != DispositionRedirect {
+		t.Errorf("disp = %v, want DispositionRedirect", disp)
+	}
+}
+
 func TestResolve_ActiveNoPasswordIsRedirect(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}

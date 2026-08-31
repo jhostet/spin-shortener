@@ -1,6 +1,9 @@
 package linkgate
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseLink_ValidFullRecord(t *testing.T) {
 	raw := []byte(`{
@@ -76,5 +79,50 @@ func TestParseLinkIgnoresUnknownTagsField(t *testing.T) {
 	}
 	if l.Slug != "abc" || l.TargetURL != "https://example.com" || l.Status != "active" {
 		t.Fatalf("known fields did not survive: %+v", l)
+	}
+}
+
+// TestParseLink_RejectsControlCharactersInTargetURL pins the wire-safety
+// half of the control-char fix (docs/plans/reject-control-chars-in-target-url.md):
+// a record whose target_url carries ASCII control characters decodes fine as
+// JSON but must NOT be served, because the redirect emits target_url verbatim
+// as the Location header and the Go SDK serializes header values unvalidated.
+// Every payload here would otherwise pass json.Unmarshal and reach the wire.
+func TestParseLink_RejectsControlCharactersInTargetURL(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		// JSON \uXXXX escapes, decoded by json.Unmarshal into real control
+		// bytes, then rejected by hasControlChars. (A literal \xNN is not a
+		// valid JSON escape and fails in Unmarshal first — that would be a
+		// decoder error, not the wire-safety error this table pins.)
+		{"crlf-in-path", `{"slug":"abc","target_url":"https://example.com/x\u000d\u000aX-Evil: yes","status":"active"}`},
+		{"crlf-in-authority", `{"slug":"abc","target_url":"https://example.com\u000d\u000aX-Evil: yes","status":"active"}`},
+		{"lf", `{"slug":"abc","target_url":"https://example.com/x\u000aInjected: 1","status":"active"}`},
+		{"tab", `{"slug":"abc","target_url":"https://example.com/x\u0009yes","status":"active"}`},
+		{"nul", `{"slug":"abc","target_url":"https://example.com/x\u0000nul","status":"active"}`},
+		{"esc", `{"slug":"abc","target_url":"https://example.com/\u001b[31mred\u001b[0m","status":"active"}`},
+		{"del", `{"slug":"abc","target_url":"https://example.com/\u007fdel","status":"active"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseLink([]byte(tc.raw))
+			if !errors.Is(err, ErrUnsafeTargetURL) {
+				t.Errorf("got %v, want ErrUnsafeTargetURL", err)
+			}
+		})
+	}
+}
+
+// TestParseLink_AcceptsPercentEncodedControlCharacters pins what must NOT be
+// rejected: "%0d%0a" is inert literal text inside the Location header value
+// and is only decoded by the *new* URL, never by this app's emission — so it
+// stays a servable target (and api/links.py's target_url_error accepts it
+// too, see tests/test_target_url_control_chars.py).
+func TestParseLink_AcceptsPercentEncodedControlCharacters(t *testing.T) {
+	raw := []byte(`{"slug":"abc","target_url":"https://example.com/x%0d%0a","status":"active"}`)
+	if _, err := ParseLink(raw); err != nil {
+		t.Fatalf("percent-encoded target rejected: %v", err)
 	}
 }

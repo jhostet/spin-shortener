@@ -170,6 +170,26 @@ def target_url_error_body(error_code: str) -> dict:
     return {"error": error_code}
 
 
+# Control characters in a target URL are rejected at authoring time, not
+# just discouraged: the redirect component emits target_url VERBATIM as the
+# Location header of its 302, and the Go SDK serializes header values to the
+# wire unvalidated (toWasiHeaders checks header NAMES only — confirmed in
+# spin-go-sdk/v3@v3.0.0 http/http.go). So "https://example.com/x\r\nX-Evil: yes"
+# is a real CRLF in a live 302, not a curiosity. urlparse strips \t\r\n from
+# its parsed view but keeps \x00-\x08, \x0b-\x0c, \x0e-\x1f and \x7f — and the
+# ORIGINAL string is what gets stored — so the check must be explicit and run
+# against the stored bytes, never delegated to the parser. This is the same
+# "enforced in two of three places is not enforced" rule the length cap
+# carries: all four authoring paths (create, update, bulk create, repoint)
+# funnel through target_url_error, and the redirect is the un-enforced fourth
+# place, closed here.
+#
+# Percent-encoded forms (%0d%0a) need NO rejection: they are inert literal
+# text inside the header value and are only decoded by the *new* URL the
+# Location points at, never by this app's header emission.
+_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def target_url_error(target_url) -> str | None:
     """The single choke point for destination-URL shape, returning an error
     code or None. All three authoring paths (handle_create, handle_update,
@@ -179,8 +199,18 @@ def target_url_error(target_url) -> str | None:
 
     Deliberately does NOT cover the destination *policy* (urlpolicy.evaluate),
     which needs the policy record and returns a richer verdict.
+
+    Control characters reuse "invalid_target_url" rather than a distinct code
+    deliberately: a control-bearing URL is indistinguishable from "not a URL"
+    to every client, the GUI already maps that code to a sensible message, and
+    a distinct code would add surface for an input only ever crafted as an
+    attack. The redirect-side guard (linkgate.ParseLink) is the second half of
+    this fix — a control-char target that reaches storage by ANY route (e.g.
+    restore) is refused there as DispositionUnreadable -> 500, never emitted.
     """
     if not isinstance(target_url, str) or not is_valid_target_url(target_url):
+        return "invalid_target_url"
+    if _CONTROL_CHAR_PATTERN.search(target_url):
         return "invalid_target_url"
     if len(target_url.encode("utf-8")) > MAX_TARGET_URL_BYTES:
         return "target_url_too_long"
