@@ -5,3 +5,4 @@ docs/plans/*-scratch.md
 .playwright-mcp/
 spin-dev.toml
 .spin-aka/
+.DS_Store
