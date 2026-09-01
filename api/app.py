@@ -1,7 +1,7 @@
 import json
 import sys
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from spin_sdk import key_value, variables
 from spin_sdk.http import Handler
@@ -279,7 +279,23 @@ class HttpHandler(Handler):
 
     async def _dispatch(self, request: Request, collector, failure_reporter) -> Response:
         parsed_uri = urlparse(request.uri)
-        path = parsed_uri.path
+        # unquote(), not unquote_plus(): a path segment's "+" is a literal
+        # "+", never a space (that's a query-string/form-encoding rule
+        # parse_qs below already applies correctly on its own). Every
+        # variable path segment below (a slug, a username) is matched
+        # against this decoded value, mirroring the encodeURIComponent the
+        # GUI already applies when building these URLs — a route match here
+        # was previously done against the still-percent-encoded segment, so
+        # any username containing a character encodeURIComponent escapes
+        # (starting with `"`, confirmed live) could never be looked up,
+        # deleted, or updated by path at all. Slugs never hit this in
+        # practice (CUSTOM_SLUG_PATTERN has no such character), but this
+        # fixes the general case rather than only the username one. Every
+        # `path ==`/`path.startswith`/`path.endswith` route comparison below
+        # this line matches on a fixed literal with no `%` in it, so
+        # decoding once, here, is a no-op for all of them and correct for
+        # the five that then slice a variable segment out of `path`.
+        path = unquote(parsed_uri.path)
         query = parse_qs(parsed_uri.query)
         method = request.method
 
