@@ -129,6 +129,41 @@ async def test_qr_no_download_omits_content_disposition():
     assert "content-disposition" not in resp.headers
 
 
+async def test_qr_download_sanitizes_a_slug_that_reached_storage_by_a_route_other_than_normal_creation():
+    """A slug reaching storage by ANY route other than links.handle_create
+    (backup.handle_restore writes records without re-validating keys by
+    design; a hand-edited store can contain anything) must not be emitted
+    verbatim into Content-Disposition — the same "verbatim into a header"
+    shape docs/plans/reject-control-chars-in-target-url.md closed for
+    target_url. Seeded directly into the store, bypassing handle_create's
+    CUSTOM_SLUG_PATTERN-enforced slug generation entirely, exactly as a
+    restore or a hand-edited store would."""
+    malicious_slug = "evil\r\nX-Evil: yes"
+    store = FakeStore({
+        f"slug:{malicious_slug}": json.dumps({
+            "slug": malicious_slug, "target_url": "https://example.com/x", "owner": "alice",
+            "custom": False, "status": "active", "start_at": None, "end_at": None, "tags": [],
+        }).encode("utf-8"),
+    })
+    resp = await qr.handle_qr(store, _principal(), malicious_slug, {"download": ["1"]}, ["http://localhost:3000"])
+    assert resp.status == 200
+    assert resp.headers["content-disposition"] == 'attachment; filename="link-qr.svg"'
+    assert "\r" not in resp.headers["content-disposition"]
+    assert "\n" not in resp.headers["content-disposition"]
+
+
+def test_safe_filename_slug_leaves_a_valid_slug_unchanged():
+    assert qr._safe_filename_slug("Promo_2026-Q1") == "Promo_2026-Q1"
+
+
+def test_safe_filename_slug_replaces_control_characters():
+    assert qr._safe_filename_slug("evil\r\nX-Evil: yes") == "link"
+
+
+def test_safe_filename_slug_replaces_an_empty_slug():
+    assert qr._safe_filename_slug("") == "link"
+
+
 async def test_qr_encodes_short_link_not_target_url():
     store = FakeStore()
     slug = await _make_link(store, target_url="https://evil-should-not-appear.example/secret")

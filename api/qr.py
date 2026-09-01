@@ -21,7 +21,7 @@ import qrcode.image.svg as qr_svg
 
 import domains
 from auth import Principal
-from links import can_view, get_link
+from links import CUSTOM_SLUG_PATTERN, can_view, get_link
 from responses import Response, SECURITY_HEADERS, json_response
 
 BOX_SIZE_BY_PRESET = {"web": 6, "print": 20}
@@ -30,6 +30,28 @@ BOX_SIZE_BY_PRESET = {"web": 6, "print": 20}
 def _query_value(query: dict, key: str, default: str) -> str:
     values = query.get(key)
     return values[0] if values else default
+
+
+def _safe_filename_slug(slug: str) -> str:
+    """Returns slug unchanged if it matches CUSTOM_SLUG_PATTERN, otherwise the
+    fixed placeholder "link", carrying none of the original bytes.
+
+    A slug reaching this function is already existence-checked against a
+    stored `links:slug:<slug>` record (get_link above), and only `api` ever
+    writes one, always under this exact pattern — so an attacker-crafted
+    slug cannot reach this field today. Sanitized anyway, for the same
+    reason `linkgate.SanitizeSlugForLog`/`obs.sanitize_slug_for_log` sanitize
+    their identical field: storage can still drift by a route that bypasses
+    normal authoring (`backup.handle_restore` writes records without
+    re-validating their keys by design, and a hand-edited store can contain
+    anything), and this is the one place `slug` is emitted verbatim into a
+    header value with no other guard — the same "verbatim into a header the
+    Go SDK serializes unvalidated" shape `docs/plans/reject-control-chars-in-target-url.md`
+    just closed for target_url, one field over.
+    """
+    if CUSTOM_SLUG_PATTERN.match(slug):
+        return slug
+    return "link"
 
 
 def _render(short_url: str, fmt: str, size: str) -> tuple[bytes, str, str]:
@@ -78,7 +100,7 @@ async def handle_qr(store, principal: Principal, slug: str, query: dict, base_ur
     # can-never-be-overridden guarantee if that ever changes.
     headers = {"content-type": content_type}
     if download:
-        headers["content-disposition"] = f'attachment; filename="{slug}-qr.{ext}"'
+        headers["content-disposition"] = f'attachment; filename="{_safe_filename_slug(slug)}-qr.{ext}"'
     headers.update(SECURITY_HEADERS)
 
     return Response(200, headers, body)

@@ -1707,8 +1707,20 @@ const CSV_COLUMNS = [
 // RFC 4180: quote a field that contains a comma, quote, CR or LF, and double
 // any quote inside it. Destinations really do contain commas — the bulk parser
 // has a case for exactly that — so this is load-bearing, not defensive.
+//
+// Excel/Sheets treats a cell whose text begins with =, +, - or @ as a
+// formula regardless of RFC 4180 quoting — CSV/formula injection (CWE-1236).
+// Prefixing with a leading "'" is the standard mitigation: Excel's own
+// "force text" convention for a manually-typed cell applies identically to a
+// CSV cell on import. Only "Owner" (a username — api/users.py places no
+// character restriction on one) can actually start with one of these today;
+// every other column is either character-restricted (slugs, tags) or always
+// begins with a fixed http(s):// prefix. Neutralized for every field here
+// rather than only "Owner" so a future column with less rigorous validation
+// is covered by construction, not by an invariant someone has to remember.
 function csvField(value) {
-  const s = String(value ?? "");
+  let s = String(value ?? "");
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
   return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
 }
 

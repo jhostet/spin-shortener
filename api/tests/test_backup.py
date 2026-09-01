@@ -441,6 +441,19 @@ async def test_handle_export_full_three_store_counts_match_stores():
     assert "password_hash" not in decoded_admin
 
 
+async def test_handle_export_carries_cache_control_no_store():
+    """A code review flagged this as the single most sensitive GET response
+    in the app (a protected link's PBKDF2 hash is deliberately NOT stripped,
+    per this module's own module docstring) — with no Cache-Control header,
+    a caching intermediary or a browser's disk cache had no explicit
+    instruction not to retain it. Pinned directly on this endpoint rather
+    than only via responses.py's generic SECURITY_HEADERS test, since this
+    is the response the finding was actually about."""
+    stores_by_name = {"links": FakeStore(), "users": FakeStore(), "analytics": FakeStore()}
+    resp = await backup.handle_export(stores_by_name, _principal(), {}, fake_list_keys)
+    assert resp.headers["cache-control"] == "no-store"
+
+
 async def test_handle_export_partial_stores_only_covers_requested():
     links_store = FakeStore({"slug:abc": b'{"slug": "abc"}'})
     users_store = FakeStore({"user:admin": b'{"username": "admin"}'})

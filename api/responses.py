@@ -35,12 +35,22 @@ class Response:
 # (`default-src 'none'`) unlike the GUI pages' CSP, which has to accommodate
 # inline scripts. Every response goes through `json_response` below except
 # `qr.py`'s image responses, which merge these headers in separately.
+#
+# `Cache-Control: no-store` for the same reason `redirect` sets it on every
+# response (see CLAUDE.md, "Redirect caching"): nothing here should ever be
+# rendered/executed/framed, and by the same logic nothing here should ever be
+# cached either — every endpoint requires an authenticated session, and at
+# least one (`GET /api/admin/backup`) returns the single most sensitive
+# response in the app (every protected link's PBKDF2 hash, by documented
+# design). A caching intermediary or a browser's disk cache sitting in front
+# of an admin session has no reason to ever retain any of this.
 SECURITY_HEADERS: dict[str, str] = {
     "x-content-type-options": "nosniff",
     "referrer-policy": "strict-origin-when-cross-origin",
     "x-frame-options": "DENY",
     "strict-transport-security": "max-age=31536000; includeSubDomains",
     "content-security-policy": "default-src 'none'",
+    "cache-control": "no-store",
 }
 
 
