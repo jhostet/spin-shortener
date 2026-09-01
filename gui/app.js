@@ -76,9 +76,23 @@ function isoToDatetimeLocal(value) {
 }
 
 function escapeHtml(value) {
+  // Every call site interpolates this into either text-node content or a
+  // quoted attribute value, and the two need different escaping: the
+  // div.textContent/innerHTML round-trip below correctly escapes &, <, >
+  // for both, but leaves a literal " or ' untouched, since neither is
+  // special in text-node content. Inside an attribute value (data-username=
+  // "${escapeHtml(...)}", the common shape across users.js/dashboard.js/
+  // store-maintenance.js/url-policy.js/admin/index.js/links/detail.js), an
+  // unescaped " breaks out of the attribute early and lets the remainder of
+  // the string be parsed as new attributes on the same element — confirmed
+  // live: a username of x" onmouseover="alert(1) added a real onmouseover
+  // handler to the row's Edit button with no interaction beyond a mouse
+  // passing over it. Escaping both quote characters closes that for every
+  // attribute-context call site, and is a no-op (renders as a literal quote)
+  // wherever the value lands in text-node content instead.
   const div = document.createElement("div");
   div.textContent = value;
-  return div.innerHTML;
+  return div.innerHTML.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 // Shared by every page with a "Copy" affordance next to a short link
