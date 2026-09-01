@@ -44,6 +44,46 @@ def test_verify_malformed_stored_value_fails_without_raising(stored):
     assert not auth.verify_password("anything", stored)
 
 
+# The CPU-amplification clamp (docs/plans/limit-stored-pbkdf2-iterations.md):
+# a stored hash claiming an absurd iteration count must fail fast — the
+# assertion that each case completes here is the test, because an unclamped
+# verify_password would spend seconds-minutes hashing at 2000000000
+# iterations before returning (pure-Python PBKDF2 is ~1-3s at just 100k).
+# Mutation-checkable: removing the clamp makes the 2000000000 case hang
+# rather than fail, exactly the failure it prevents on the real login path.
+@pytest.mark.parametrize(
+    "iterations",
+    ["2000000000", str(auth.MAX_STORED_PBKDF2_ITERATIONS + 1), "0", "-100000"],
+)
+def test_verify_rejects_absurd_iteration_count_fast(iterations):
+    assert not auth.verify_password("anything", f"pbkdf2_sha256${iterations}$c2FsdA==$aGFzaA==")
+
+
+def test_verify_accepts_legitimate_iteration_count():
+    # A real hash at the shipped count still verifies (the clamp is a range,
+    # not a rejection of stored hashes generally).
+    hashed = auth.hash_password("correct horse", iterations=100)
+    assert auth.verify_password("correct horse", hashed)
+    # The boundary value parses as accepted-by-the-clamp without having to run
+    # 1,000,000 pure-Python iterations to prove it (stored_pbkdf2_iterations
+    # shares verify_password's parse and reports the count unchanged).
+    boundary = auth.stored_pbkdf2_iterations(
+        f"pbkdf2_sha256${auth.MAX_STORED_PBKDF2_ITERATIONS}$c2FsdA==$aGFzaA==")
+    assert boundary == auth.MAX_STORED_PBKDF2_ITERATIONS
+
+
+def test_stored_pbkdf2_iterations_shape():
+    # The parse helper backup.py validates against: returns the count for a
+    # pbkdf2_sha256 value, None for every other shape, and must never raise.
+    assert auth.stored_pbkdf2_iterations("pbkdf2_sha256$100000$c2FsdA==$aGFzaA==") == 100000
+    assert auth.stored_pbkdf2_iterations("pbkdf2_sha256$0$c2FsdA==$aGFzaA==") == 0
+    assert auth.stored_pbkdf2_iterations("pbkdf2_sha256$notanumber$c2FsdA==$aGFzaA==") is None
+    assert auth.stored_pbkdf2_iterations("pbkdf2_sha256$100$c2FsdA==") is None
+    assert auth.stored_pbkdf2_iterations("other_scheme$100$c2FsdA==$aGFzaA==") is None
+    assert auth.stored_pbkdf2_iterations("") is None
+    assert auth.stored_pbkdf2_iterations("bogus") is None
+
+
 async def test_local_auth_provider_valid_credentials():
     store = FakeStore()
     await auth.put_user(store, {

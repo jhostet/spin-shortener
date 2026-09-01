@@ -313,6 +313,59 @@ def test_validate_backup_credential_material_in_backup():
     assert error == {"error": "credential_material_in_backup", "key": "user:alice"}
 
 
+def _link_record_with_hash(password_hash_value: str) -> str:
+    return base64.b64encode(json.dumps({"slug": "abc", "password_hash": password_hash_value}).encode()).decode()
+
+
+# docs/plans/limit-stored-pbkdf2-iterations.md: restore is the one route that
+# can plant a link record whose password_hash claims an absurd PBKDF2
+# iteration count without a hand-edited store, and link hashes are
+# deliberately NOT stripped from backups — so validate_backup is the earlier
+# choke point (the Go redirect clamps at verify-time as the last line). Each
+# rejection here costs linear parsing, never a hash.
+def test_validate_backup_rejects_absurd_password_iterations():
+    doc = _good_doc(stores={"links": {"slug:abc": _link_record_with_hash("pbkdf2_sha256$2000000000$c2FsdA==$aGFzaA==")}})
+    decoded, error = backup.validate_backup(doc)
+    assert decoded is None
+    assert error == {
+        "error": "unreasonable_password_iterations",
+        "store": "links",
+        "key": "slug:abc",
+        "max_iterations": auth.MAX_STORED_PBKDF2_ITERATIONS,
+    }
+
+
+def test_validate_backup_rejects_zero_password_iterations():
+    doc = _good_doc(stores={"links": {"slug:abc": _link_record_with_hash("pbkdf2_sha256$0$c2FsdA==$aGFzaA==")}})
+    decoded, error = backup.validate_backup(doc)
+    assert decoded is None
+    assert error["error"] == "unreasonable_password_iterations"
+
+
+def test_validate_backup_accepts_legitimate_password_iterations():
+    # The app's own hashes are 100,000, well inside the range — a well-formed
+    # backup carrying one must round-trip (user hashes are stripped, link
+    # hashes are not, and a valid link hash is what every real backup holds).
+    doc = _good_doc(stores={"links": {"slug:abc": _link_record_with_hash("pbkdf2_sha256$100000$c2FsdA==$aGFzaA==")}})
+    decoded, error = backup.validate_backup(doc)
+    assert error is None
+    assert decoded == {"links": {"slug:abc": b'{"slug": "abc", "password_hash": "pbkdf2_sha256$100000$c2FsdA==$aGFzaA=="}'}}
+
+
+def test_validate_backup_leaves_foreign_password_scheme_alone():
+    # Deliberate narrowness (pinned): only a pbkdf2_sha256-shaped hash with a
+    # parseable count is a CPU-amplification knob worth rejecting a backup
+    # over. A foreign or unparsable scheme is left to the verifiers' existing
+    # fail-closed behaviour (such a link simply can never be unlocked), and
+    # rejecting it here would turn restore into a strictness enforcer for a
+    # category that is harmless server-side.
+    for value in ("other_scheme$1$c2FsdA==$aGFzaA==", "pbkdf2_sha256$notanumber$c2FsdA==$aGFzaA==", "garbage"):
+        doc = _good_doc(stores={"links": {"slug:abc": _link_record_with_hash(value)}})
+        decoded, error = backup.validate_backup(doc)
+        assert error is None
+        assert decoded is not None
+
+
 def test_validate_backup_accepts_a_well_formed_file():
     decoded, error = backup.validate_backup(_good_doc())
     assert error is None

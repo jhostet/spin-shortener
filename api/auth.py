@@ -23,6 +23,21 @@ SESSION_TTL_SECONDS = 8 * 60 * 60
 BOOTSTRAPPED_KEY = "_meta:bootstrapped"
 USERNAMES_INDEX_KEY = "_meta:usernames"
 
+# Upper bound on the iteration count a STORED hash may claim, checked at
+# verify time (both languages) and at restore (api/backup.py, the earlier
+# choke point). This app always writes exactly PBKDF2_ITERATIONS (100,000);
+# the cap bounds a corrupted or malicious record instead of accommodating
+# variety. A hostile restore or a hand-edited store could otherwise plant an
+# absurd count on one hash and turn every verification against it into an
+# unbounded PBKDF2 computation — on the redirect hot path for a link
+# password (Go) or in the login handler for an account (here). 1,000,000 is
+# 10x the shipped value: room for a legitimate raise (current guidance is
+# ~600k) while capping an attacker's CPU amplification at ~10x. Deliberately
+# NOT cross-language pinned against redirect/linkgate/password.go's
+# MaxStoredPBKDF2Iterations — independent policy constants, a divergence
+# means a leniency difference, not a silently-broken shared format.
+MAX_STORED_PBKDF2_ITERATIONS = 1_000_000
+
 # Used only by delete_sessions_for_user below. The three existing
 # f"session:{token}" literals (create_session, resolve_session,
 # delete_session) are deliberately left as-is — rewriting them is a
@@ -72,12 +87,45 @@ def verify_password(password: str, stored: str) -> bool:
         scheme, iterations_str, salt_b64, hash_b64 = stored.split("$")
         if scheme != "pbkdf2_sha256":
             return False
+        # Clamp BEFORE any hashing (see MAX_STORED_PBKDF2_ITERATIONS): an
+        # absurd count must cost one integer comparison, never CPU. A
+        # malformed iterations_str is caught by int() below and fails closed;
+        # the range check makes the failure explicit and cheap.
+        iterations = int(iterations_str)
+        if not (1 <= iterations <= MAX_STORED_PBKDF2_ITERATIONS):
+            return False
         salt = base64.b64decode(salt_b64, validate=True)
         expected = base64.b64decode(hash_b64, validate=True)
-        digest = _pbkdf2_hmac_sha256(password.encode("utf-8"), salt, int(iterations_str))
-    except (ValueError, AttributeError, binascii.Error):
+        digest = _pbkdf2_hmac_sha256(password.encode("utf-8"), salt, iterations)
+    except (ValueError, AttributeError, binascii.Error, OverflowError):
         return False
     return hmac.compare_digest(digest, expected)
+
+
+def stored_pbkdf2_iterations(stored: str) -> int | None:
+    """The iteration count a stored pbkdf2_sha256 hash claims, or None if
+    `stored` is not a pbkdf2_sha256-shaped value or its count is unparseable.
+
+    Exposed for api/backup.py's restore validation (the earlier choke point
+    for the link-record CPU-amplification finding — see
+    docs/plans/limit-stored-pbkdf2-iterations.md): backup validates the count
+    against MAX_STORED_PBKDF2_ITERATIONS before a hostile file ever reaches a
+    verifier, and shares this one parse so backup's notion of the hash shape
+    can never drift from verify_password's. Kept deliberately narrow: any
+    other scheme (or an unparseable count) returns None and is left to the
+    verifiers' existing fail-closed behaviour, since only the iteration count
+    is a CPU-amplification knob.
+    """
+    try:
+        scheme, iterations_str, _salt_b64, _hash_b64 = stored.split("$")
+    except (ValueError, AttributeError):
+        return None
+    if scheme != "pbkdf2_sha256":
+        return None
+    try:
+        return int(iterations_str)
+    except ValueError:
+        return None
 
 
 @dataclass

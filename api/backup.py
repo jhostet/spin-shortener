@@ -16,6 +16,7 @@ import base64
 import binascii
 import json
 
+import auth
 from kvbatch import gather_reads
 from responses import Response, iso_now, json_response
 
@@ -187,6 +188,38 @@ def validate_backup(payload) -> tuple[dict[str, dict[str, bytes]] | None, dict |
                         parsed = None
                     if isinstance(parsed, dict) and "password_hash" in parsed:
                         return None, {"error": "credential_material_in_backup", "key": key}
+
+            if store_name == "links" and key.startswith("slug:"):
+                # docs/plans/limit-stored-pbkdf2-iterations.md: restore is the
+                # one route that can plant a link record whose password_hash
+                # claims an absurd PBKDF2 iteration count without a hand-edited
+                # store, and link hashes are deliberately NOT stripped from
+                # backups (unlike user hashes, rejected above). So the earlier
+                # choke point validates the count here, before a hostile file
+                # ever reaches a verifier — the Go redirect clamps at
+                # verify-time as the last line, but a rejected restore is
+                # strictly better than a restored CPU-amplification knob.
+                #
+                # Deliberately narrow: only a pbkdf2_sha256-shaped hash with a
+                # parseable count is checked. Any other scheme returns None
+                # from auth.stored_pbkdf2_iterations and is left to the
+                # verifiers' existing fail-closed behaviour (such a link simply
+                # can never be unlocked) — only the iteration count is a
+                # CPU-amplification knob, and this check shares auth's one
+                # parse so it can never drift from verify_password's.
+                try:
+                    parsed = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    parsed = None
+                if isinstance(parsed, dict) and isinstance(parsed.get("password_hash"), str):
+                    iterations = auth.stored_pbkdf2_iterations(parsed["password_hash"])
+                    if iterations is not None and not (1 <= iterations <= auth.MAX_STORED_PBKDF2_ITERATIONS):
+                        return None, {
+                            "error": "unreasonable_password_iterations",
+                            "store": store_name,
+                            "key": key,
+                            "max_iterations": auth.MAX_STORED_PBKDF2_ITERATIONS,
+                        }
 
             decoded_entries[key] = raw
         decoded_entries_by_store[store_name] = decoded_entries
