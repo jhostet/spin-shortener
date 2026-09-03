@@ -208,6 +208,26 @@
 #bulk-bar [role=group] {
   width: auto;
 }
+/* Every button in the bulk bar must never shrink below its label's natural
+ * width. Pico's own [type=button] rule already gives a grouped button
+ * width:auto, but the general [role=group]>* rule (and #bulk-tag-controls/
+ * #bulk-schedule-controls above, which mirror it) still leaves flex-shrink:1
+ * — and Pico's own base typography sets overflow-wrap:break-word globally,
+ * so once a crowded row (repoint + tag + owner clusters sharing one line at
+ * ordinary desktop widths) runs out of space, a squeezed button's label
+ * broke mid-word ("Repo/int", "Rea/ssig/n" — confirmed live) instead of the
+ * cluster it belongs to wrapping onto a new line, which is what #bulk-bar's
+ * own flex-wrap is for. flex-shrink:0 makes a button's content width a hard
+ * floor: the adjacent input (already protected by its own min-width, e.g.
+ * #bulk-repoint-url/.tag-input-buffer) shrinks first, and once even that
+ * isn't enough, #bulk-bar wraps the whole cluster rather than breaking a
+ * label. A no-op for the buttons that already had enough room (Enable/
+ * Disable/Delete, Set/Clear schedule) — applied to every button here, not
+ * only the two observed breaking, so a future addition is covered by
+ * construction. */
+#bulk-bar button {
+  flex-shrink: 0;
+}
 
 /* Bulk-create textarea holds slugs and URLs — data, not prose — so it reads
  * monospace per DESIGN.md's rule, same reasoning as the links table's
