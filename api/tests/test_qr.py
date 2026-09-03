@@ -247,3 +247,46 @@ async def test_qr_no_domains_configured_returns_500():
     assert resp.status == 500
     assert json.loads(resp.body)["error"] == "no_base_url_configured"
     mock_make.assert_not_called()
+
+
+# --- include_redirect_prefix toggle ---
+
+
+async def test_qr_omits_redirect_prefix_when_disabled():
+    store = FakeStore()
+    slug = await _make_link(store)
+
+    with patch("qr.qrcode.make", wraps=qr.qrcode.make) as mock_make:
+        resp = await qr.handle_qr(store, _principal(), slug, {}, ["http://localhost:3000"], False)
+
+    assert resp.status == 200
+    encoded_data = mock_make.call_args[0][0]
+    assert encoded_data == f"http://localhost:3000/{slug}"
+    assert "/r/" not in encoded_data
+
+
+async def test_qr_prefix_off_still_uses_the_resolved_configured_domain():
+    store = FakeStore()
+    slug = await _make_link(store)
+
+    with patch("qr.qrcode.make", wraps=qr.qrcode.make) as mock_make:
+        resp = await qr.handle_qr(
+            store, _principal(), slug, {"base": ["https://go.example.com"]}, CONFIGURED, False
+        )
+
+    assert resp.status == 200
+    assert mock_make.call_args[0][0] == f"https://go.example.com/{slug}"
+
+
+async def test_qr_prefix_off_still_rejects_an_unconfigured_base():
+    store = FakeStore()
+    slug = await _make_link(store)
+
+    with patch("qr.qrcode.make", wraps=qr.qrcode.make) as mock_make:
+        resp = await qr.handle_qr(
+            store, _principal(), slug, {"base": ["https://evil.example"]}, CONFIGURED, False
+        )
+
+    assert resp.status == 400
+    assert json.loads(resp.body)["error"] == "invalid_base_url"
+    mock_make.assert_not_called()

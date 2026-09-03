@@ -133,3 +133,43 @@ def test_resolve_returns_configured_entry_not_caller_string():
 def test_resolve_second_configured_domain():
     configured = ["https://a.example.com", "https://b.example.com"]
     assert domains.resolve_base_url("https://b.example.com", configured) == "https://b.example.com"
+
+
+# --- parse_include_redirect_prefix ---
+
+
+def test_parse_include_redirect_prefix_true_cases():
+    for raw in (None, "", "true", "TRUE", "yes", "1", "ture"):
+        assert domains.parse_include_redirect_prefix(raw) is True
+
+
+def test_parse_include_redirect_prefix_non_string_is_true():
+    assert domains.parse_include_redirect_prefix(123) is True
+    assert domains.parse_include_redirect_prefix(True) is True
+
+
+def test_parse_include_redirect_prefix_false_cases():
+    for raw in ("false", "FALSE", " false "):
+        assert domains.parse_include_redirect_prefix(raw) is False
+
+
+# --- short_url_for ---
+
+
+def test_short_url_for_with_prefix():
+    assert domains.short_url_for("https://go.example.com", "abc", True) == "https://go.example.com/r/abc"
+
+
+def test_short_url_for_without_prefix():
+    assert domains.short_url_for("https://go.example.com", "abc", False) == "https://go.example.com/abc"
+
+
+def test_short_url_for_default_includes_prefix():
+    assert domains.short_url_for("https://go.example.com", "abc") == "https://go.example.com/r/abc"
+
+
+def test_short_url_for_exactly_one_slash_after_scheme_either_way():
+    with_prefix = domains.short_url_for("https://go.example.com", "abc", True)
+    without_prefix = domains.short_url_for("https://go.example.com", "abc", False)
+    assert "//" not in with_prefix[len("https://") :]
+    assert "//" not in without_prefix[len("https://") :]

@@ -86,3 +86,31 @@ def resolve_base_url(candidate: str | None, configured: list[str]) -> str | None
         if domain == normalized:
             return domain
     return None
+
+
+# The path segment the redirect component is routed on. It is a constant of
+# this app's wire protocol, NOT configuration — spin.toml's
+# `route = "/r/..."` and redirect/prompt.html's form action never change.
+# Only whether a *displayed or encoded* URL includes it is configurable.
+REDIRECT_PATH_PREFIX = "/r"
+
+
+def parse_include_redirect_prefix(raw: str | None) -> bool:
+    """True unless `raw` is exactly "false" (whitespace- and case-insensitive).
+
+    Inverted relative to app.py's `cookie_secure` parse, deliberately: an
+    unrecognised value must land on today's behaviour. Stripping /r/ from a
+    deployment with no edge rewrite in front of it produces dead copied links
+    and unrecallable printed QR codes.
+    """
+    if not isinstance(raw, str):
+        return True
+    return raw.strip().lower() != "false"
+
+
+def short_url_for(base_url: str, slug: str, include_prefix: bool = True) -> str:
+    """The short URL to display or encode. `base_url` carries no trailing
+    slash by `normalize_base_url`'s construction, so exactly one slash is
+    added either way."""
+    prefix = REDIRECT_PATH_PREFIX if include_prefix else ""
+    return f"{base_url}{prefix}/{slug}"

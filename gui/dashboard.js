@@ -758,7 +758,7 @@ function renderLinksTable() {
              its own container even at a realistic desktop width with only a
              handful of rows. Copy/View still use the full shortUrl below;
              only the displayed chip text drops the redundant prefix. -->
-        <span class="slug-chip" title="${escapeHtml(shortUrl)}">/r/${escapeHtml(link.slug)}</span>
+        <span class="slug-chip" title="${escapeHtml(shortUrl)}">${redirectPathPrefix()}/${escapeHtml(link.slug)}</span>
         ${link.custom ? '<span class="slug-kind-badge">Custom</span>' : ""}
         ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
         ${(link.tags ?? []).map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")}

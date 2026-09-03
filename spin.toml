@@ -21,6 +21,15 @@ log_debug_token = { default = "", secret = true }
 # waits, so "is the new build live yet?" was otherwise unanswerable without a
 # behavioural probe. Default "unknown" means nobody set it.
 app_version = { default = "unknown" }
+# Display/encoding only — the app ALWAYS serves /r/{slug} on the wire, in every
+# environment, whatever this is set to. Set it to "false" when an edge property
+# (e.g. an Akamai property) rewrites https://host/{slug} -> /r/{slug} in front
+# of this app, so every short URL the GUI copies, exports or encodes into a QR
+# code matches what an end user actually types. ONE GLOBAL SETTING, deliberately
+# not per-domain in public_base_urls — see CLAUDE.md. Anything other than the
+# literal "false" means include the prefix, so a typo can never silently strip
+# /r/ from every copied and printed URL.
+include_redirect_prefix = { default = "true" }
 
 [[trigger.http]]
 route = "/r/..."
@@ -55,6 +64,7 @@ public_base_urls = "{{ public_base_urls }}"
 log_level = "{{ log_level }}"
 log_debug_token = "{{ log_debug_token }}"
 app_version = "{{ app_version }}"
+include_redirect_prefix = "{{ include_redirect_prefix }}"
 [component.api.build]
 command = "uv run componentize-py -w spin:up/http-trigger@4.0.0 componentize app -o app.wasm"
 workdir = "api"

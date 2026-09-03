@@ -91,6 +91,21 @@ async def _app_version_value() -> str:
     return _app_version
 
 
+# Cached like _app_version above, for the same reason: a Spin variable cannot
+# change without a redeploy or a restart. None means "not yet read"; False is a
+# legitimate value, so the sentinel is checked with `is None`, never falsiness.
+_include_redirect_prefix: bool | None = None
+
+
+async def _include_redirect_prefix_value() -> bool:
+    global _include_redirect_prefix
+    if _include_redirect_prefix is None:
+        _include_redirect_prefix = domains.parse_include_redirect_prefix(
+            await variables.get("include_redirect_prefix")
+        )
+    return _include_redirect_prefix
+
+
 async def _kv_keys(store) -> list[str]:
     """Drain the (stream, future) pair spin:key-value/key-value@3.0.0's
     get-keys returns into a plain list. Isolated here so backup.py can take a
@@ -327,6 +342,7 @@ class HttpHandler(Handler):
         await auth.ensure_bootstrap_admin(users_store, admin_username, admin_password)
         cookie_secure = await _cookie_secure()
         configured_domains = domains.parse_base_urls(await variables.get("public_base_urls"))
+        include_redirect_prefix = await _include_redirect_prefix_value()
 
         if path == "/api/auth/login" and method == "POST":
             return await self._login(users_store, request, cookie_secure)
@@ -348,6 +364,7 @@ class HttpHandler(Handler):
                 "permissions": result.permissions,
                 "assigned_domains": result.assigned_domains,
                 "domains": domains.visible_base_urls(result.assigned_domains, configured_domains),
+                "include_redirect_prefix": include_redirect_prefix,
             })
 
         if path == "/api/links" and method in ("GET", "POST"):
@@ -406,7 +423,7 @@ class HttpHandler(Handler):
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await qr.handle_qr(links_store, result, slug, query, configured_domains)
+            return await qr.handle_qr(links_store, result, slug, query, configured_domains, include_redirect_prefix)
 
         if path.startswith("/api/links/") and method in ("GET", "PATCH", "DELETE"):
             slug = path.removeprefix("/api/links/")

@@ -259,7 +259,7 @@ function statusBadge(link) {
 // inside a row that already has its own View action, and nesting a link there
 // would give the row two competing targets.
 function slugChip(slug, { linked = false, title = null } = {}) {
-  const label = `/r/${escapeHtml(slug)}`;
+  const label = `${redirectPathPrefix()}/${escapeHtml(slug)}`;
   const attrs = title ? ` title="${escapeHtml(title)}"` : "";
   const chip = `<span class="slug-chip"${attrs}>${label}</span>`;
   return linked
@@ -405,6 +405,23 @@ const SS_DOMAIN_KEY = "ss-domain";
 let availableDomains = [];
 const domainChangeListeners = [];
 
+// Display/encoding only. The app always serves /r/{slug}; this decides whether
+// a URL we *show, copy, export or encode* includes that segment — false when an
+// edge property rewrites /{slug} -> /r/{slug} in front of the app.
+// Set by initHeader() from /auth/me, before any page can build a URL or a chip.
+// Defaults to true and stays true if /auth/me fails or omits the field (an
+// older API build), matching getSelectedDomain()'s degrade-to-today's-behavior
+// rule — a wrong `true` shows a longer URL that still works, a wrong `false`
+// shows one that does not.
+let includeRedirectPrefix = true;
+
+// The only place `/r` is spelled in URL or label construction anywhere in
+// gui/. A hoisted function declaration, so slugChip (defined earlier in this
+// file) may call it even though it's defined here.
+function redirectPathPrefix() {
+  return includeRedirectPrefix ? "/r" : "";
+}
+
 // localStorage access is wrapped in try/catch on both read and write, mirroring
 // theme-init.js — Safari private mode and blocked-storage configurations throw
 // on *access*, not just on write.
@@ -440,7 +457,7 @@ function getSelectedDomain() {
 // this is what lets a Copy button keep working across a domain change
 // without the caller re-registering its listener.
 function shortUrlFor(slug) {
-  return `${getSelectedDomain()}/r/${slug}`;
+  return `${getSelectedDomain()}${redirectPathPrefix()}/${slug}`;
 }
 
 function onDomainChange(fn) {
@@ -570,6 +587,10 @@ async function initHeader({
     if (canManageUsers && !onAdminHome) {
       document.getElementById("admin-link").hidden = false;
     }
+    // `!== false` rather than `=== true`: an absent field (an older api build,
+    // or a response shape change) must mean "include", the exact mirror of the
+    // server's `!= "false"` parse in domains.parse_include_redirect_prefix.
+    includeRedirectPrefix = result.data.include_redirect_prefix !== false;
     // Called here, after the /auth/me await, rather than eagerly like
     // renderThemeToggle — the domain list comes from this response.
     renderDomainSelector(document.getElementById("domain-control"), result.data.domains);
