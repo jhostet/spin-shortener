@@ -365,6 +365,13 @@ class HttpHandler(Handler):
                 "assigned_domains": result.assigned_domains,
                 "domains": domains.visible_base_urls(result.assigned_domains, configured_domains),
                 "include_redirect_prefix": include_redirect_prefix,
+                # The FULL configured list, not the viewer-filtered "domains"
+                # above — allowed_domains checkbox payloads are full
+                # replacements, so building them from a filtered list would
+                # let a user assigned one domain silently strip every other
+                # domain from a link's restriction on save
+                # (docs/plans/per-link-domain-restriction.md).
+                "all_domains": configured_domains,
             })
 
         if path == "/api/links" and method in ("GET", "POST"):
@@ -373,19 +380,19 @@ class HttpHandler(Handler):
                 return result
             if method == "GET":
                 return await links.handle_list(links_store, result, get_many, list_keys)
-            return await links.handle_create(links_store, result, request, write)
+            return await links.handle_create(links_store, result, request, configured_domains, write)
 
         if path == "/api/links/bulk" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await bulk.handle_bulk_create(links_store, result, request, get_many, write)
+            return await bulk.handle_bulk_create(links_store, result, request, configured_domains, get_many, write)
 
         if path == "/api/links/bulk-action" and method == "POST":
             result = await _require_session(users_store, request)
             if isinstance(result, Response):
                 return result
-            return await bulk.handle_bulk_action(links_store, users_store, result, request, get_many, write)
+            return await bulk.handle_bulk_action(links_store, users_store, result, request, configured_domains, get_many, write)
 
         if path.startswith("/api/links/") and path.endswith("/password") and method == "POST":
             slug = path.removeprefix("/api/links/").removesuffix("/password")
@@ -435,7 +442,7 @@ class HttpHandler(Handler):
             if method == "GET":
                 return await links.handle_get(links_store, result, slug)
             if method == "PATCH":
-                return await links.handle_update(links_store, result, slug, request, write)
+                return await links.handle_update(links_store, result, slug, request, configured_domains, write)
             # Inline analytics purge (docs/plans/inline-analytics-purge-on-delete.md):
             # single-link delete purges the deleted slug's analytics keys in
             # the same request, unlike bulk delete (api/bulk.py), which

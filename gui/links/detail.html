@@ -20,6 +20,8 @@
         <a id="detail-edit-link" role="button" class="outline" hidden>Edit</a>
       </div>
     </div>
+    <!-- Hidden for an unrestricted link (docs/plans/per-link-domain-restriction.md). -->
+    <p id="works-on-line" hidden><strong>Works on:</strong> <span id="works-on-hosts"></span></p>
     <p id="page-error" class="form-error" role="alert"></p>
     <!-- The way out of a dead end. Revealed only when the page has nothing to
          show (no such link, or no slug at all) — states reached from a
@@ -46,11 +48,18 @@
 
       <article id="qr-section">
         <h2>QR code</h2>
-        <img id="qr-preview" alt="QR code for this link" width="200" height="200" />
-        <p>
-          <a id="qr-svg-download" role="button" class="outline" download>Download SVG</a>
-          <a id="qr-png-download" role="button" class="outline" download>Download PNG</a>
-        </p>
+        <!-- Replaces the QR preview/downloads (below) when the selected
+             domain isn't in this link's allowed_domains — otherwise the
+             <img> would just fail silently against the 400
+             base_not_allowed_for_link (docs/plans/per-link-domain-restriction.md). -->
+        <p id="qr-domain-mismatch" role="alert" hidden></p>
+        <div id="qr-content">
+          <img id="qr-preview" alt="QR code for this link" width="200" height="200" />
+          <p>
+            <a id="qr-svg-download" role="button" class="outline" download>Download SVG</a>
+            <a id="qr-png-download" role="button" class="outline" download>Download PNG</a>
+          </p>
+        </div>
       </article>
     </div>
 

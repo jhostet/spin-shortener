@@ -568,7 +568,8 @@ details summary:focus-visible:not([role]) {
  * parent cell applies. */
 .slug-kind-badge,
 .lock-badge,
-.tag-chip {
+.tag-chip,
+.domain-badge {
   display: inline-block;
   margin-left: 0.35em;
   font-family: var(--pico-font-family-sans-serif, sans-serif);
@@ -578,10 +579,13 @@ details summary:focus-visible:not([role]) {
 }
 /* Neutral, not Signal Blue: DESIGN.md reserves that accent for hover
  * states on nav/buttons/links — a resting-fill use on a static status
- * label was a rule violation (and fell short of AA text contrast). */
+ * label was a rule violation (and fell short of AA text contrast).
+ * .domain-badge (docs/plans/per-link-domain-restriction.md) joins this
+ * rule rather than getting its own token, for the same reason. */
 .slug-kind-badge,
 .lock-badge,
-.tag-chip {
+.tag-chip,
+.domain-badge {
   color: var(--ss-slate-500);
 }
 

@@ -190,8 +190,22 @@ func emitLogLine(r *http.Request, status int, dur time.Duration, collector *link
 	if slug := r.PathValue("slug"); slug != "" {
 		fields = append(fields, linkgate.Field{Key: "slug", Value: linkgate.SanitizeSlugForLog(slug)})
 	}
+	fields = append(fields, linkgate.Field{Key: "host", Value: linkgate.SanitizeHostForLog(rawRequestHost(r))})
 	fields = append(fields, linkgate.Field{Key: "status", Value: strconv.Itoa(status)})
 	fmt.Fprintln(os.Stderr, linkgate.RenderLogLine(fields, dur, collector))
+}
+
+// rawRequestHost returns the request's authority as the runtime supplied it,
+// unnormalized. r.Host is checked first (free, and correct if a future SDK
+// starts populating it from the WASI authority) and is "" today, because
+// spin-go-sdk builds the request from a RELATIVE path — see
+// convertor_incoming_request.go. The header is the real source: the SDK
+// copies every WASI field verbatim, Host included.
+func rawRequestHost(r *http.Request) string {
+	if r.Host != "" {
+		return r.Host
+	}
+	return r.Header.Get("Host")
 }
 
 // recordingWriter forwards Header/Write immediately (no buffering —
@@ -320,7 +334,11 @@ func handleRedirectGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	l, disp, resolveErr := linkgate.Resolve(store, slug, time.Now())
+	host := rawRequestHost(r)
+	if host == "" {
+		emitHostUnresolvedLine()
+	}
+	l, disp, resolveErr := linkgate.Resolve(store, slug, time.Now(), host)
 	switch disp {
 	case linkgate.DispositionRedirect:
 		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
@@ -353,7 +371,11 @@ func handleRedirectPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	l, disp, resolveErr := linkgate.Resolve(store, slug, time.Now())
+	host := rawRequestHost(r)
+	if host == "" {
+		emitHostUnresolvedLine()
+	}
+	l, disp, resolveErr := linkgate.Resolve(store, slug, time.Now(), host)
 	switch disp {
 	case linkgate.DispositionRedirect:
 		sendRedirectThenRecord(w, slug, l.TargetURL, collector)
@@ -636,6 +658,20 @@ func emitFailureLine(op, ns, slug string, err error) {
 // a shared link for as long as the instance lives.
 func emitRecordUnreadableLine(slug string, err error) {
 	line, dedupKey := linkgate.RecordUnreadableLine(slug, err)
+	if !shouldEmitFailureLine(dedupKey) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, line)
+}
+
+// emitHostUnresolvedLine writes one ev=host_unresolved line when the runtime
+// gave this component no host to match a domain restriction against —
+// deduplicated per Wasm instance on the fixed literal dedup key, so at most
+// one such line is ever emitted per instance (docs/plans/per-link-domain-restriction.md).
+// Unconditional — independent of log_level and X-SS-Debug, like every other
+// ev= line.
+func emitHostUnresolvedLine() {
+	line, dedupKey := linkgate.HostUnresolvedLine()
 	if !shouldEmitFailureLine(dedupKey) {
 		return
 	}

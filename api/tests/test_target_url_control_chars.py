@@ -58,6 +58,9 @@ def _bulk_action_request(payload):
     return Request(method="POST", uri="/api/links/bulk-action", headers={}, body=json.dumps(payload).encode("utf-8"))
 
 
+CONFIGURED_DOMAINS = ["https://trrk.io", "http://localhost:3000"]
+
+
 # Payloads for the JSON-body paths (create/update/repoint), where CRLF and LF
 # arrive intact via JSON escape sequences. Authority-position CRLF matters too:
 # urlparse strips it from its parsed view, so it would PASS the parser and
@@ -89,7 +92,7 @@ async def test_create_rejects_control_char_target_and_writes_nothing(target):
     store = FakeStore()
     before = dict(store._data)
 
-    resp = await links.handle_create(store, _principal(), _links_request({"target_url": target}))
+    resp = await links.handle_create(store, _principal(), _links_request({"target_url": target}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_target_url"
 
@@ -100,13 +103,14 @@ async def test_create_rejects_control_char_target_and_writes_nothing(target):
 @pytest.mark.parametrize("target", JSON_BAD_TARGETS)
 async def test_update_rejects_control_char_target_and_writes_nothing(target):
     store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}))
+    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}), CONFIGURED_DOMAINS)
     slug = json.loads(create_resp.body)["slug"]
     before = dict(store._data)
 
     resp = await links.handle_update(
         store, _principal(), slug,
         Request(method="PATCH", uri=f"/api/links/{slug}", headers={}, body=json.dumps({"target_url": target}).encode("utf-8")),
+        CONFIGURED_DOMAINS,
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_target_url"
@@ -123,7 +127,7 @@ async def test_bulk_create_rejects_control_char_target_and_writes_nothing(target
     text = f"good-one,{OK_URL}\nbad-one,{target}\n"
     resp = await bulk.handle_bulk_create(
         store, _principal(permissions=["links.create_custom_slug"]), _bulk_request({"text": text}),
-        fake_get_many, kvretry.direct,
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct,
     )
     assert resp.status == 400
     body = json.loads(resp.body)
@@ -138,14 +142,14 @@ async def test_bulk_create_rejects_control_char_target_and_writes_nothing(target
 async def test_bulk_repoint_rejects_control_char_target_and_writes_nothing(target):
     store = FakeStore()
     users_store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}))
+    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}), CONFIGURED_DOMAINS)
     slug = json.loads(create_resp.body)["slug"]
     before = dict(store._data)
 
     resp = await bulk.handle_bulk_action(
         store, users_store, _principal(),
         _bulk_action_request({"slugs": [slug], "action": "repoint", "target_url": target}),
-        fake_get_many, kvretry.direct,
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct,
     )
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_target_url"

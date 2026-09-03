@@ -16,7 +16,10 @@ def _create_request(payload):
 
 
 async def _make_link(links_store, owner="alice"):
-    created = await links.handle_create(links_store, _principal(username=owner), _create_request({"target_url": "https://example.com/x"}))
+    created = await links.handle_create(
+        links_store, _principal(username=owner), _create_request({"target_url": "https://example.com/x"}),
+        ["http://localhost:3000"],
+    )
     return json.loads(created.body)["slug"]
 
 

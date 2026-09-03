@@ -52,6 +52,13 @@
             <input id="link-tags" name="tags" type="text" class="tag-input-buffer" list="tag-suggestions" placeholder="Add a tag&hellip;" />
           </div>
           <p id="link-tags-note" class="form-note" role="status" hidden></p>
+
+          <!-- Hidden below 2 configured domains — a one-domain deployment has
+               nothing to restrict against. Filled from JS with one checkbox
+               per allConfiguredDomains entry (docs/plans/per-link-domain-restriction.md). -->
+          <fieldset id="allowed-domains-fieldset" hidden>
+            <legend>Domains this link works on (none checked = all domains)</legend>
+          </fieldset>
         </details>
         <datalist id="tag-suggestions"></datalist>
 
@@ -183,6 +190,18 @@
           <select id="bulk-owner-select" aria-label="Reassign selected links to"></select>
           <button type="button" id="bulk-reassign-btn" class="outline">Reassign</button>
         </div>
+        <!-- Hidden below 2 configured domains — same rule as the create
+             form's fieldset. Filled from JS with one checkbox per configured
+             domain (docs/plans/per-link-domain-restriction.md). -->
+        <span id="bulk-domain-controls" hidden>
+          <fieldset id="bulk-domain-checkboxes">
+            <legend class="visually-hidden">Domains to restrict selected links to</legend>
+          </fieldset>
+          <div role="group">
+            <button type="button" id="bulk-restrict-btn" class="outline">Restrict</button>
+            <button type="button" id="bulk-allow-all-domains-btn" class="outline">Allow all domains</button>
+          </div>
+        </span>
       </div>
       <p id="links-success" class="form-success" aria-live="polite" hidden></p>
       <figure id="links-figure">

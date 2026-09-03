@@ -63,6 +63,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     carol = _principal("carol", permissions=["links.create_custom_slug"])
     created = await links.handle_create(
         links_store, carol, _links_request({"target_url": "https://internal.example.com/carols-secret", "custom_slug": "carol-private"}),
+        CONFIGURED_DOMAINS,
     )
     assert created.status == 201
 
@@ -74,7 +75,8 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     # The link is reassigned to dave through the bulk tool.
     await _make_user(users_store, "dave", password="davespassword")
     reassign = await bulk.handle_bulk_action(
-        links_store, users_store, admin, _action_request({"slugs": ["carol-private"], "action": "reassign", "owner": "dave"}), fake_get_many, kvretry.direct)
+        links_store, users_store, admin, _action_request({"slugs": ["carol-private"], "action": "reassign", "owner": "dave"}),
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert reassign.status == 200
 
     # carol is now deletable.
@@ -90,7 +92,7 @@ async def test_reported_sequence_inheritance_no_longer_happens():
     assert json.loads(listing.body)["links"] == []
 
     # The new carol cannot edit the old carol-private link.
-    update = await links.handle_update(links_store, new_carol, "carol-private", _update_request({"target_url": "https://attacker.example.com/"}))
+    update = await links.handle_update(links_store, new_carol, "carol-private", _update_request({"target_url": "https://attacker.example.com/"}), CONFIGURED_DOMAINS)
     assert update.status == 403
 
     # The record's target_url is unchanged.

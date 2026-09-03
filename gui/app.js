@@ -197,6 +197,8 @@ const ERROR_MESSAGES = {
   unknown_owner: "That user doesn't exist — pick someone from the list.",
   user_owns_links: "That user still owns links — reassign or delete them first.",
   destination_not_allowed: "That destination isn't allowed by this site's URL policy.",
+  invalid_allowed_domains: "One or more selected domains aren't valid — check which ones are still configured.",
+  base_not_allowed_for_link: "This link doesn't work on that domain — switch domains to get its QR code.",
 };
 
 // `overrides` lets one call site's copy win over the shared map for a code
@@ -405,6 +407,27 @@ const SS_DOMAIN_KEY = "ss-domain";
 let availableDomains = [];
 const domainChangeListeners = [];
 
+// The FULL configured domain list (docs/plans/per-link-domain-restriction.md)
+// — unlike availableDomains (viewer-filtered by assigned_domains), this is
+// every domain the deployment has configured, because a link's
+// allowed_domains checkbox payload is a full replacement: building it from a
+// filtered list would let a user assigned one domain silently strip every
+// other domain from a link's restriction on save. Set by initHeader() from
+// /auth/me's all_domains field, before any page can build a checkbox list.
+let allConfiguredDomains = [];
+
+// The bare host for a full base URL, e.g. "https://trrk.io" -> "trrk.io".
+// Falls back to the raw string on a malformed entry (server-validated, so
+// this shouldn't happen) rather than an empty label — the same fallback
+// shape renderDomainSelector's own option-text helper already uses.
+function hostOf(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
+}
+
 // Display/encoding only. The app always serves /r/{slug}; this decides whether
 // a URL we *show, copy, export or encode* includes that segment — false when an
 // edge property rewrites /{slug} -> /r/{slug} in front of the app.
@@ -591,6 +614,7 @@ async function initHeader({
     // or a response shape change) must mean "include", the exact mirror of the
     // server's `!= "false"` parse in domains.parse_include_redirect_prefix.
     includeRedirectPrefix = result.data.include_redirect_prefix !== false;
+    allConfiguredDomains = result.data.all_domains || [];
     // Called here, after the /auth/me await, rather than eagerly like
     // renderThemeToggle — the domain list comes from this response.
     renderDomainSelector(document.getElementById("domain-control"), result.data.domains);

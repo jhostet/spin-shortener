@@ -173,3 +173,114 @@ def test_short_url_for_exactly_one_slash_after_scheme_either_way():
     without_prefix = domains.short_url_for("https://go.example.com", "abc", False)
     assert "//" not in with_prefix[len("https://") :]
     assert "//" not in without_prefix[len("https://") :]
+
+
+# --- normalize_allowed_domains ---
+
+CONFIGURED = ["https://trrk.io", "http://localhost:3000"]
+
+
+def test_normalize_allowed_domains_none_is_unrestricted():
+    assert domains.normalize_allowed_domains(None, CONFIGURED) == ([], None)
+
+
+def test_normalize_allowed_domains_empty_list_is_unrestricted():
+    assert domains.normalize_allowed_domains([], CONFIGURED) == ([], None)
+
+
+def test_normalize_allowed_domains_non_list_is_invalid():
+    assert domains.normalize_allowed_domains("https://trrk.io", CONFIGURED) == (
+        None,
+        "invalid_allowed_domains",
+    )
+
+
+def test_normalize_allowed_domains_non_string_member_is_invalid():
+    assert domains.normalize_allowed_domains([123], CONFIGURED) == (None, "invalid_allowed_domains")
+
+
+def test_normalize_allowed_domains_unnormalizable_member_is_invalid():
+    assert domains.normalize_allowed_domains(["not-a-url"], CONFIGURED) == (
+        None,
+        "invalid_allowed_domains",
+    )
+
+
+def test_normalize_allowed_domains_unconfigured_member_is_invalid():
+    result = domains.normalize_allowed_domains(["https://not-configured.example"], CONFIGURED)
+    assert result == (None, "invalid_allowed_domains")
+
+
+def test_normalize_allowed_domains_canonicalizes_case_and_trailing_slash():
+    result = domains.normalize_allowed_domains(["HTTPS://TRRK.IO/"], CONFIGURED)
+    assert result == (["https://trrk.io"], None)
+
+
+def test_normalize_allowed_domains_output_in_configured_order():
+    result = domains.normalize_allowed_domains(
+        ["http://localhost:3000", "https://trrk.io"], CONFIGURED
+    )
+    assert result == (["https://trrk.io", "http://localhost:3000"], None)
+
+
+def test_normalize_allowed_domains_deduplicates():
+    result = domains.normalize_allowed_domains(
+        ["https://trrk.io", "https://trrk.io", "HTTPS://TRRK.IO"], CONFIGURED
+    )
+    assert result == (["https://trrk.io"], None)
+
+
+def test_normalize_allowed_domains_also_allowed_retained_when_resubmitted():
+    also_allowed = ["https://retired.example"]
+    result = domains.normalize_allowed_domains(
+        ["https://trrk.io", "https://retired.example"], CONFIGURED, also_allowed=also_allowed
+    )
+    assert result == (["https://trrk.io", "https://retired.example"], None)
+
+
+def test_normalize_allowed_domains_also_allowed_dropped_when_omitted():
+    also_allowed = ["https://retired.example"]
+    result = domains.normalize_allowed_domains(["https://trrk.io"], CONFIGURED, also_allowed=also_allowed)
+    assert result == (["https://trrk.io"], None)
+
+
+def test_normalize_allowed_domains_also_allowed_alone_is_still_valid():
+    also_allowed = ["https://retired.example"]
+    result = domains.normalize_allowed_domains(
+        ["https://retired.example"], CONFIGURED, also_allowed=also_allowed
+    )
+    assert result == (["https://retired.example"], None)
+
+
+def test_normalize_allowed_domains_member_not_in_configured_or_also_allowed_is_invalid():
+    also_allowed = ["https://retired.example"]
+    result = domains.normalize_allowed_domains(
+        ["https://not-configured.example"], CONFIGURED, also_allowed=also_allowed
+    )
+    assert result == (None, "invalid_allowed_domains")
+
+
+# --- base_url_allowed_for_link ---
+
+
+def test_base_url_allowed_for_link_none_allowed_is_unrestricted():
+    assert domains.base_url_allowed_for_link("https://trrk.io", None) is True
+
+
+def test_base_url_allowed_for_link_empty_allowed_is_unrestricted():
+    assert domains.base_url_allowed_for_link("https://trrk.io", []) is True
+
+
+def test_base_url_allowed_for_link_matches_on_hostname_ignoring_scheme_and_port():
+    allowed = ["https://trrk.io"]
+    assert domains.base_url_allowed_for_link("http://trrk.io:8080", allowed) is True
+
+
+def test_base_url_allowed_for_link_rejects_a_suffix_that_is_not_a_whole_label():
+    allowed = ["https://trrk.io"]
+    assert domains.base_url_allowed_for_link("https://nottrrk.io", allowed) is False
+
+
+def test_base_url_allowed_for_link_rejects_unlisted_host():
+    allowed = ["https://trrk.io"]
+    assert domains.base_url_allowed_for_link("http://localhost:3000", allowed) is False

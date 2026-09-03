@@ -67,8 +67,18 @@ func (d Disposition) String() string {
 //     Deliberately indistinguishable from "absent": this is a
 //     probing-resistance property (CLAUDE.md, "Security tradeoffs"), not an
 //     oversight, and it must stay that way.
-//  5. A non-empty password_hash — DispositionPrompt.
-//  6. Otherwise — DispositionRedirect.
+//  5. The request's host is not in the link's allowed_domains (empty/nil
+//     allowed_domains means unrestricted and always passes) —
+//     DispositionNotFound. Position is LOAD-BEARING, not incidental: this
+//     check runs AFTER the window check and BEFORE the password check, so a
+//     restricted link on the wrong domain returns 404, never a password
+//     prompt. Ordered the other way, the same link would answer with a
+//     prompt on a domain it does not serve — disclosing both that the link
+//     exists and that it is protected, on a domain it does not serve. Now a
+//     FOURTH member of "deliberately indistinguishable from absent"
+//     (docs/plans/per-link-domain-restriction.md).
+//  6. A non-empty password_hash — DispositionPrompt.
+//  7. Otherwise — DispositionRedirect.
 //
 // Deliberately ONE KV data operation, not two. The Exists probe this used to
 // do ahead of the Get was pure overhead: the SDK's Get returns
@@ -119,7 +129,7 @@ func (d Disposition) String() string {
 // ONLY place in the application that says why a record will not parse:
 // api/consistency.py's unreadable_value finding carries {store, key} and no
 // reason at all.
-func Resolve(store KVStore, slug string, now time.Time) (Link, Disposition, error) {
+func Resolve(store KVStore, slug string, now time.Time, rawHost string) (Link, Disposition, error) {
 	raw, err := store.Get(LinkKey(slug))
 	if err != nil {
 		return Link{}, DispositionUnavailable, err
@@ -137,6 +147,9 @@ func Resolve(store KVStore, slug string, now time.Time) (Link, Disposition, erro
 		return l, DispositionNotFound, nil
 	}
 	if !IsWithinWindow(l.StartAt, l.EndAt, now) {
+		return l, DispositionNotFound, nil
+	}
+	if !HostAllowed(l.AllowedDomains, rawHost) {
 		return l, DispositionNotFound, nil
 	}
 

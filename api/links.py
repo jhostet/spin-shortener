@@ -9,6 +9,7 @@ import string
 from urllib.parse import urlparse
 
 import auth
+import domains
 import kvretry
 import tags
 import urlpolicy
@@ -240,6 +241,10 @@ def public_link(record: dict) -> dict:
     public = {k: v for k, v in record.items() if k != "password_hash"}
     public["password_protected"] = bool(record.get("password_hash"))
     public["tags"] = record.get("tags", [])
+    # allowed_domains always emits as a list, absent/None/[] all meaning
+    # "unrestricted" (docs/plans/per-link-domain-restriction.md) — the same
+    # "carry a list, never sometimes omit the key" shape tags already has.
+    public["allowed_domains"] = record.get("allowed_domains") or []
     return public
 
 
@@ -262,7 +267,7 @@ def can_edit(principal: Principal, record: dict) -> bool:
     return record["owner"] == principal.username or principal.has_permission("links.edit_all")
 
 
-async def handle_create(store, principal: Principal, request, write=kvretry.direct):
+async def handle_create(store, principal: Principal, request, configured_domains: list[str], write=kvretry.direct):
     try:
         payload = json.loads(request.body or b"{}")
     except json.JSONDecodeError:
@@ -317,6 +322,12 @@ async def handle_create(store, principal: Principal, request, write=kvretry.dire
     if tag_error:
         return json_response(400, tag_error)
 
+    allowed_domains_result, allowed_domains_error = domains.normalize_allowed_domains(
+        payload.get("allowed_domains"), configured_domains
+    )
+    if allowed_domains_error:
+        return json_response(400, {"error": allowed_domains_error})
+
     now = iso_now()
     record = {
         "slug": slug,
@@ -328,6 +339,7 @@ async def handle_create(store, principal: Principal, request, write=kvretry.dire
         "start_at": start_at,
         "end_at": end_at,
         "tags": tag_list,
+        "allowed_domains": allowed_domains_result,
         "created_at": now,
         "updated_at": now,
     }
@@ -413,10 +425,12 @@ async def handle_get(store, principal: Principal, slug: str):
     return json_response(200, public_link(record))
 
 
-UPDATABLE_FIELDS = {"target_url", "status", "start_at", "end_at", "tags"}
+UPDATABLE_FIELDS = {"target_url", "status", "start_at", "end_at", "tags", "allowed_domains"}
 
 
-async def handle_update(store, principal: Principal, slug: str, request, write=kvretry.direct):
+async def handle_update(
+    store, principal: Principal, slug: str, request, configured_domains: list[str], write=kvretry.direct
+):
     record = await get_link(store, slug)
     if record is None:
         return json_response(404, {"error": "not_found"})
@@ -480,6 +494,22 @@ async def handle_update(store, principal: Principal, slug: str, request, write=k
         if tag_error:
             return json_response(400, tag_error)
         record["tags"] = tag_list
+
+    # Key-presence decides, exactly like start_at/end_at above: absent leaves
+    # the stored value untouched, a list replaces wholesale, null or []
+    # clears. also_allowed lets a stored-but-no-longer-configured entry stay
+    # valid on resubmission, so an operator retiring a domain from
+    # public_base_urls can never make an existing restricted record
+    # unsaveable — but omitting the field entirely never silently widens it.
+    if "allowed_domains" in payload:
+        allowed_domains_result, allowed_domains_error = domains.normalize_allowed_domains(
+            payload["allowed_domains"],
+            configured_domains,
+            also_allowed=record.get("allowed_domains") or [],
+        )
+        if allowed_domains_error:
+            return json_response(400, {"error": allowed_domains_error})
+        record["allowed_domains"] = allowed_domains_result
 
     record["updated_at"] = iso_now()
     # Single write, no index — retry only (docs/plans/write-throttle-resilience.md).

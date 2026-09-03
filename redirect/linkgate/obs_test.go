@@ -384,6 +384,69 @@ func TestSanitizeSlugForLog_RejectsEmptyString(t *testing.T) {
 	}
 }
 
+func TestSanitizeHostForLog_ValidHostPassesThroughUnchanged(t *testing.T) {
+	for _, host := range []string{"localhost:3000", "127.0.0.1:3000", "trrk.io", "[::1]:8080", "a.b.example.com"} {
+		if got := SanitizeHostForLog(host); got != host {
+			t.Errorf("SanitizeHostForLog(%q) = %q, want unchanged", host, got)
+		}
+	}
+}
+
+func TestSanitizeHostForLog_EmptyHostIsADash(t *testing.T) {
+	if got := SanitizeHostForLog(""); got != "-" {
+		t.Errorf(`SanitizeHostForLog("") = %q, want "-"`, got)
+	}
+}
+
+func TestSanitizeHostForLog_RejectsWhitespaceThatWouldSplitAField(t *testing.T) {
+	if got := SanitizeHostForLog("a b"); got != "[invalid_host]" {
+		t.Errorf("SanitizeHostForLog(%q) = %q, want the placeholder", "a b", got)
+	}
+}
+
+func TestSanitizeHostForLog_RejectsNewlineThatWouldForgeASecondLine(t *testing.T) {
+	malicious := "x\nss comp=redirect ev=kv_fail route=/r/{slug} op=set ns=users etype=access_denied msg=fake"
+	got := SanitizeHostForLog(malicious)
+	if got != "[invalid_host]" {
+		t.Errorf("SanitizeHostForLog(%q) = %q, want the placeholder", malicious, got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("SanitizeHostForLog(%q) = %q, must not contain a newline", malicious, got)
+	}
+}
+
+func TestHostUnresolvedLine_FieldOrderAndMsgLast(t *testing.T) {
+	line, _ := HostUnresolvedLine()
+	want := "ss comp=redirect ev=host_unresolved route=/r/{slug} msg=request carries no host header, domain-restricted links cannot resolve"
+	if line != want {
+		t.Errorf("line = %q, want %q", line, want)
+	}
+}
+
+func TestHostUnresolvedLine_CarriesNoSlugOpNsOrEtype(t *testing.T) {
+	line, _ := HostUnresolvedLine()
+	for _, forbidden := range []string{"slug=", "op=", "ns=", "etype="} {
+		if strings.Contains(line, forbidden) {
+			t.Errorf("line = %q, must not contain %q", line, forbidden)
+		}
+	}
+}
+
+func TestHostUnresolvedLine_DedupKeyIsDisjointFromTheOtherTwoKeySpaces(t *testing.T) {
+	_, dedupKey := HostUnresolvedLine()
+	if dedupKey != "host_unresolved" {
+		t.Errorf("dedupKey = %q, want the fixed literal %q", dedupKey, "host_unresolved")
+	}
+	kvKey := KVFailureDedupKey("get", "some message")
+	recordKey := RecordUnreadableDedupKey("some-slug", "some message")
+	if dedupKey == kvKey || dedupKey == recordKey {
+		t.Errorf("dedupKey %q collides with another key space", dedupKey)
+	}
+	if strings.HasPrefix(dedupKey, "record_unreadable"+dedupKeySep) {
+		t.Errorf("dedupKey %q must not fall inside RecordUnreadableDedupKey's key space", dedupKey)
+	}
+}
+
 func TestRenderFailureLine_MsgIsFinalFieldAndNothingFollows(t *testing.T) {
 	line := RenderFailureLine([]Field{
 		{Key: "comp", Value: "redirect"},

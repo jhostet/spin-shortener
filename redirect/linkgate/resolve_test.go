@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -19,11 +20,11 @@ func TestResolve_ZeroValueOfDispositionIsUnavailable(t *testing.T) {
 
 func TestResolve_GetErrorIsUnavailable(t *testing.T) {
 	store := fakeStore{getErr: errors.New("too many requests")}
-	l, disp, _ := Resolve(store, "abc123", time.Now())
+	l, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionUnavailable {
 		t.Errorf("disp = %v, want DispositionUnavailable", disp)
 	}
-	if l != (Link{}) {
+	if !reflect.DeepEqual(l, Link{}) {
 		t.Errorf("l = %+v, want zero value", l)
 	}
 }
@@ -35,7 +36,7 @@ func TestResolve_GetErrorIsUnavailable(t *testing.T) {
 func TestResolve_GetErrorIsReturnedUnchanged(t *testing.T) {
 	wantErr := errors.New("too many requests")
 	store := fakeStore{getErr: wantErr}
-	_, disp, err := Resolve(store, "abc123", time.Now())
+	_, disp, err := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionUnavailable {
 		t.Errorf("disp = %v, want DispositionUnavailable", disp)
 	}
@@ -65,7 +66,7 @@ func TestResolve_ErrorIsNilForNotFoundRedirectAndPrompt(t *testing.T) {
 	}
 
 	for wantDisp, store := range cases {
-		_, disp, err := Resolve(store, "abc123", now)
+		_, disp, err := Resolve(store, "abc123", now, "")
 		if disp != wantDisp {
 			t.Errorf("disp = %v, want %v", disp, wantDisp)
 		}
@@ -81,7 +82,7 @@ func TestResolve_ErrorIsNilForNotFoundRedirectAndPrompt(t *testing.T) {
 func TestResolve_UnreadableReturnsExactlyTheParseError(t *testing.T) {
 	raw := []byte("not json")
 	store := fakeStore{getResult: raw}
-	_, disp, err := Resolve(store, "abc123", time.Now())
+	_, disp, err := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionUnreadable {
 		t.Fatalf("disp = %v, want DispositionUnreadable", disp)
 	}
@@ -105,7 +106,7 @@ func TestResolve_UnreadableReturnsExactlyTheParseError(t *testing.T) {
 // (docs/plans/disposition-unreadable-logging.md).
 func TestResolve_UnreadableErrorIsUnwrapped(t *testing.T) {
 	store := fakeStore{getResult: []byte("not json")}
-	_, disp, err := Resolve(store, "abc123", time.Now())
+	_, disp, err := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionUnreadable {
 		t.Fatalf("disp = %v, want DispositionUnreadable", disp)
 	}
@@ -121,7 +122,7 @@ func TestResolve_UnreadableErrorIsUnwrapped(t *testing.T) {
 
 func TestResolve_AbsentKeyIsNotFound(t *testing.T) {
 	store := fakeStore{getResult: []byte(""), getErr: nil}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -129,7 +130,7 @@ func TestResolve_AbsentKeyIsNotFound(t *testing.T) {
 
 func TestResolve_UnparseableRecordIsUnreadable(t *testing.T) {
 	store := fakeStore{getResult: []byte("not json")}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionUnreadable {
 		t.Errorf("disp = %v, want DispositionUnreadable", disp)
 	}
@@ -147,7 +148,7 @@ func TestResolve_UnparseableRecordIsUnreadable(t *testing.T) {
 func TestResolve_ControlCharTargetIsUnreadable(t *testing.T) {
 	store := fakeStore{getResult: []byte(
 		`{"slug":"abc","target_url":"https://example.com/\r\nX-Evil: yes","status":"active"}`)}
-	_, disp, err := Resolve(store, "abc", time.Now())
+	_, disp, err := Resolve(store, "abc", time.Now(), "")
 	if disp != DispositionUnreadable {
 		t.Errorf("disp = %v, want DispositionUnreadable", disp)
 	}
@@ -161,7 +162,7 @@ func TestResolve_ControlFreeTargetStillRedirects(t *testing.T) {
 	// literal text in the header and must keep resolving.
 	rec := `{"slug":"abc123","target_url":"https://example.com/x%0d%0a","status":"active","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionRedirect {
 		t.Errorf("disp = %v, want DispositionRedirect", disp)
 	}
@@ -170,7 +171,7 @@ func TestResolve_ControlFreeTargetStillRedirects(t *testing.T) {
 func TestResolve_ActiveNoPasswordIsRedirect(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	l, disp, _ := Resolve(store, "abc123", time.Now())
+	l, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionRedirect {
 		t.Errorf("disp = %v, want DispositionRedirect", disp)
 	}
@@ -182,7 +183,7 @@ func TestResolve_ActiveNoPasswordIsRedirect(t *testing.T) {
 func TestResolve_ActiveWithPasswordIsPrompt(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"somehash","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionPrompt {
 		t.Errorf("disp = %v, want DispositionPrompt", disp)
 	}
@@ -191,7 +192,7 @@ func TestResolve_ActiveWithPasswordIsPrompt(t *testing.T) {
 func TestResolve_DisabledIsNotFound(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"disabled","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -200,7 +201,7 @@ func TestResolve_DisabledIsNotFound(t *testing.T) {
 func TestResolve_FutureStartAtIsNotFound(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"2999-01-01T00:00:00Z","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -209,7 +210,7 @@ func TestResolve_FutureStartAtIsNotFound(t *testing.T) {
 func TestResolve_PastEndAtIsNotFound(t *testing.T) {
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"2020-01-01T00:00:00Z"}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
@@ -221,34 +222,92 @@ func TestResolve_UnparseableStartAtIsNotFound(t *testing.T) {
 	// silently ignored.
 	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"not-a-date","end_at":""}`
 	store := fakeStore{getResult: []byte(rec)}
-	_, disp, _ := Resolve(store, "abc123", time.Now())
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
 	if disp != DispositionNotFound {
 		t.Errorf("disp = %v, want DispositionNotFound", disp)
 	}
 }
 
-// TestResolve_AbsentDisabledAndOutOfWindowAreEqualToEachOther is the
-// probing-resistance pin. It is not enough for each case to map to
-// DispositionNotFound independently — they must be indistinguishable from
-// EACH OTHER, so a future change cannot tease them apart for a "better
-// error message" without this test failing.
-func TestResolve_AbsentDisabledAndOutOfWindowAreEqualToEachOther(t *testing.T) {
+// TestResolve_AbsentDisabledOutOfWindowAndWrongDomainAreAllEqual REPLACES
+// TestResolve_AbsentDisabledAndOutOfWindowAreEqualToEachOther, keeping its
+// comment and adding a fourth case: a wrong-domain request against a
+// restricted link. This is the probing-resistance pin. It is not enough for
+// each case to map to DispositionNotFound independently — they must be
+// indistinguishable from EACH OTHER, so a future change cannot tease them
+// apart for a "better error message" without this test failing.
+func TestResolve_AbsentDisabledOutOfWindowAndWrongDomainAreAllEqual(t *testing.T) {
 	now := time.Now()
 
 	absentStore := fakeStore{getResult: []byte("")}
-	_, absentDisp, _ := Resolve(absentStore, "abc123", now)
+	_, absentDisp, _ := Resolve(absentStore, "abc123", now, "")
 
 	disabledRec := `{"slug":"abc123","target_url":"https://example.com","status":"disabled","password_hash":"","start_at":"","end_at":""}`
 	disabledStore := fakeStore{getResult: []byte(disabledRec)}
-	_, disabledDisp, _ := Resolve(disabledStore, "abc123", now)
+	_, disabledDisp, _ := Resolve(disabledStore, "abc123", now, "")
 
 	windowRec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"2020-01-01T00:00:00Z"}`
 	windowStore := fakeStore{getResult: []byte(windowRec)}
-	_, windowDisp, _ := Resolve(windowStore, "abc123", now)
+	_, windowDisp, _ := Resolve(windowStore, "abc123", now, "")
 
-	if absentDisp != disabledDisp || disabledDisp != windowDisp {
-		t.Errorf("absent=%v disabled=%v out-of-window=%v, want all three equal to each other",
-			absentDisp, disabledDisp, windowDisp)
+	domainRec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"","allowed_domains":["https://trrk.io"]}`
+	domainStore := fakeStore{getResult: []byte(domainRec)}
+	_, domainDisp, _ := Resolve(domainStore, "abc123", now, "localhost:3000")
+
+	if absentDisp != disabledDisp || disabledDisp != windowDisp || windowDisp != domainDisp {
+		t.Errorf("absent=%v disabled=%v out-of-window=%v wrong-domain=%v, want all four equal to each other",
+			absentDisp, disabledDisp, windowDisp, domainDisp)
+	}
+}
+
+// TestResolve_PasswordProtectedLinkOnWrongDomainIsNotFound is the pin on the
+// ordering decision: the host check runs BEFORE the password check, so a
+// restricted, password-protected link on a domain it does not serve must be
+// DispositionNotFound, NEVER DispositionPrompt — a prompt would disclose both
+// existence and protection on a domain the link does not serve.
+func TestResolve_PasswordProtectedLinkOnWrongDomainIsNotFound(t *testing.T) {
+	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"somehash","start_at":"","end_at":"","allowed_domains":["https://trrk.io"]}`
+	store := fakeStore{getResult: []byte(rec)}
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "localhost:3000")
+	if disp != DispositionNotFound {
+		t.Errorf("disp = %v, want DispositionNotFound (never DispositionPrompt)", disp)
+	}
+}
+
+// TestResolve_UnrestrictedLinkResolvesWithAnyHostIncludingEmpty is the
+// no-regression pin for every link that exists today: an unrestricted link
+// (no allowed_domains) must keep resolving no matter what host arrives,
+// including no host at all.
+func TestResolve_UnrestrictedLinkResolvesWithAnyHostIncludingEmpty(t *testing.T) {
+	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`
+	for _, host := range []string{"trrk.io", "localhost:3000", "anything.example", ""} {
+		store := fakeStore{getResult: []byte(rec)}
+		_, disp, _ := Resolve(store, "abc123", time.Now(), host)
+		if disp != DispositionRedirect {
+			t.Errorf("host=%q: disp = %v, want DispositionRedirect", host, disp)
+		}
+	}
+}
+
+// TestResolve_RestrictedLinkWithEmptyHostIsNotFound is the fail-closed pin: a
+// restriction that evaporates when the host is unknown is not a restriction.
+func TestResolve_RestrictedLinkWithEmptyHostIsNotFound(t *testing.T) {
+	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"","allowed_domains":["https://trrk.io"]}`
+	store := fakeStore{getResult: []byte(rec)}
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "")
+	if disp != DispositionNotFound {
+		t.Errorf("disp = %v, want DispositionNotFound", disp)
+	}
+}
+
+// TestResolve_RestrictedLinkOnAllowedDomainStillRedirects is the positive
+// counterpart: a restricted link on a host it DOES allow must behave exactly
+// as an unrestricted one would.
+func TestResolve_RestrictedLinkOnAllowedDomainStillRedirects(t *testing.T) {
+	rec := `{"slug":"abc123","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":"","allowed_domains":["https://trrk.io"]}`
+	store := fakeStore{getResult: []byte(rec)}
+	_, disp, _ := Resolve(store, "abc123", time.Now(), "trrk.io")
+	if disp != DispositionRedirect {
+		t.Errorf("disp = %v, want DispositionRedirect", disp)
 	}
 }
 
@@ -257,7 +316,7 @@ func TestResolve_ReadsExactlyLinkKeyOfSlug(t *testing.T) {
 	rec := `{"slug":"my-slug","target_url":"https://example.com","status":"active","password_hash":"","start_at":"","end_at":""}`
 	store := fakeStore{getResult: []byte(rec), getKeyCapture: &capturedKey}
 
-	Resolve(store, "my-slug", time.Now())
+	Resolve(store, "my-slug", time.Now(), "")
 
 	want := LinkKey("my-slug")
 	if capturedKey != want {

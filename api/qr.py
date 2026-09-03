@@ -94,6 +94,19 @@ async def handle_qr(store, principal: Principal, slug: str, query: dict, base_ur
     if base_url is None:
         return json_response(400, {"error": "invalid_base_url"})
 
+    # Refuse to encode a QR for a base URL the link does not resolve on —
+    # zero additional KV operations, since `record` is already fetched above
+    # for the can_view gate. A QR code is printed, handed out and scanned long
+    # after this request, so encoding a domain the link 404s on is the same
+    # unrecallable-artifact harm the ?base= allowlist check already guards
+    # against (docs/plans/per-link-domain-restriction.md).
+    if not domains.base_url_allowed_for_link(base_url, record.get("allowed_domains")):
+        return json_response(400, {
+            "error": "base_not_allowed_for_link",
+            "base": base_url,
+            "allowed_domains": record.get("allowed_domains") or [],
+        })
+
     short_url = domains.short_url_for(base_url, slug, include_redirect_prefix)
     body, content_type, ext = _render(short_url, fmt, size)
 

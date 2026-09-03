@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import auth
+import domains
 import kvretry
 import links
 import tags
@@ -176,7 +177,7 @@ def validate_bulk_rows(
     return errors
 
 
-async def handle_bulk_create(store, principal, request, get_many, write):
+async def handle_bulk_create(store, principal, request, configured_domains, get_many, write):
     if len(request.body or b"") > MAX_BULK_BODY_BYTES:
         return json_response(413, {"error": "body_too_large", "max_bytes": MAX_BULK_BODY_BYTES})
 
@@ -206,6 +207,16 @@ async def handle_bulk_create(store, principal, request, get_many, write):
     tag_list, tag_error = tags.parse_tags(payload.get("tags"))
     if tag_error:
         return json_response(400, tag_error)
+
+    # Batch-level, applied to every link created in this submission — no
+    # per-row allowed_domains, matching the batch-level password/start_at/
+    # end_at precedent. No also_allowed: a brand-new record has no prior
+    # value to retain (docs/plans/per-link-domain-restriction.md).
+    allowed_domains_result, allowed_domains_error = domains.normalize_allowed_domains(
+        payload.get("allowed_domains"), configured_domains
+    )
+    if allowed_domains_error:
+        return json_response(400, {"error": allowed_domains_error})
 
     rows = parse_bulk_text(text)
     if not rows:
@@ -274,6 +285,7 @@ async def handle_bulk_create(store, principal, request, get_many, write):
             "start_at": start_at,
             "end_at": end_at,
             "tags": tag_list,
+            "allowed_domains": allowed_domains_result,
             "created_at": now,
             "updated_at": now,
         }
@@ -345,6 +357,7 @@ class ActionContext:
     has_end: bool = False
     new_start_at: str | None = None
     new_end_at: str | None = None
+    new_allowed_domains: list[str] | None = None
 
 
 def _plan_status(ctx, slug, record):
@@ -386,6 +399,12 @@ def _plan_schedule(ctx, slug, record):
     return PlannedMutation(slug, "set", record)
 
 
+def _plan_restrict(ctx, slug, record):
+    record["allowed_domains"] = ctx.new_allowed_domains
+    record["updated_at"] = ctx.now
+    return PlannedMutation(slug, "set", record)
+
+
 def _plan_delete(ctx, slug, record):
     # No analytics purge, deliberately — CLAUDE.md's "Orphaned analytics purge":
     # 50 slugs x ~95 keys is ~95-123 s against a 30 s handler limit.
@@ -418,6 +437,10 @@ def _window_fields(ctx):
     if ctx.has_end:
         fields["end_at"] = ctx.new_end_at
     return fields
+
+
+def _domain_fields(ctx):
+    return {"allowed_domains": ctx.new_allowed_domains}
 
 
 @dataclass(frozen=True)
@@ -453,6 +476,11 @@ ACTION_SPECS: dict[str, ActionSpec] = {
                            required_permission="users.manage", result_fields=_owner_fields),
     "repoint":  ActionSpec("repoint", _plan_repoint, result_fields=_target_url_fields),
     "schedule": ActionSpec("schedule", _plan_schedule, result_fields=_window_fields),
+    # No new permission (docs/plans/per-link-domain-restriction.md, Trade-offs
+    # #5): restricting is strictly LESS dangerous than disable/repoint, both
+    # gated on per-row can_edit alone, so a links.restrict_domains permission
+    # would give the least dangerous of the three the strongest gate.
+    "restrict": ActionSpec("restrict", _plan_restrict, result_fields=_domain_fields),
 }
 
 # DERIVED, never a literal. This is the structural fix: a name cannot reach the
@@ -485,7 +513,7 @@ async def _apply_mutations(store, write, mutations):
     return applied, None
 
 
-async def handle_bulk_action(store, users_store, principal, request, get_many, write):
+async def handle_bulk_action(store, users_store, principal, request, configured_domains, get_many, write):
     try:
         payload = json.loads(request.body or b"{}")
     except json.JSONDecodeError:
@@ -553,6 +581,15 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
                 "reason": verdict["reason"],
                 "matched_rule": verdict["matched_rule"],
             })
+
+    new_allowed_domains: list[str] | None = None
+    if action == "restrict":
+        allowed_domains_result, allowed_domains_error = domains.normalize_allowed_domains(
+            payload.get("allowed_domains"), configured_domains
+        )
+        if allowed_domains_error:
+            return json_response(400, {"error": allowed_domains_error})
+        new_allowed_domains = allowed_domains_result
 
     has_start = has_end = False
     new_start_at: str | None = None
@@ -623,6 +660,7 @@ async def handle_bulk_action(store, users_store, principal, request, get_many, w
         has_end=has_end,
         new_start_at=new_start_at,
         new_end_at=new_end_at,
+        new_allowed_domains=new_allowed_domains,
     )
 
     # Planning is pure and write-free: every slug's mutation is decided before

@@ -10,16 +10,17 @@ import (
 )
 
 type Link struct {
-	Slug         string `json:"slug"`
-	TargetURL    string `json:"target_url"`
-	Owner        string `json:"owner"`
-	Custom       bool   `json:"custom"`
-	PasswordHash string `json:"password_hash"`
-	Status       string `json:"status"`
-	StartAt      string `json:"start_at"`
-	EndAt        string `json:"end_at"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	Slug           string   `json:"slug"`
+	TargetURL      string   `json:"target_url"`
+	Owner          string   `json:"owner"`
+	Custom         bool     `json:"custom"`
+	PasswordHash   string   `json:"password_hash"`
+	Status         string   `json:"status"`
+	StartAt        string   `json:"start_at"`
+	EndAt          string   `json:"end_at"`
+	AllowedDomains []string `json:"allowed_domains"` // absent/null -> nil, read as unrestricted by HostAllowed
+	CreatedAt      string   `json:"created_at"`
+	UpdatedAt      string   `json:"updated_at"`
 }
 
 // ErrUnsafeTargetURL is what ParseLink returns when a record decodes but its

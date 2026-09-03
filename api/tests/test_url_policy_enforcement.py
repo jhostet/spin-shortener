@@ -80,6 +80,9 @@ def _put_policy_request(payload):
     return Request(method="PUT", uri="/api/admin/url-policy", headers={}, body=json.dumps(payload).encode("utf-8"))
 
 
+CONFIGURED_DOMAINS = ["https://trrk.io", "http://localhost:3000"]
+
+
 async def _save_policy(store, config):
     """Saves the policy THROUGH the real handler (handle_put_policy), not by
     poking urlpolicy.save_policy directly — this is the same path an admin
@@ -94,7 +97,7 @@ async def test_create_rejects_across_both_policy_configs(policy_config):
     await _save_policy(store, policy_config)
     before = dict(store._data)
 
-    resp = await links.handle_create(store, _principal(), _links_request({"target_url": VIOLATING_URL}))
+    resp = await links.handle_create(store, _principal(), _links_request({"target_url": VIOLATING_URL}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "destination_not_allowed"
 
@@ -105,13 +108,13 @@ async def test_create_rejects_across_both_policy_configs(policy_config):
 @pytest.mark.parametrize("policy_config", POLICY_CONFIGS)
 async def test_update_rejects_across_both_policy_configs(policy_config):
     store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}))
+    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}), CONFIGURED_DOMAINS)
     slug = json.loads(create_resp.body)["slug"]
 
     await _save_policy(store, policy_config)
     before = dict(store._data)
 
-    resp = await links.handle_update(store, _principal(), slug, _links_request({"target_url": VIOLATING_URL}))
+    resp = await links.handle_update(store, _principal(), slug, _links_request({"target_url": VIOLATING_URL}), CONFIGURED_DOMAINS)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "destination_not_allowed"
 
@@ -127,7 +130,7 @@ async def test_bulk_create_rejects_across_both_policy_configs(policy_config):
 
     text = f"good-one,{OK_URL}\nbad-one,{VIOLATING_URL}\n"
     resp = await bulk.handle_bulk_create(
-        store, _principal(permissions=["links.create_custom_slug"]), _bulk_request({"text": text}), fake_get_many, kvretry.direct)
+        store, _principal(permissions=["links.create_custom_slug"]), _bulk_request({"text": text}), CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert resp.status == 400
     body = json.loads(resp.body)
     assert any(e["error"] == "destination_not_allowed" for e in body["row_errors"])
@@ -140,7 +143,7 @@ async def test_bulk_create_rejects_across_both_policy_configs(policy_config):
 async def test_bulk_repoint_rejects_across_both_policy_configs(policy_config):
     store = FakeStore()
     users_store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}))
+    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": OK_URL}), CONFIGURED_DOMAINS)
     slug = json.loads(create_resp.body)["slug"]
 
     await _save_policy(store, policy_config)
@@ -149,7 +152,7 @@ async def test_bulk_repoint_rejects_across_both_policy_configs(policy_config):
     resp = await bulk.handle_bulk_action(
         store, users_store, _principal(),
         _bulk_action_request({"slugs": [slug], "action": "repoint", "target_url": VIOLATING_URL}),
-        fake_get_many, kvretry.direct)
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "destination_not_allowed"
 
@@ -166,20 +169,20 @@ async def test_admin_is_not_exempt_from_the_policy(policy_config):
     users_store = FakeStore()
     await _save_policy(store, policy_config)
 
-    create_resp = await links.handle_create(store, _admin(), _links_request({"target_url": VIOLATING_URL}))
+    create_resp = await links.handle_create(store, _admin(), _links_request({"target_url": VIOLATING_URL}), CONFIGURED_DOMAINS)
     assert create_resp.status == 400
     assert json.loads(create_resp.body)["error"] == "destination_not_allowed"
 
-    bulk_resp = await bulk.handle_bulk_create(store, _admin(), _bulk_request({"text": VIOLATING_URL + "\n"}), fake_get_many, kvretry.direct)
+    bulk_resp = await bulk.handle_bulk_create(store, _admin(), _bulk_request({"text": VIOLATING_URL + "\n"}), CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert bulk_resp.status == 400
     assert json.loads(bulk_resp.body)["row_errors"][0]["error"] == "destination_not_allowed"
 
-    ok_create_resp = await links.handle_create(store, _admin(), _links_request({"target_url": OK_URL}))
+    ok_create_resp = await links.handle_create(store, _admin(), _links_request({"target_url": OK_URL}), CONFIGURED_DOMAINS)
     ok_slug = json.loads(ok_create_resp.body)["slug"]
     repoint_resp = await bulk.handle_bulk_action(
         store, users_store, _admin(),
         _bulk_action_request({"slugs": [ok_slug], "action": "repoint", "target_url": VIOLATING_URL}),
-        fake_get_many, kvretry.direct)
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert repoint_resp.status == 400
     assert json.loads(repoint_resp.body)["error"] == "destination_not_allowed"
 
@@ -191,7 +194,7 @@ async def test_legacy_violator_can_still_be_bulk_disabled():
     would now be rejected if resubmitted."""
     store = FakeStore()
     users_store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": VIOLATING_URL}))
+    create_resp = await links.handle_create(store, _principal(), _links_request({"target_url": VIOLATING_URL}), CONFIGURED_DOMAINS)
     slug = json.loads(create_resp.body)["slug"]
 
     await _save_policy(store, {"default_action": "allow", "rules": [{"host": "evil.example", "action": "deny"}]})
@@ -200,6 +203,6 @@ async def test_legacy_violator_can_still_be_bulk_disabled():
         store, users_store, _principal(),
         Request(method="POST", uri="/api/links/bulk-action", headers={}, body=json.dumps({
             "slugs": [slug], "action": "disable",
-        }).encode("utf-8")), fake_get_many, kvretry.direct)
+        }).encode("utf-8")), CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert resp.status == 200
     assert (await links.get_link(store, slug))["status"] == "disabled"

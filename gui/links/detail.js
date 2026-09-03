@@ -1,5 +1,8 @@
 const slug = new URLSearchParams(location.search).get("slug");
 let currentPrincipal = null;
+// Set by loadLinkInfo(), read by applyShortUrl() on every domain change
+// (docs/plans/per-link-domain-restriction.md) — [] means unrestricted.
+let currentAllowedDomains = [];
 
 // Hides every content article and leaves one error line plus a way out.
 //
@@ -51,6 +54,15 @@ async function loadLinkInfo() {
   document.getElementById("start-at").textContent = formatTimestamp(data.start_at);
   document.getElementById("end-at").textContent = formatTimestamp(data.end_at);
 
+  currentAllowedDomains = data.allowed_domains ?? [];
+  const worksOnLine = document.getElementById("works-on-line");
+  if (currentAllowedDomains.length) {
+    document.getElementById("works-on-hosts").textContent = currentAllowedDomains.map(hostOf).join(", ");
+    worksOnLine.hidden = false;
+  } else {
+    worksOnLine.hidden = true;
+  }
+
   // Mirrors the server's own links._can_edit — only show Edit when the
   // viewer is this link's owner, an admin, or has links.edit_all.
   const canEdit = currentPrincipal && (
@@ -74,7 +86,29 @@ function applyShortUrl() {
   document.getElementById("short-link-heading").textContent = shortUrlFor(slug);
   document.getElementById("detail-copy-btn").hidden = false;
 
-  const base = encodeURIComponent(getSelectedDomain());
+  const selectedDomain = getSelectedDomain();
+  const mismatchEl = document.getElementById("qr-domain-mismatch");
+  const contentEl = document.getElementById("qr-content");
+
+  // Mirrors api/domains.base_url_allowed_for_link / linkgate.HostAllowed:
+  // empty/no allowed_domains means unrestricted; otherwise membership by
+  // hostname (docs/plans/per-link-domain-restriction.md). Without this check
+  // the <img> would just fail silently against the API's own
+  // 400 base_not_allowed_for_link refusal.
+  const allowed = !currentAllowedDomains.length || currentAllowedDomains.some(
+    (d) => hostOf(d) === hostOf(selectedDomain)
+  );
+
+  if (!allowed) {
+    mismatchEl.textContent = `This link does not work on ${hostOf(selectedDomain)}. Switch domains in the header to see its QR code.`;
+    mismatchEl.hidden = false;
+    contentEl.hidden = true;
+    return;
+  }
+  mismatchEl.hidden = true;
+  contentEl.hidden = false;
+
+  const base = encodeURIComponent(selectedDomain);
   document.getElementById("qr-preview").src = `/api/links/${slug}/qr?format=png&size=web&base=${base}`;
   document.getElementById("qr-svg-download").href = `/api/links/${slug}/qr?format=svg&size=print&download=1&base=${base}`;
   document.getElementById("qr-png-download").href = `/api/links/${slug}/qr?format=png&size=print&download=1&base=${base}`;

@@ -55,6 +55,42 @@ func TestParseLink_NullFieldsDefaultToZeroValue(t *testing.T) {
 	}
 }
 
+// TestParseLink_AllowedDomainsAbsentOrNullIsNil pins that an absent or
+// explicit-null allowed_domains field unmarshals to a nil slice, which
+// HostAllowed reads as unrestricted — no migration needed for any existing
+// record (docs/plans/per-link-domain-restriction.md).
+func TestParseLink_AllowedDomainsAbsentOrNullIsNil(t *testing.T) {
+	absent := []byte(`{"slug":"abc","target_url":"https://example.com","status":"active"}`)
+	l, err := ParseLink(absent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l.AllowedDomains != nil {
+		t.Errorf("absent allowed_domains: AllowedDomains = %#v, want nil", l.AllowedDomains)
+	}
+
+	explicitNull := []byte(`{"slug":"abc","target_url":"https://example.com","status":"active","allowed_domains":null}`)
+	l2, err := ParseLink(explicitNull)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l2.AllowedDomains != nil {
+		t.Errorf("null allowed_domains: AllowedDomains = %#v, want nil", l2.AllowedDomains)
+	}
+}
+
+// TestParseLink_MalformedAllowedDomainsIsAParseError pins that a shape
+// mismatch (a JSON string where a list belongs) is a genuine
+// *json.UnmarshalTypeError -> DispositionUnreadable -> 500, with no special
+// handling needed: encoding/json already produces this for free.
+func TestParseLink_MalformedAllowedDomainsIsAParseError(t *testing.T) {
+	raw := []byte(`{"slug":"abc","target_url":"https://example.com","status":"active","allowed_domains":"not-a-list"}`)
+	_, err := ParseLink(raw)
+	if err == nil {
+		t.Fatal("expected an error for a malformed allowed_domains field, got nil")
+	}
+}
+
 func TestParseLink_MalformedJSON(t *testing.T) {
 	_, err := ParseLink([]byte(`{not valid json`))
 	if err == nil {

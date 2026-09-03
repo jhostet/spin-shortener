@@ -26,7 +26,65 @@ async function loadMe() {
       const usersResult = await api.get("/users");
       if (usersResult.ok) allUsernames = usersResult.data.users.map((u) => u.username);
     }
+    renderCreateAllowedDomainsFieldset();
+    renderBulkDomainCheckboxes();
   }
+}
+
+// --- Per-link domain restriction (docs/plans/per-link-domain-restriction.md) ---
+//
+// allowed_domains (on a LINK) is NOT assigned_domains (on a USER, gui/admin/
+// users.js) — a link's restriction is enforced server-side on the hot path,
+// so the two checkbox lists deliberately treat a stale (stored-but-no-longer-
+// configured) entry OPPOSITELY. users.js renders it checked-and-disabled and
+// drops it on save via `:checked:not(:disabled)`, because dropping a stale
+// domain from a USER'S assignment only offers them one more nav option — the
+// assignment gates nothing server-side. Doing the same here would silently
+// WIDEN a link's restriction to resolve on a hostname the operator never
+// re-authorized. So a stale entry here is an ENABLED, CHECKED checkbox
+// suffixed " — no longer configured", and the payload is read with a plain
+// `:checked` selector, never `:checked:not(:disabled)` — keeping it is the
+// default, and the operator must deliberately uncheck it to drop it. The
+// server's `also_allowed` rule (api/domains.py) is what makes keeping it
+// possible: a resubmission naming a stale entry stays valid even though it's
+// no longer in the configured list.
+
+function allowedDomainsFieldsetHtml(className, configured, selected) {
+  const known = configured.map((domain) => `
+    <label>
+      <input type="checkbox" class="${className}" value="${escapeHtml(domain)}" ${selected.includes(domain) ? "checked" : ""} />
+      ${escapeHtml(hostOf(domain))}
+    </label>
+  `).join("");
+  const stale = selected.filter((domain) => !configured.includes(domain)).map((domain) => `
+    <label>
+      <input type="checkbox" class="${className}" value="${escapeHtml(domain)}" checked />
+      ${escapeHtml(hostOf(domain))} — no longer configured
+    </label>
+  `).join("");
+  return known + stale;
+}
+
+function renderCreateAllowedDomainsFieldset() {
+  const fieldset = document.getElementById("allowed-domains-fieldset");
+  fieldset.hidden = allConfiguredDomains.length < 2;
+  fieldset.innerHTML = `
+    <legend>Domains this link works on (none checked = all domains)</legend>
+    ${allowedDomainsFieldsetHtml("new-allowed-domain", allConfiguredDomains, [])}
+  `;
+}
+
+// One badge per restricted link, never N — the Short-link cell already
+// carries up to two badges plus ten tag chips (DESIGN.md's Chips entry calls
+// this the app's tightest column). Hosts joined for 1-2 entries; "N domains"
+// at 3+. title carries the full base URLs, space-joined, for anyone who wants
+// the unambiguous form.
+function domainBadgeHtml(link) {
+  const domains = link.allowed_domains ?? [];
+  if (!domains.length) return "";
+  const hosts = domains.map(hostOf);
+  const text = domains.length <= 2 ? hosts.join(", ") : `${domains.length} domains`;
+  return `<span class="domain-badge" title="${escapeHtml(domains.join(" "))}">${escapeHtml(text)}</span>`;
 }
 
 // Mirrors the server's own links._can_edit — a link's Edit/Delete
@@ -420,6 +478,18 @@ let selectedSlugs = new Set();
 // client behavior.
 const BULK_MAX_SELECTION = 50;
 
+// Filled once allConfiguredDomains is known (loadMe(), after /auth/me
+// resolves) — the bulk bar's own checkbox set, distinct from the create/edit
+// forms' (a fresh, never-checked set every time, since a bulk Restrict always
+// replaces rather than reflecting any one selected link's current state).
+function renderBulkDomainCheckboxes() {
+  const fieldset = document.getElementById("bulk-domain-checkboxes");
+  fieldset.innerHTML = `
+    <legend class="visually-hidden">Domains to restrict selected links to</legend>
+    ${allowedDomainsFieldsetHtml("bulk-domain-checkbox", allConfiguredDomains, [])}
+  `;
+}
+
 function updateBulkBar() {
   const bar = document.getElementById("bulk-bar");
   const count = selectedSlugs.size;
@@ -428,6 +498,7 @@ function updateBulkBar() {
   document.getElementById("bulk-tag-controls").hidden = !canTagLinks();
   document.getElementById("bulk-owner-controls").hidden = !canManageUsers();
   if (canManageUsers()) populateOwnerSelect(document.getElementById("bulk-owner-select"));
+  document.getElementById("bulk-domain-controls").hidden = allConfiguredDomains.length < 2;
 
   if (count === 0) return;
 
@@ -439,7 +510,8 @@ function updateBulkBar() {
 
   for (const id of ["bulk-enable-btn", "bulk-disable-btn", "bulk-delete-btn",
                      "bulk-schedule-set-btn", "bulk-schedule-clear-btn", "bulk-repoint-btn",
-                     "bulk-tag-add-btn", "bulk-tag-remove-btn", "bulk-reassign-btn"]) {
+                     "bulk-tag-add-btn", "bulk-tag-remove-btn", "bulk-reassign-btn",
+                     "bulk-restrict-btn", "bulk-allow-all-domains-btn"]) {
     document.getElementById(id).disabled = overCap;
   }
 }
@@ -595,6 +667,11 @@ function editRowHtml(link) {
             <input type="text" id="edit-tags-${escapeHtml(link.slug)}" class="tag-input-buffer" list="tag-suggestions" />
           </div>
           <p id="edit-tags-note-${escapeHtml(link.slug)}" class="form-note" role="status" hidden></p>
+          <fieldset class="edit-allowed-domains-fieldset" ${allConfiguredDomains.length < 2 && !(link.allowed_domains ?? []).length ? "hidden" : ""}
+                    data-original-domains="${escapeHtml((link.allowed_domains ?? []).join(" "))}">
+            <legend>Domains this link works on (none checked = all domains)</legend>
+            ${allowedDomainsFieldsetHtml("edit-allowed-domain", allConfiguredDomains, link.allowed_domains ?? [])}
+          </fieldset>
           ${canManageUsers() ? `<label>Owner <select class="edit-owner"></select></label>` : ""}
           <div role="group">
             <button type="submit" class="save-edit-btn">Save</button>
@@ -761,6 +838,7 @@ function renderLinksTable() {
         <span class="slug-chip" title="${escapeHtml(shortUrl)}">${redirectPathPrefix()}/${escapeHtml(link.slug)}</span>
         ${link.custom ? '<span class="slug-kind-badge">Custom</span>' : ""}
         ${link.password_protected ? '<span class="lock-badge">Password</span>' : ""}
+        ${domainBadgeHtml(link)}
         ${(link.tags ?? []).map((t) => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join("")}
       </td>
       <td>${escapeHtml(link.owner)}${isDeletedOwner(link.owner) ? ' <span class="status-badge status-disabled">deleted account</span>' : ""}</td>
@@ -947,6 +1025,21 @@ async function handleEditFormSubmit(form) {
     tagsChanged = !sameSet;
   }
 
+  // Same no-silent-drop guard as tags, for allowed_domains — PATCH is a full
+  // replacement, so it must be sent ONLY when the committed checkbox set
+  // differs from data-original-domains. Collected with a plain `:checked`,
+  // deliberately NOT `:checked:not(:disabled)` — see allowedDomainsFieldsetHtml's
+  // comment for why a stale entry here is never disabled in the first place.
+  const domainsFieldset = form.querySelector(".edit-allowed-domains-fieldset");
+  let domainsChanged = false;
+  let allowedDomains = null;
+  if (domainsFieldset) {
+    allowedDomains = Array.from(domainsFieldset.querySelectorAll(".edit-allowed-domain:checked")).map((cb) => cb.value);
+    const original = (domainsFieldset.dataset.originalDomains || "").split(" ").filter(Boolean);
+    const sameSet = allowedDomains.length === original.length && allowedDomains.every((d) => original.includes(d));
+    domainsChanged = !sameSet;
+  }
+
   // `status` is deliberately NOT sent here. It used to be, from a checkbox in
   // this form, but the row's own Disable/Enable button now owns it — and the
   // two together were a live bug rather than a redundancy: this form's markup
@@ -956,6 +1049,7 @@ async function handleEditFormSubmit(form) {
   // leaves the stored status untouched.
   const patchPayload = { target_url: targetUrl, start_at: startAt, end_at: endAt };
   if (tagsChanged) patchPayload.tags = tagList;
+  if (domainsChanged) patchPayload.allowed_domains = allowedDomains;
   const { ok, data } = await api.patch(`/links/${slug}`, patchPayload);
   if (!ok) {
     const msg = friendlyError(data, "Could not update link.");
@@ -972,6 +1066,7 @@ async function handleEditFormSubmit(form) {
     linkRecord.start_at = startAt;
     linkRecord.end_at = endAt;
     if (tagsChanged) linkRecord.tags = tagList;
+    if (domainsChanged) linkRecord.allowed_domains = allowedDomains;
   }
   const displayRow = editRow.previousElementSibling;
   if (displayRow) {
@@ -1397,6 +1492,69 @@ async function handleBulkRepoint() {
 
 document.getElementById("bulk-repoint-btn").addEventListener("click", handleBulkRepoint);
 
+// action is "restrict" either way; allowAll=true sends allowed_domains: []
+// (the "Allow all domains" button). No new permission — per-row can_edit is
+// the gate, same as every action here except reassign
+// (docs/plans/per-link-domain-restriction.md, Trade-offs #5).
+async function handleBulkRestrict(allowAll) {
+  const slugs = [...selectedSlugs];
+  if (!slugs.length || slugs.length > BULK_MAX_SELECTION) return;
+
+  const allowedDomains = allowAll
+    ? []
+    : Array.from(document.querySelectorAll("#bulk-domain-checkboxes .bulk-domain-checkbox:checked")).map((cb) => cb.value);
+
+  const n = slugs.length;
+  let message, confirmLabel;
+  if (allowAll) {
+    // The one confirmed bulk-bar action that WIDENS where links resolve
+    // rather than narrowing or leaving unrelated fields alone — the same
+    // "confirm what nothing else in the bar does" rule repoint/schedule/
+    // reassign already follow.
+    message = `Allow ${n} link${n === 1 ? "" : "s"} to work on all domains? Any current restriction is removed.`;
+    confirmLabel = `Allow all domains on ${n} link${n === 1 ? "" : "s"}`;
+    if (!(await confirmDialog(message, { confirmLabel }))) return;
+  }
+
+  const errorEl = document.getElementById("links-error");
+  const errorsEl = document.getElementById("bulk-action-errors");
+  const successEl = document.getElementById("links-success");
+  errorEl.textContent = "";
+  errorsEl.hidden = true;
+  errorsEl.innerHTML = "";
+  successEl.hidden = true;
+
+  const { ok, data } = await api.post("/links/bulk-action", { slugs, action: "restrict", allowed_domains: allowedDomains });
+  if (!ok) {
+    if (data && data.error === "bulk_validation_failed") {
+      errorEl.textContent = `Nothing was changed — ${data.row_errors.length} of the selected links are no longer available. Refresh and try again.`;
+      errorsEl.innerHTML = renderRowErrorList(data.row_errors);
+      errorsEl.hidden = false;
+    } else {
+      errorEl.textContent = friendlyError(data, "Could not update domain restrictions on the selected links.");
+    }
+    return;
+  }
+
+  const verb = allowAll ? "Allowed all domains on" : "Restricted";
+
+  if (data.partial) {
+    errorEl.textContent =
+      `${verb} ${data.count} of ${n} links. The store was busy for the rest — ` +
+      `they're still selected below so you can try again.`;
+    await loadLinks();
+    narrowSelectionTo(data.not_applied || []);
+    return;
+  }
+
+  successEl.textContent = `${verb} ${data.count} link${data.count === 1 ? "" : "s"}.`;
+  successEl.hidden = false;
+  loadLinks();
+}
+
+document.getElementById("bulk-restrict-btn").addEventListener("click", () => handleBulkRestrict(false));
+document.getElementById("bulk-allow-all-domains-btn").addEventListener("click", () => handleBulkRestrict(true));
+
 // Dashboard-local overrides for api/bulk.py's per-row error codes — the
 // invalid_password override at handleEditFormSubmit is the precedent for
 // giving one call site's copy priority over the shared ERROR_MESSAGES map.
@@ -1564,6 +1722,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   const tagContainer = document.getElementById("link-tags").closest(".tag-input");
   if (tagContainer) commitTagBuffer(tagContainer);
   const tagList = tagContainer ? readTagChips(tagContainer) : [];
+  const allowedDomains = Array.from(document.querySelectorAll(".new-allowed-domain:checked")).map((cb) => cb.value);
   const errorEl = document.getElementById("create-error");
   const successEl = document.getElementById("create-success");
   errorEl.textContent = "";
@@ -1575,6 +1734,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     start_at: startAt,
     end_at: endAt,
     tags: tagList,
+    allowed_domains: allowedDomains,
   };
   if (password) payload.password = password;
 
@@ -1592,6 +1752,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
   document.getElementById("end-at").value = "";
   document.getElementById("link-password").value = "";
   if (tagContainer) clearTagChips(tagContainer);
+  renderCreateAllowedDomainsFieldset();
   document.getElementById("advanced-options").open = false;
 
   renderCreateSuccess(data.slug);
@@ -1702,6 +1863,11 @@ const CSV_COLUMNS = [
   ["Starts", (l) => l.start_at ?? ""],
   ["Expires", (l) => l.end_at ?? ""],
   ["Tags", (l) => (l.tags ?? []).join(" ")],
+  // An export that did not carry the restriction would claim a link works
+  // everywhere — the same "a file that outlives the session must not lie"
+  // argument that gave this export both a State and a Status column
+  // (docs/plans/per-link-domain-restriction.md).
+  ["Domains", (l) => (l.allowed_domains ?? []).join(" ")],
 ];
 
 // RFC 4180: quote a field that contains a comma, quote, CR or LF, and double

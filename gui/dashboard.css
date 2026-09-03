@@ -345,6 +345,28 @@
   align-items: center;
   gap: 0.5rem;
 }
+
+/* Bulk domain-restriction cluster (docs/plans/per-link-domain-restriction.md):
+ * same <span>-holds-a-cluster-plus-a-role=group shape as #bulk-tag-controls/
+ * #bulk-schedule-controls above. Pico's own fieldset rule (width:100%,
+ * margin-bottom:1rem, no border/padding) is fine inside a block form but
+ * would force the checkbox group onto its own full-width line here — reset
+ * to an inline flex row of labels, matching the compact bulk-bar aesthetic
+ * every other cluster already holds. */
+#bulk-domain-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+#bulk-domain-controls fieldset {
+  width: auto;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
 /* Labels here are visible (a bare datetime-local input reads as
  * "yyyy-mm-dd --:--" with nothing saying which side it is), but Pico's own
  * label rule still gives them a bottom margin meant for stacked form

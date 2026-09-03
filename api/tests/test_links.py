@@ -27,6 +27,22 @@ def _request(payload=None):
     return Request(method="POST", uri="/api/links", headers={}, body=body)
 
 
+# docs/plans/per-link-domain-restriction.md: configured_domains is a required
+# positional in handle_create/handle_update with no default. These thin
+# wrappers insert it so the bulk of this file's pre-existing calls (most of
+# which are not testing allowed_domains at all) don't need to name it at every
+# call site — mirrors test_users.py's CONFIGURED_DOMAINS/positional pattern.
+CONFIGURED_DOMAINS = ["https://trrk.io", "http://localhost:3000"]
+
+
+async def _create(store, principal, request, *rest):
+    return await links.handle_create(store, principal, request, CONFIGURED_DOMAINS, *rest)
+
+
+async def _update(store, principal, slug, request, *rest):
+    return await links.handle_update(store, principal, slug, request, CONFIGURED_DOMAINS, *rest)
+
+
 @pytest.mark.parametrize(
     "slug,expected",
     [
@@ -46,7 +62,7 @@ def test_custom_slug_validation_boundaries(slug, expected):
 
 async def test_create_random_slug_success():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x"}))
     assert resp.status == 201
     body = json.loads(resp.body)
     assert body["custom"] is False
@@ -57,14 +73,14 @@ async def test_create_random_slug_success():
 
 async def test_create_invalid_target_url():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "not-a-url"}))
+    resp = await _create(store, _principal(), _request({"target_url": "not-a-url"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_target_url"
 
 
 async def test_create_custom_slug_without_permission_forbidden():
     store = FakeStore()
-    resp = await links.handle_create(
+    resp = await _create(
         store, _principal(permissions=[]),
         _request({"target_url": "https://example.com/x", "custom_slug": "my-slug"}),
     )
@@ -74,7 +90,7 @@ async def test_create_custom_slug_without_permission_forbidden():
 
 async def test_create_custom_slug_with_permission_succeeds():
     store = FakeStore()
-    resp = await links.handle_create(
+    resp = await _create(
         store, _principal(permissions=["links.create_custom_slug"]),
         _request({"target_url": "https://example.com/x", "custom_slug": "my-slug"}),
     )
@@ -86,7 +102,7 @@ async def test_create_custom_slug_with_permission_succeeds():
 
 async def test_create_custom_slug_admin_bypasses_permission():
     store = FakeStore()
-    resp = await links.handle_create(
+    resp = await _create(
         store, _principal(role="admin"),
         _request({"target_url": "https://example.com/x", "custom_slug": "admin-slug"}),
     )
@@ -96,24 +112,24 @@ async def test_create_custom_slug_admin_bypasses_permission():
 async def test_create_custom_slug_collision_returns_409():
     store = FakeStore()
     principal = _principal(permissions=["links.create_custom_slug"])
-    first = await links.handle_create(store, principal, _request({"target_url": "https://example.com/a", "custom_slug": "taken"}))
+    first = await _create(store, principal, _request({"target_url": "https://example.com/a", "custom_slug": "taken"}))
     assert first.status == 201
 
-    second = await links.handle_create(store, principal, _request({"target_url": "https://example.com/b", "custom_slug": "taken"}))
+    second = await _create(store, principal, _request({"target_url": "https://example.com/b", "custom_slug": "taken"}))
     assert second.status == 409
     assert json.loads(second.body)["error"] == "slug_taken"
 
 
 async def test_create_password_too_short():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x", "password": "abc"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x", "password": "abc"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_password"
 
 
 async def test_create_with_valid_password_masks_hash_in_response():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x", "password": "longenough"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x", "password": "longenough"}))
     assert resp.status == 201
     body = json.loads(resp.body)
     assert "password_hash" not in body
@@ -137,7 +153,7 @@ async def test_handle_create_performs_exactly_one_kv_write(monkeypatch):
 
     monkeypatch.setattr(store, "set", counting_set)
 
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x"}))
     assert resp.status == 201
     body = json.loads(resp.body)
     assert set_calls == [f"slug:{body['slug']}"]
@@ -165,7 +181,7 @@ async def test_random_slug_raises_after_exhausting_attempts(monkeypatch):
 async def test_get_owner_can_view():
     store = FakeStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     resp = await links.handle_get(store, owner, slug)
@@ -174,7 +190,7 @@ async def test_get_owner_can_view():
 
 async def test_get_non_owner_forbidden():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     resp = await links.handle_get(store, _principal(username="bob"), slug)
@@ -183,7 +199,7 @@ async def test_get_non_owner_forbidden():
 
 async def test_get_admin_can_view_others_links():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     resp = await links.handle_get(store, _principal(username="admin", role="admin"), slug)
@@ -197,7 +213,7 @@ async def test_get_view_all_permission_can_view_others_links():
     # all — a links.view_all user could see a link in their dashboard but get
     # a 403 clicking into it.
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     viewer = _principal(username="carol", permissions=["links.view_all"])
@@ -209,7 +225,7 @@ async def test_get_edit_all_permission_can_view_others_links():
     # links.edit_all implies view access on its own; a user shouldn't need
     # links.view_all granted separately just to open a link they can edit.
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
@@ -229,10 +245,10 @@ async def test_target_url_at_the_cap_is_accepted_and_over_it_is_rejected():
     over = _long_url(links.MAX_TARGET_URL_BYTES + 1)
     assert len(at_cap.encode("utf-8")) == links.MAX_TARGET_URL_BYTES
 
-    ok = await links.handle_create(store, _principal(), _request({"target_url": at_cap}))
+    ok = await _create(store, _principal(), _request({"target_url": at_cap}))
     assert ok.status == 201
 
-    bad = await links.handle_create(store, _principal(), _request({"target_url": over}))
+    bad = await _create(store, _principal(), _request({"target_url": over}))
     assert bad.status == 400
     body = json.loads(bad.body)
     assert body["error"] == "target_url_too_long"
@@ -251,7 +267,7 @@ async def test_target_url_cap_is_measured_in_bytes_not_characters():
     assert len(url) < links.MAX_TARGET_URL_BYTES
     assert len(url.encode("utf-8")) > links.MAX_TARGET_URL_BYTES
 
-    resp = await links.handle_create(store, _principal(), _request({"target_url": url}))
+    resp = await _create(store, _principal(), _request({"target_url": url}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "target_url_too_long"
 
@@ -271,10 +287,10 @@ async def test_target_url_cap_is_enforced_on_update_too():
     """The second of the three authoring paths. A cap enforced at create only
     is trivially bypassed by creating short and then updating long."""
     store = FakeStore()
-    created = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/short"}))
+    created = await _create(store, _principal(), _request({"target_url": "https://example.com/short"}))
     slug = json.loads(created.body)["slug"]
 
-    resp = await links.handle_update(
+    resp = await _update(
         store, _principal(), slug, _request({"target_url": _long_url(links.MAX_TARGET_URL_BYTES + 1)})
     )
     assert resp.status == 400
@@ -299,7 +315,7 @@ async def test_list_returns_a_link_that_is_in_NEITHER_index():
     code path: it fails against the old index-reading handle_list.
     """
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/indexed"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/indexed"}))
 
     # A record with NO index entry anywhere -- exactly what a clobbered index
     # write leaves behind. Written directly, because no handler can produce
@@ -365,8 +381,8 @@ async def test_list_skips_a_slug_whose_record_is_missing():
     than erroring or emitting a null entry — otherwise a crash mid-delete
     would take the whole dashboard down instead of being invisible."""
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
 
     slugs = await links.enumerate_slugs(store, fake_list_keys)
     await store.delete(f"slug:{slugs[0]}")
@@ -392,8 +408,8 @@ async def test_list_skips_a_record_that_cannot_be_parsed():
     auto-repairable because a corrupt value's intended content is unknowable.
     """
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/one"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/two"}))
 
     slugs = await links.enumerate_slugs(store, fake_list_keys)
     await store.set(f"slug:{slugs[0]}", b"{not valid json at all")
@@ -412,8 +428,8 @@ async def test_get_not_found():
 
 async def test_list_only_shows_own_links_by_default():
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
-    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await _create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     resp = await links.handle_list(store, _principal(username="alice"), fake_get_many, fake_list_keys)
     assert resp.status == 200
@@ -423,8 +439,8 @@ async def test_list_only_shows_own_links_by_default():
 
 async def test_list_admin_sees_all_links():
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
-    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await _create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     resp = await links.handle_list(store, _principal(username="admin", role="admin"), fake_get_many, fake_list_keys)
     assert resp.status == 200
@@ -434,8 +450,8 @@ async def test_list_admin_sees_all_links():
 
 async def test_list_view_all_permission_sees_all_links():
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
-    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await _create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     viewer = _principal(username="carol", permissions=["links.view_all"])
     resp = await links.handle_list(store, viewer, fake_get_many, fake_list_keys)
@@ -446,8 +462,8 @@ async def test_list_view_all_permission_sees_all_links():
 
 async def test_list_edit_all_permission_sees_all_links():
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
-    await links.handle_create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/alice"}))
+    await _create(store, _principal(username="bob"), _request({"target_url": "https://example.com/bob"}))
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
     resp = await links.handle_list(store, editor, fake_get_many, fake_list_keys)
@@ -462,7 +478,7 @@ async def test_delete_owner_succeeds_and_removes_the_record():
     truth, so deleting it is the whole story."""
     store = FakeStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     resp = await links.handle_delete(store, owner, slug)
@@ -472,7 +488,7 @@ async def test_delete_owner_succeeds_and_removes_the_record():
 
 async def test_delete_non_owner_forbidden():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     resp = await links.handle_delete(store, _principal(username="bob"), slug)
@@ -481,7 +497,7 @@ async def test_delete_non_owner_forbidden():
 
 async def test_delete_edit_all_permission_can_delete_others_links():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
@@ -492,7 +508,7 @@ async def test_delete_edit_all_permission_can_delete_others_links():
 
 async def test_delete_view_all_permission_alone_still_forbidden():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     viewer = _principal(username="carol", permissions=["links.view_all"])
@@ -530,7 +546,7 @@ async def test_delete_without_purge_analytics_is_byte_identical_to_today():
     it and must stay untouched."""
     store = FakeStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     resp = await links.handle_delete(store, owner, slug)
@@ -541,7 +557,7 @@ async def test_delete_without_purge_analytics_is_byte_identical_to_today():
 async def test_delete_with_purge_analytics_includes_the_result_in_the_response():
     store = FakeStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     async def purge(s):
@@ -571,7 +587,7 @@ async def test_delete_purge_analytics_is_never_called_on_404():
 
 async def test_delete_purge_analytics_is_never_called_on_403():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
     calls = []
 
@@ -590,7 +606,7 @@ async def test_delete_record_delete_completes_before_the_first_analytics_delete(
     rule shrinks to "record, then purge", and this pins exactly that."""
     store = _RecordingStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
     store.ops.clear()
 
@@ -616,7 +632,7 @@ async def test_delete_record_delete_completes_before_the_first_analytics_delete(
 async def test_delete_purge_analytics_raising_still_yields_200_with_failed_status():
     store = FakeStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     async def purge(s):
@@ -635,7 +651,7 @@ async def test_delete_purge_analytics_raising_still_yields_200_with_failed_statu
 async def test_set_password_set_change_clear():
     store = FakeStore()
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     set_resp = await links.handle_set_password(store, owner, slug, _request({"password": "firstpass"}))
@@ -660,7 +676,7 @@ async def test_set_password_set_change_clear():
 
 async def test_set_password_edit_all_permission_can_set_others_links():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     editor = _principal(username="dave", permissions=["links.edit_all"])
@@ -672,7 +688,7 @@ async def test_set_password_edit_all_permission_can_set_others_links():
 
 async def test_set_password_view_all_permission_alone_still_forbidden():
     store = FakeStore()
-    created = await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
 
     viewer = _principal(username="carol", permissions=["links.view_all"])
@@ -686,7 +702,7 @@ async def test_set_password_view_all_permission_alone_still_forbidden():
 
 async def test_create_with_valid_start_and_end():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": "2026-01-01T00:00:00Z",
         "end_at": "2026-02-01T00:00:00Z",
@@ -699,7 +715,7 @@ async def test_create_with_valid_start_and_end():
 
 async def test_create_with_start_only():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": "2026-01-01T00:00:00Z",
     }))
@@ -711,7 +727,7 @@ async def test_create_with_start_only():
 
 async def test_create_with_end_only():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "end_at": "2026-02-01T00:00:00Z",
     }))
@@ -723,7 +739,7 @@ async def test_create_with_end_only():
 
 async def test_create_with_explicit_null_window_fields_is_unset():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": None,
         "end_at": None,
@@ -736,7 +752,7 @@ async def test_create_with_explicit_null_window_fields_is_unset():
 
 async def test_create_inverted_window_range_rejected():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": "2026-02-01T00:00:00Z",
         "end_at": "2026-01-01T00:00:00Z",
@@ -747,7 +763,7 @@ async def test_create_inverted_window_range_rejected():
 
 async def test_create_equal_start_and_end_rejected():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": "2026-01-01T00:00:00Z",
         "end_at": "2026-01-01T00:00:00Z",
@@ -758,7 +774,7 @@ async def test_create_equal_start_and_end_rejected():
 
 async def test_create_malformed_start_at_rejected():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": "not-a-date",
     }))
@@ -768,7 +784,7 @@ async def test_create_malformed_start_at_rejected():
 
 async def test_create_naive_datetime_start_at_rejected():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "start_at": "2026-01-01T00:00:00",  # no timezone
     }))
@@ -778,7 +794,7 @@ async def test_create_naive_datetime_start_at_rejected():
 
 async def test_create_malformed_end_at_rejected():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({
+    resp = await _create(store, _principal(), _request({
         "target_url": "https://example.com/x",
         "end_at": "not-a-date",
     }))
@@ -792,27 +808,27 @@ async def test_create_malformed_end_at_rejected():
 async def _make_link(store, owner="alice", **extra_payload):
     owner_p = _principal(username=owner)
     payload = {"target_url": "https://example.com/x", **extra_payload}
-    created = await links.handle_create(store, owner_p, _request(payload))
+    created = await _create(store, owner_p, _request(payload))
     return json.loads(created.body)["slug"]
 
 
 async def test_update_not_found():
     store = FakeStore()
-    resp = await links.handle_update(store, _principal(), "doesnotexist", _request({"status": "disabled"}))
+    resp = await _update(store, _principal(), "doesnotexist", _request({"status": "disabled"}))
     assert resp.status == 404
 
 
 async def test_update_non_owner_forbidden():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
-    resp = await links.handle_update(store, _principal(username="bob"), slug, _request({"status": "disabled"}))
+    resp = await _update(store, _principal(username="bob"), slug, _request({"status": "disabled"}))
     assert resp.status == 403
 
 
 async def test_update_admin_can_update_others_links():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
-    resp = await links.handle_update(store, _principal(username="admin", role="admin"), slug, _request({"status": "disabled"}))
+    resp = await _update(store, _principal(username="admin", role="admin"), slug, _request({"status": "disabled"}))
     assert resp.status == 200
 
 
@@ -820,7 +836,7 @@ async def test_update_edit_all_permission_can_update_others_links():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
     editor = _principal(username="dave", permissions=["links.edit_all"])
-    resp = await links.handle_update(store, editor, slug, _request({"status": "disabled"}))
+    resp = await _update(store, editor, slug, _request({"status": "disabled"}))
     assert resp.status == 200
 
 
@@ -830,7 +846,7 @@ async def test_update_view_all_permission_alone_still_forbidden():
     store = FakeStore()
     slug = await _make_link(store, owner="alice")
     viewer = _principal(username="carol", permissions=["links.view_all"])
-    resp = await links.handle_update(store, viewer, slug, _request({"status": "disabled"}))
+    resp = await _update(store, viewer, slug, _request({"status": "disabled"}))
     assert resp.status == 403
     assert json.loads(resp.body)["required_permission"] == "links.edit_all"
 
@@ -839,7 +855,7 @@ async def test_update_empty_payload_rejected():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
-    resp = await links.handle_update(store, owner, slug, _request({}))
+    resp = await _update(store, owner, slug, _request({}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "no_fields_to_update"
 
@@ -849,7 +865,7 @@ async def test_update_partial_field_leaves_others_untouched():
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice", start_at="2026-01-01T00:00:00Z")
 
-    resp = await links.handle_update(store, owner, slug, _request({"status": "disabled"}))
+    resp = await _update(store, owner, slug, _request({"status": "disabled"}))
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["status"] == "disabled"
@@ -861,7 +877,7 @@ async def test_update_invalid_status_rejected():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
-    resp = await links.handle_update(store, owner, slug, _request({"status": "bogus"}))
+    resp = await _update(store, owner, slug, _request({"status": "bogus"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_status"
 
@@ -871,11 +887,11 @@ async def test_update_target_url_valid_and_invalid():
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
 
-    ok = await links.handle_update(store, owner, slug, _request({"target_url": "https://example.com/new"}))
+    ok = await _update(store, owner, slug, _request({"target_url": "https://example.com/new"}))
     assert ok.status == 200
     assert json.loads(ok.body)["target_url"] == "https://example.com/new"
 
-    bad = await links.handle_update(store, owner, slug, _request({"target_url": "not-a-url"}))
+    bad = await _update(store, owner, slug, _request({"target_url": "not-a-url"}))
     assert bad.status == 400
     assert json.loads(bad.body)["error"] == "invalid_target_url"
 
@@ -885,7 +901,7 @@ async def test_update_window_fields_independently():
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
 
-    resp = await links.handle_update(store, owner, slug, _request({"start_at": "2026-01-01T00:00:00Z"}))
+    resp = await _update(store, owner, slug, _request({"start_at": "2026-01-01T00:00:00Z"}))
     assert resp.status == 200
     body = json.loads(resp.body)
     assert body["start_at"] == "2026-01-01T00:00:00Z"
@@ -897,7 +913,7 @@ async def test_update_explicit_null_clears_window_field():
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice", start_at="2026-01-01T00:00:00Z")
 
-    resp = await links.handle_update(store, owner, slug, _request({"start_at": None}))
+    resp = await _update(store, owner, slug, _request({"start_at": None}))
     assert resp.status == 200
     assert json.loads(resp.body)["start_at"] is None
 
@@ -908,7 +924,7 @@ async def test_update_merged_window_revalidation_rejects_bad_patch():
     slug = await _make_link(store, owner="alice", start_at="2026-02-01T00:00:00Z")
 
     # Patching only end_at to before the existing start_at must still be caught.
-    resp = await links.handle_update(store, owner, slug, _request({"end_at": "2026-01-01T00:00:00Z"}))
+    resp = await _update(store, owner, slug, _request({"end_at": "2026-01-01T00:00:00Z"}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_window_range"
 
@@ -919,7 +935,7 @@ async def test_update_bumps_updated_at():
     slug = await _make_link(store, owner="alice")
     original = json.loads(await store.get(f"slug:{slug}"))
 
-    resp = await links.handle_update(store, owner, slug, _request({"status": "disabled"}))
+    resp = await _update(store, owner, slug, _request({"status": "disabled"}))
     updated = json.loads(resp.body)
     assert updated["updated_at"] >= original["updated_at"]
     assert updated["created_at"] == original["created_at"]
@@ -930,7 +946,7 @@ async def test_update_bumps_updated_at():
 
 async def test_create_with_tags_normalizes_sorts_and_dedupes():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x", "tags": ["Q4", " sale "]}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x", "tags": ["Q4", " sale "]}))
     assert resp.status == 201
     body = json.loads(resp.body)
     assert body["tags"] == ["q4", "sale"]
@@ -938,7 +954,7 @@ async def test_create_with_tags_normalizes_sorts_and_dedupes():
 
 async def test_create_with_no_tags_key_stores_empty_list():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x"}))
     assert resp.status == 201
     body = json.loads(resp.body)
     assert body["tags"] == []
@@ -946,7 +962,7 @@ async def test_create_with_no_tags_key_stores_empty_list():
 
 async def test_create_with_invalid_tag_rejected():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x", "tags": ["Bad Tag"]}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x", "tags": ["Bad Tag"]}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_tag"
 
@@ -967,9 +983,9 @@ async def test_patch_tags_empty_list_clears_them():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
-    await links.handle_update(store, owner, slug, _request({"tags": ["sale"]}))
+    await _update(store, owner, slug, _request({"tags": ["sale"]}))
 
-    resp = await links.handle_update(store, owner, slug, _request({"tags": []}))
+    resp = await _update(store, owner, slug, _request({"tags": []}))
     assert resp.status == 200
     assert json.loads(resp.body)["tags"] == []
 
@@ -978,7 +994,7 @@ async def test_patch_tags_null_rejected():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
-    resp = await links.handle_update(store, owner, slug, _request({"tags": None}))
+    resp = await _update(store, owner, slug, _request({"tags": None}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_tags"
 
@@ -987,7 +1003,7 @@ async def test_patch_tags_invalid_tag_rejected():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice")
-    resp = await links.handle_update(store, owner, slug, _request({"tags": ["Bad Tag"]}))
+    resp = await _update(store, owner, slug, _request({"tags": ["Bad Tag"]}))
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_tag"
 
@@ -996,7 +1012,7 @@ async def test_patch_omitting_tags_leaves_existing_list_untouched():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice", tags=["sale"])
-    resp = await links.handle_update(store, owner, slug, _request({"status": "disabled"}))
+    resp = await _update(store, owner, slug, _request({"status": "disabled"}))
     assert resp.status == 200
     assert json.loads(resp.body)["tags"] == ["sale"]
 
@@ -1005,7 +1021,7 @@ async def test_patch_tags_full_replacement_not_merge():
     store = FakeStore()
     owner = _principal(username="alice")
     slug = await _make_link(store, owner="alice", tags=["sale", "q4"])
-    resp = await links.handle_update(store, owner, slug, _request({"tags": ["promo"]}))
+    resp = await _update(store, owner, slug, _request({"tags": ["promo"]}))
     assert resp.status == 200
     assert json.loads(resp.body)["tags"] == ["promo"]
 
@@ -1025,7 +1041,7 @@ async def test_patch_tags_full_replacement_not_merge():
 
 async def test_create_succeeds_unchanged_when_no_policy_key_exists():
     store = FakeStore()
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
     assert resp.status == 201
 
 
@@ -1033,7 +1049,7 @@ async def test_create_rejects_destination_denied_by_policy():
     store = FakeStore()
     await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
 
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    resp = await _create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
     assert resp.status == 400
     body = json.loads(resp.body)
     assert body == {
@@ -1048,7 +1064,7 @@ async def test_create_rejection_consumes_no_slug():
     store = FakeStore()
     await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
 
-    resp = await links.handle_create(
+    resp = await _create(
         store, _principal(permissions=["links.create_custom_slug"]),
         _request({"target_url": "https://evil.example/x", "custom_slug": "my-slug"}),
     )
@@ -1058,12 +1074,12 @@ async def test_create_rejection_consumes_no_slug():
 
 async def test_update_rejects_destination_denied_by_policy():
     store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _request({"target_url": "https://ok.example/x"}))
+    create_resp = await _create(store, _principal(), _request({"target_url": "https://ok.example/x"}))
     slug = json.loads(create_resp.body)["slug"]
 
     await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
 
-    resp = await links.handle_update(
+    resp = await _update(
         store, _principal(), slug, _request({"target_url": "https://evil.example/x"}),
     )
     assert resp.status == 400
@@ -1082,7 +1098,7 @@ async def test_update_legacy_violator_stays_editable_via_status_patch():
     remediation path (bulk disable) is never blocked by the very enforcement
     that motivates it."""
     store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    create_resp = await _create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
     slug = json.loads(create_resp.body)["slug"]
 
     # Policy is added AFTER the link already exists — the link is now a
@@ -1090,19 +1106,19 @@ async def test_update_legacy_violator_stays_editable_via_status_patch():
     # changing.
     await _set_policy(store, "allow", [{"host": "evil.example", "action": "deny"}])
 
-    resp = await links.handle_update(store, _principal(), slug, _request({"status": "disabled"}))
+    resp = await _update(store, _principal(), slug, _request({"status": "disabled"}))
     assert resp.status == 200
     assert json.loads(resp.body)["status"] == "disabled"
 
 
 async def test_update_legacy_violator_stays_editable_via_tags_patch():
     store = FakeStore()
-    create_resp = await links.handle_create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
+    create_resp = await _create(store, _principal(), _request({"target_url": "https://evil.example/x"}))
     slug = json.loads(create_resp.body)["slug"]
 
     await _set_policy(store, "deny", [])  # default-deny, no allow rule for anything
 
-    resp = await links.handle_update(store, _principal(), slug, _request({"tags": ["q4"]}))
+    resp = await _update(store, _principal(), slug, _request({"tags": ["q4"]}))
     assert resp.status == 200
     assert json.loads(resp.body)["tags"] == ["q4"]
 
@@ -1174,7 +1190,7 @@ async def test_delete_still_works_on_an_unreadable_record():
     leaving a hand-edited backup restore as the only remedy on a deployment.
     """
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
     slug = (await links.enumerate_slugs(store, fake_list_keys))[0]
     await store.set(f"slug:{slug}", b"{corrupt")
 
@@ -1192,7 +1208,7 @@ async def test_delete_of_an_unreadable_record_fails_closed_without_edit_all():
     permission, not to a guess — otherwise an unreadable record would be
     deletable by anyone who asked."""
     store = FakeStore()
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
     slug = (await links.enumerate_slugs(store, fake_list_keys))[0]
     await store.set(f"slug:{slug}", b"{corrupt")
 
@@ -1208,7 +1224,7 @@ async def test_handle_create_success_shape_unchanged_with_a_real_writer():
     store = FakeStore()
     sleep, delays = recording_sleep()
     write = kvretry.make_writer(sleep)
-    resp = await links.handle_create(store, _principal(), _request({"target_url": "https://example.com/x"}), write)
+    resp = await _create(store, _principal(), _request({"target_url": "https://example.com/x"}), write)
     assert resp.status == 201
     assert delays == []
 
@@ -1225,7 +1241,7 @@ async def test_handle_create_retries_a_throttled_record_write_and_still_succeeds
     store._fail_times["slug:my-slug"] = 2  # fails twice, succeeds on the 3rd (RECORD_WRITE.attempts == 3)
     sleep, delays = recording_sleep()
     write = kvretry.make_writer(sleep)
-    resp = await links.handle_create(
+    resp = await _create(
         store, _principal(permissions=["links.create_custom_slug"]),
         _request({"target_url": "https://example.com/x", "custom_slug": "my-slug"}), write)
     assert resp.status == 201
@@ -1236,13 +1252,13 @@ async def test_handle_create_retries_a_throttled_record_write_and_still_succeeds
 async def test_handle_update_retries_a_throttled_write_and_still_succeeds():
     store = ThrottlingStore(fail_times={})
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
     store._fail_times[f"slug:{slug}"] = 2  # fails twice, succeeds on the 3rd (RECORD_WRITE.attempts == 3)
 
     sleep, delays = recording_sleep()
     write = kvretry.make_writer(sleep)
-    resp = await links.handle_update(store, owner, slug, _request({"status": "disabled"}), write)
+    resp = await _update(store, owner, slug, _request({"status": "disabled"}), write)
     assert resp.status == 200
     assert len(delays) == 2
     record = json.loads(await store.get(f"slug:{slug}"))
@@ -1252,7 +1268,7 @@ async def test_handle_update_retries_a_throttled_write_and_still_succeeds():
 async def test_handle_set_password_retries_a_throttled_write_and_still_succeeds():
     store = ThrottlingStore(fail_times={})
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
     store._fail_times[f"slug:{slug}"] = 2
 
@@ -1271,7 +1287,7 @@ async def test_handle_delete_retries_a_throttled_record_delete_and_still_succeed
     delete's own retry."""
     store = ThrottlingStore(fail_times={})
     owner = _principal(username="alice")
-    created = await links.handle_create(store, owner, _request({"target_url": "https://example.com/x"}))
+    created = await _create(store, owner, _request({"target_url": "https://example.com/x"}))
     slug = json.loads(created.body)["slug"]
     store._fail_times[f"slug:{slug}"] = 2  # fails twice, succeeds on the 3rd
 
@@ -1290,7 +1306,7 @@ async def test_handle_delete_unreadable_record_branch_unchanged_by_write_param()
     is unaffected by this task, confirmed with a real retrying writer passed
     in (which would show up as retries/delays if it were somehow reached)."""
     store = ThrottlingStore(fail_times={})
-    await links.handle_create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
+    await _create(store, _principal(username="alice"), _request({"target_url": "https://example.com/a"}))
     slug = (await links.enumerate_slugs(store, fake_list_keys))[0]
     await store.set(f"slug:{slug}", b"{corrupt")
 

@@ -18,8 +18,14 @@ def _create_request(payload):
     return Request(method="POST", uri="/api/links", headers={}, body=json.dumps(payload).encode("utf-8"))
 
 
-async def _make_link(store, owner="alice", target_url="https://example.com/x"):
-    created = await links.handle_create(store, _principal(username=owner), _create_request({"target_url": target_url}))
+async def _make_link(store, owner="alice", target_url="https://example.com/x", allowed_domains=None, configured_domains=None):
+    payload = {"target_url": target_url}
+    if allowed_domains is not None:
+        payload["allowed_domains"] = allowed_domains
+    created = await links.handle_create(
+        store, _principal(username=owner), _create_request(payload),
+        configured_domains or ["http://localhost:3000"],
+    )
     return json.loads(created.body)["slug"]
 
 
@@ -289,4 +295,51 @@ async def test_qr_prefix_off_still_rejects_an_unconfigured_base():
 
     assert resp.status == 400
     assert json.loads(resp.body)["error"] == "invalid_base_url"
+    mock_make.assert_not_called()
+
+
+# --- base_not_allowed_for_link (docs/plans/per-link-domain-restriction.md) ---
+
+
+async def test_qr_unrestricted_link_is_unaffected():
+    store = FakeStore()
+    slug = await _make_link(store, configured_domains=CONFIGURED)
+
+    with patch("qr.qrcode.make", wraps=qr.qrcode.make) as mock_make:
+        resp = await qr.handle_qr(store, _principal(), slug, {}, CONFIGURED)
+
+    assert resp.status == 200
+    mock_make.assert_called_once()
+
+
+async def test_qr_allowed_base_still_renders():
+    store = FakeStore()
+    slug = await _make_link(
+        store, allowed_domains=["https://go.example.com"], configured_domains=CONFIGURED,
+    )
+
+    with patch("qr.qrcode.make", wraps=qr.qrcode.make) as mock_make:
+        resp = await qr.handle_qr(
+            store, _principal(), slug, {"base": ["https://go.example.com"]}, CONFIGURED,
+        )
+
+    assert resp.status == 200
+    mock_make.assert_called_once()
+
+
+async def test_qr_disallowed_base_returns_400_and_never_calls_qrcode_make():
+    store = FakeStore()
+    slug = await _make_link(
+        store, allowed_domains=["https://go.example.com"], configured_domains=CONFIGURED,
+    )
+
+    with patch("qr.qrcode.make", wraps=qr.qrcode.make) as mock_make:
+        resp = await qr.handle_qr(
+            store, _principal(), slug, {"base": ["http://localhost:3000"]}, CONFIGURED,
+        )
+
+    assert resp.status == 400
+    body = json.loads(resp.body)
+    assert body["error"] == "base_not_allowed_for_link"
+    assert body["allowed_domains"] == ["https://go.example.com"]
     mock_make.assert_not_called()

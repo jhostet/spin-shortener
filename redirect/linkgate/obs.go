@@ -330,6 +330,35 @@ func SanitizeSlugForLog(slug string) string {
 	return "[invalid_slug]"
 }
 
+// hostLogSafePattern is the character class a real Host header value is drawn
+// from: hostname/IPv4/bracketed-IPv6 characters, a colon for a port, and
+// nothing else. Mirrors slugLogSafePattern's role but for host= instead of
+// slug=, at a generous 253-byte cap (the DNS name length limit).
+var hostLogSafePattern = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]{1,253}$`)
+
+// SanitizeHostForLog returns raw unchanged if it is safe to place inside a
+// logfmt line's "host=" field, the fixed placeholder "[invalid_host]"
+// otherwise, and the literal "-" for an empty host.
+//
+// "-" rather than omitting the field entirely is deliberate: "the host was
+// empty" is a positive, greppable statement this field exists specifically to
+// let an operator confirm or rule out, and an absent field can't be grepped
+// for the way a literal "-" can.
+//
+// Like SanitizeSlugForLog, this is request-controlled and is NOT the last
+// field on the summary line (status follows it), so a Host header containing
+// a space or a newline must never reach the line unescaped — the same
+// line-splitting/forgery risk SanitizeSlugForLog's doc comment describes.
+func SanitizeHostForLog(raw string) string {
+	if raw == "" {
+		return "-"
+	}
+	if hostLogSafePattern.MatchString(raw) {
+		return raw
+	}
+	return "[invalid_host]"
+}
+
 // RenderFailureLine renders one "ss "-prefixed logfmt line from fields, in
 // order, with NOTHING appended after them — deliberately separate from
 // RenderLogLine so nothing can ever land after "msg", which every caller
@@ -374,6 +403,38 @@ func KVFailureDedupKey(op, msg string) string {
 // the two kinds share one map and one cap without any possibility of collision.
 func RecordUnreadableDedupKey(slug, msg string) string {
 	return "record_unreadable" + dedupKeySep + slug + dedupKeySep + msg
+}
+
+// --- ev=host_unresolved (docs/plans/per-link-domain-restriction.md) ---
+
+// hostUnresolvedDedupKey is the fixed literal dedup key for ev=host_unresolved
+// — disjoint from KVFailureDedupKey's (always begins with a real op name) and
+// RecordUnreadableDedupKey's (always begins with the literal
+// "record_unreadable"), sharing the same 32-entry per-instance budget. Effect:
+// at most one such line per Wasm instance, ever — exactly right for a
+// condition that is either always true or always false for a given
+// deployment (either the runtime supplies a host header or it never does).
+const hostUnresolvedDedupKey = "host_unresolved"
+
+// HostUnresolvedLine renders the complete ev=host_unresolved failure line: the
+// runtime gave this component NO host to match a domain restriction against.
+// Fires only when rawRequestHost returns "" — never for an ordinary domain
+// mismatch, which is a product state (like out-of-window) and would be pure
+// volume with no signal if logged per click.
+//
+// Carries NO slug (nothing about it is link-specific), NO op/ns (no KV
+// operation failed — none has even been attempted yet at the point this can
+// fire), and NO etype (there is no exception to classify). msg is a fixed
+// literal and is last, as the doctrine requires (RenderFailureLine enforces
+// this structurally).
+func HostUnresolvedLine() (line, dedupKey string) {
+	fields := []Field{
+		{Key: "comp", Value: "redirect"},
+		{Key: "ev", Value: "host_unresolved"},
+		{Key: "route", Value: "/r/{slug}"},
+		{Key: "msg", Value: "request carries no host header, domain-restricted links cannot resolve"},
+	}
+	return RenderFailureLine(fields), hostUnresolvedDedupKey
 }
 
 // RecordUnreadableLine renders the complete ev=record_unreadable failure line

@@ -167,25 +167,27 @@ async def test_healthy_store_through_real_handlers_reports_all_clear():
     carol = _principal("carol")
 
     created_bob = await links.handle_create(
-        links_store, bob, _links_request({"target_url": "https://example.com/bob"})
+        links_store, bob, _links_request({"target_url": "https://example.com/bob"}), CONFIGURED_DOMAINS
     )
     assert created_bob.status == 201
 
     created_carol = await links.handle_create(
-        links_store, carol, _links_request({"target_url": "https://example.com/carol"})
+        links_store, carol, _links_request({"target_url": "https://example.com/carol"}), CONFIGURED_DOMAINS
     )
     assert created_carol.status == 201
     carol_slug = json.loads(created_carol.body)["slug"]
 
     bulk_created = await bulk.handle_bulk_create(
-        links_store, bob, _bulk_create_request({"text": "https://example.com/one\nhttps://example.com/two"}), fake_get_many, kvretry.direct)
+        links_store, bob, _bulk_create_request({"text": "https://example.com/one\nhttps://example.com/two"}),
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert bulk_created.status == 201
     bulk_slugs = [record["slug"] for record in json.loads(bulk_created.body)["links"]]
 
     # Reassign carol's link to bob, so carol will own nothing.
     reassigned = await bulk.handle_bulk_action(
         links_store, users_store, admin,
-        _action_request({"slugs": [carol_slug], "action": "reassign", "owner": "bob"}), fake_get_many, kvretry.direct)
+        _action_request({"slugs": [carol_slug], "action": "reassign", "owner": "bob"}),
+        CONFIGURED_DOMAINS, fake_get_many, kvretry.direct)
     assert reassigned.status == 200
 
     # Delete one of the bulk-created links outright.
@@ -223,7 +225,7 @@ async def test_healthy_store_with_leftover_index_keys_from_before_stage_2_report
     carol = _principal("carol")
 
     created = await links.handle_create(
-        links_store, carol, _links_request({"target_url": "https://example.com/spring-sale"}),
+        links_store, carol, _links_request({"target_url": "https://example.com/spring-sale"}), CONFIGURED_DOMAINS,
     )
     assert created.status == 201
     slug = json.loads(created.body)["slug"]
@@ -255,7 +257,7 @@ async def test_motivating_case_owner_index_drift_no_longer_hides_carol_from_the_
     carol = _principal("carol")
 
     created = await links.handle_create(
-        links_store, carol, _links_request({"target_url": "https://example.com/spring-sale"}),
+        links_store, carol, _links_request({"target_url": "https://example.com/spring-sale"}), CONFIGURED_DOMAINS,
     )
     assert created.status == 201
     slug = json.loads(created.body)["slug"]
